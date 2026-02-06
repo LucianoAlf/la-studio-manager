@@ -30,20 +30,22 @@ import { Textarea } from "@/components/ui/shadcn/textarea";
 import { FormField } from "@/components/ui/form-field";
 import { PlatformCheckboxes } from "@/components/ui/platform-checkboxes";
 import { DatePicker } from "@/components/ui/date-time-picker";
+import { Trash, Spinner } from "@phosphor-icons/react";
 import { toast } from "sonner";
 
 import type { KanbanCard, KanbanColumn, UserProfile } from "@/lib/types/database";
 import { createKanbanCard, updateKanbanCard, deleteKanbanCard } from "@/lib/queries/kanban";
 import { getCurrentUserProfile, getAllUsers } from "@/lib/queries/users";
+import { getStatusFromColumn } from "@/lib/utils/kanban-helpers";
 
 const INPUT_CLASS =
   "flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50";
 
 const PRIORITIES = [
-  { value: "urgent", label: "🔴 Urgente" },
-  { value: "high", label: "🟠 Alta" },
-  { value: "medium", label: "🟡 Média" },
-  { value: "low", label: "⚪ Baixa" },
+  { value: "urgent", label: "Urgente",  color: "#EF4444" },
+  { value: "high",   label: "Alta",     color: "#F97316" },
+  { value: "medium", label: "Média",    color: "#F59E0B" },
+  { value: "low",    label: "Baixa",    color: "#6B7280" },
 ];
 
 const CONTENT_TYPES = [
@@ -209,9 +211,9 @@ export function KanbanCardModal({
           </DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-4 py-2 max-h-[65vh] overflow-y-auto pr-1">
+        <div className="space-y-4 py-2 max-h-[65vh] overflow-y-auto px-1">
           {/* Linha 1 — Título */}
-          <FormField label="Título" icon="📝" required error={formErrors.title}>
+          <FormField label="Título" required error={formErrors.title}>
             <input
               type="text"
               value={title}
@@ -223,27 +225,37 @@ export function KanbanCardModal({
 
           {/* Linha 2 — Coluna + Prioridade */}
           <div className="grid grid-cols-2 gap-4">
-            <FormField label="Coluna" icon="📋" required error={formErrors.column}>
+            <FormField label="Coluna" required error={formErrors.column}>
               <Select value={selectedColumnId} onValueChange={setSelectedColumnId}>
                 <SelectTrigger className={`bg-transparent border-input ${formErrors.column ? "border-destructive" : ""}`}>
                   <SelectValue placeholder="Selecione..." />
                 </SelectTrigger>
                 <SelectContent className="bg-slate-900 border-slate-700">
-                  {columns.map((col) => (
-                    <SelectItem key={col.id} value={col.id}>{col.name}</SelectItem>
-                  ))}
+                  {columns.map((col) => {
+                    const status = getStatusFromColumn(col);
+                    return (
+                      <SelectItem key={col.id} value={col.id}>
+                        {status.emoji} {col.name}
+                      </SelectItem>
+                    );
+                  })}
                 </SelectContent>
               </Select>
             </FormField>
 
-            <FormField label="Prioridade" icon="⚡">
+            <FormField label="Prioridade">
               <Select value={selectedPriority} onValueChange={setSelectedPriority}>
                 <SelectTrigger className="bg-transparent border-input">
                   <SelectValue placeholder="Selecione..." />
                 </SelectTrigger>
                 <SelectContent className="bg-slate-900 border-slate-700">
                   {PRIORITIES.map((p) => (
-                    <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>
+                    <SelectItem key={p.value} value={p.value}>
+                      <span className="flex items-center gap-2">
+                        <span className="h-2 w-2 rounded-full flex-shrink-0" style={{ backgroundColor: p.color }} />
+                        {p.label}
+                      </span>
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -252,7 +264,7 @@ export function KanbanCardModal({
 
           {/* Linha 3 — Responsável + Prazo */}
           <div className="grid grid-cols-2 gap-4">
-            <FormField label="Responsável" icon="👤">
+            <FormField label="Responsável">
               <Select value={selectedUser || "none"} onValueChange={(v) => setSelectedUser(v === "none" ? "" : v)}>
                 <SelectTrigger className="bg-transparent border-input">
                   <SelectValue placeholder="Selecione..." />
@@ -268,7 +280,7 @@ export function KanbanCardModal({
               </Select>
             </FormField>
 
-            <FormField label="Prazo" icon="📅">
+            <FormField label="Prazo">
               <DatePicker
                 value={dueDate}
                 onChange={setDueDate}
@@ -279,7 +291,7 @@ export function KanbanCardModal({
 
           {/* Linha 4 — Tipo de Conteúdo + Marca */}
           <div className="grid grid-cols-2 gap-4">
-            <FormField label="Tipo de Conteúdo" icon="🎬">
+            <FormField label="Tipo de Conteúdo">
               <Select value={contentType || "none"} onValueChange={(v) => setContentType(v === "none" ? "" : v)}>
                 <SelectTrigger className="bg-transparent border-input">
                   <SelectValue placeholder="Nenhum" />
@@ -293,7 +305,7 @@ export function KanbanCardModal({
               </Select>
             </FormField>
 
-            <FormField label="Marca" icon="🏢">
+            <FormField label="Marca">
               <Select value={selectedBrand} onValueChange={setSelectedBrand}>
                 <SelectTrigger className="bg-transparent border-input">
                   <SelectValue placeholder="Selecione..." />
@@ -308,12 +320,12 @@ export function KanbanCardModal({
           </div>
 
           {/* Linha 5 — Plataformas */}
-          <FormField label="Plataformas" icon="📱">
+          <FormField label="Plataformas">
             <PlatformCheckboxes selected={selectedPlatforms} onChange={setSelectedPlatforms} />
           </FormField>
 
           {/* Linha 6 — Tags */}
-          <FormField label="Tags" icon="🏷️">
+          <FormField label="Tags">
             <input
               type="text"
               value={tagsInput}
@@ -324,7 +336,7 @@ export function KanbanCardModal({
           </FormField>
 
           {/* Linha 7 — Descrição */}
-          <FormField label="Descrição" icon="📝">
+          <FormField label="Descrição">
             <Textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
@@ -342,9 +354,9 @@ export function KanbanCardModal({
                 <AlertDialogTrigger asChild>
                   <button
                     type="button"
-                    className="px-3 py-2 text-sm font-medium text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-md transition-colors"
+                    className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-md transition-colors"
                   >
-                    Excluir
+                    <Trash size={14} weight="bold" /> Excluir
                   </button>
                 </AlertDialogTrigger>
                 <AlertDialogContent className="bg-slate-900 border-slate-700">
@@ -383,7 +395,7 @@ export function KanbanCardModal({
               disabled={saving}
               className="px-4 py-2 text-sm font-semibold bg-primary text-primary-foreground hover:bg-primary/90 rounded-md transition-colors disabled:opacity-50"
             >
-              {saving ? "Salvando..." : card ? "Salvar" : "Criar"}
+              {saving ? <><Spinner size={14} className="animate-spin" /> Salvando...</> : card ? "Salvar" : "Criar"}
             </button>
           </div>
         </DialogFooter>

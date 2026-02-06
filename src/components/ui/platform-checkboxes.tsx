@@ -1,11 +1,8 @@
 "use client";
 
-const PLATFORMS = [
-  { id: "instagram", label: "Instagram", icon: "📷" },
-  { id: "youtube", label: "YouTube", icon: "▶️" },
-  { id: "tiktok", label: "TikTok", icon: "🎵" },
-  { id: "facebook", label: "Facebook", icon: "👤" },
-];
+import { PLATFORM_ICONS } from "@/lib/constants/icons";
+
+const PLATFORM_KEYS = ["instagram", "youtube", "tiktok", "facebook"];
 
 interface PlatformCheckboxesProps {
   selected: string[];
@@ -23,25 +20,32 @@ export function PlatformCheckboxes({ selected, onChange }: PlatformCheckboxesPro
 
   return (
     <div className="flex flex-wrap gap-3">
-      {PLATFORMS.map((p) => (
-        <label
-          key={p.id}
-          className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border cursor-pointer text-sm transition-colors ${
-            selected.includes(p.id)
-              ? "border-primary bg-primary/10 text-primary"
-              : "border-border bg-transparent text-muted-foreground hover:border-muted-foreground"
-          }`}
-        >
-          <input
-            type="checkbox"
-            checked={selected.includes(p.id)}
-            onChange={() => toggle(p.id)}
-            className="sr-only"
-          />
-          <span>{p.icon}</span>
-          <span>{p.label}</span>
-        </label>
-      ))}
+      {PLATFORM_KEYS.map((key) => {
+        const config = PLATFORM_ICONS[key];
+        if (!config) return null;
+        const Icon = config.icon;
+        const isSelected = selected.includes(key);
+
+        return (
+          <label
+            key={key}
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border cursor-pointer text-sm transition-colors ${
+              isSelected
+                ? "border-primary/50 bg-primary/10 text-foreground"
+                : "border-border bg-transparent text-muted-foreground hover:border-muted-foreground"
+            }`}
+          >
+            <input
+              type="checkbox"
+              checked={isSelected}
+              onChange={() => toggle(key)}
+              className="sr-only"
+            />
+            <Icon size={16} weight="duotone" style={{ color: isSelected ? config.color : undefined }} />
+            <span>{config.label}</span>
+          </label>
+        );
+      })}
     </div>
   );
 }
