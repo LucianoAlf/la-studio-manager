@@ -2,8 +2,8 @@
 
 import { useState, useEffect } from "react";
 import { MusicNotes, Envelope, Lock } from "@phosphor-icons/react";
+import { createClient } from "@/lib/supabase/client";
 
-// Chaves do localStorage
 const AUTH_TOKEN_KEY = "la-studio-auth-token";
 const AUTH_REFRESH_KEY = "la-studio-auth-refresh";
 
@@ -12,50 +12,47 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [debug, setDebug] = useState<string>("");
 
   // Verificar se já está logado
   useEffect(() => {
-    const token = localStorage.getItem(AUTH_TOKEN_KEY);
-    if (token) {
-      setDebug("Sessão existente encontrada, redirecionando...");
-      window.location.replace("/");
+    async function check() {
+      // Verificar localStorage primeiro (fallback para Simple Browser)
+      if (localStorage.getItem(AUTH_TOKEN_KEY)) {
+        window.location.replace("/");
+        return;
+      }
+      // Verificar sessão Supabase (cookies)
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) window.location.replace("/");
     }
+    check();
   }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
-    setDebug("Iniciando login...");
 
     try {
-      setDebug("Chamando API...");
-      const res = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+      const supabase = createClient();
+      const { data, error: authError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
       });
 
-      setDebug(`API retornou: ${res.status}`);
-      const data = await res.json();
-
-      if (!res.ok) {
-        setError(data.error || "Erro ao fazer login.");
+      if (authError || !data.session) {
+        setError("Email ou senha incorretos.");
         setLoading(false);
         return;
       }
 
-      setDebug("Salvando tokens no localStorage...");
-      // Salvar tokens manualmente no localStorage
-      localStorage.setItem(AUTH_TOKEN_KEY, data.access_token);
-      localStorage.setItem(AUTH_REFRESH_KEY, data.refresh_token);
+      // Salvar tokens no localStorage como fallback (Simple Browser não persiste cookies)
+      localStorage.setItem(AUTH_TOKEN_KEY, data.session.access_token);
+      localStorage.setItem(AUTH_REFRESH_KEY, data.session.refresh_token);
 
-      setDebug("Tokens salvos! Redirecionando...");
-      // Redirecionar
       window.location.replace("/");
-    } catch (err: any) {
-      setDebug(`Erro: ${err.message}`);
+    } catch {
       setError("Erro de conexão. Tente novamente.");
       setLoading(false);
     }
@@ -116,12 +113,6 @@ export default function LoginPage() {
           {error && (
             <p className="rounded-xl bg-accent-pink/10 border border-accent-pink/30 px-4 py-3 text-sm text-accent-pink">
               {error}
-            </p>
-          )}
-
-          {debug && (
-            <p className="rounded-xl bg-slate-800 border border-slate-700 px-4 py-2 text-xs text-slate-400">
-              Debug: {debug}
             </p>
           )}
 

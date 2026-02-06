@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { Header } from "@/components/layout/header";
 import {
   SquaresFour,
@@ -23,6 +23,7 @@ import {
   DotsThreeVertical,
 } from "@phosphor-icons/react";
 import { cn } from "@/lib/utils";
+import { Button, Badge, Avatar, Card, IconButton, Dot, ProgressBar } from "@/components/ui";
 import {
   DndContext,
   DragOverlay,
@@ -39,138 +40,22 @@ import {
   useSortable,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-
-// ============================================================
-// DADOS MOCK — trocar por queries Supabase no futuro
-// ============================================================
-
-type StatusId =
-  | "brainstorm"
-  | "planning"
-  | "todo"
-  | "captando"
-  | "editando"
-  | "aprovacao"
-  | "publicado";
-
-type PrioridadeId = "urgente" | "alta" | "media" | "baixa";
-
-interface Projeto {
-  id: number;
-  titulo: string;
-  plataforma: "Instagram" | "YouTube" | "TikTok";
-  marca: "School" | "Kids";
-  responsavel: string;
-  status: StatusId;
-  prioridade: PrioridadeId;
-  prazo: string; // ISO date
-  progresso: number;
-}
-
-const MOCK_PROJETOS: Projeto[] = [
-  { id: 1, titulo: "Post: Resultado Vestibular Musical", plataforma: "Instagram", marca: "School", responsavel: "Rayan", status: "publicado", prioridade: "alta", prazo: "2026-02-01", progresso: 100 },
-  { id: 2, titulo: "Stories: Tour pela Escola", plataforma: "Instagram", marca: "School", responsavel: "Yuri", status: "publicado", prioridade: "media", prazo: "2026-02-02", progresso: 100 },
-  { id: 3, titulo: "Post Aniversário - Maria Silva", plataforma: "Instagram", marca: "Kids", responsavel: "Rayan", status: "aprovacao", prioridade: "media", prazo: "2026-02-04", progresso: 90 },
-  { id: 4, titulo: "Cobertura: Festival de Verão", plataforma: "Instagram", marca: "School", responsavel: "John", status: "captando", prioridade: "urgente", prazo: "2026-02-04", progresso: 60 },
-  { id: 5, titulo: "Reels: Bastidores Show Rock", plataforma: "Instagram", marca: "School", responsavel: "John", status: "captando", prioridade: "urgente", prazo: "2026-02-05", progresso: 40 },
-  { id: 6, titulo: "Carrossel: Dicas de Guitarra", plataforma: "Instagram", marca: "School", responsavel: "John", status: "editando", prioridade: "alta", prazo: "2026-02-06", progresso: 75 },
-  { id: 7, titulo: "Newsletter Semanal #6", plataforma: "Instagram", marca: "School", responsavel: "Yuri", status: "todo", prioridade: "media", prazo: "2026-02-07", progresso: 15 },
-  { id: 8, titulo: "Vídeo: Depoimento Aluno Piano", plataforma: "YouTube", marca: "School", responsavel: "John", status: "todo", prioridade: "media", prazo: "2026-02-09", progresso: 10 },
-  { id: 9, titulo: "Clipe Aluno: Banda Velvet", plataforma: "YouTube", marca: "School", responsavel: "John", status: "editando", prioridade: "alta", prazo: "2026-02-11", progresso: 55 },
-  { id: 10, titulo: "Campanha Matrícula Março", plataforma: "Instagram", marca: "School", responsavel: "Rayan", status: "planning", prioridade: "alta", prazo: "2026-02-14", progresso: 20 },
-  { id: 11, titulo: "TikTok: Challenge Musical Kids", plataforma: "TikTok", marca: "Kids", responsavel: "Yuri", status: "brainstorm", prioridade: "baixa", prazo: "2026-02-19", progresso: 5 },
-  { id: 12, titulo: "Arte: Promoção Dia das Mães", plataforma: "Instagram", marca: "School", responsavel: "Rayan", status: "brainstorm", prioridade: "media", prazo: "2026-02-28", progresso: 0 },
-];
-
-const STATUS_CONFIG: Record<StatusId, { label: string; emoji: string; color: string; bgClass: string }> = {
-  brainstorm: { label: "Brainstorm", emoji: "🔮", color: "#8B5CF6", bgClass: "bg-[#8B5CF6]/15 text-[#A78BFA]" },
-  planning: { label: "Planning", emoji: "📋", color: "#3B82F6", bgClass: "bg-[#3B82F6]/15 text-[#60A5FA]" },
-  todo: { label: "To Do", emoji: "📌", color: "#10B981", bgClass: "bg-[#10B981]/15 text-[#34D399]" },
-  captando: { label: "Captando", emoji: "🎬", color: "#F59E0B", bgClass: "bg-[#F59E0B]/15 text-[#FBBF24]" },
-  editando: { label: "Editando", emoji: "✂️", color: "#F97316", bgClass: "bg-[#F97316]/15 text-[#FB923C]" },
-  aprovacao: { label: "Aprovação", emoji: "✅", color: "#22C55E", bgClass: "bg-[#22C55E]/15 text-[#4ADE80]" },
-  publicado: { label: "Publicado", emoji: "🚀", color: "#6366F1", bgClass: "bg-[#6366F1]/15 text-[#818CF8]" },
-};
-
-const PRIORIDADE_CONFIG: Record<PrioridadeId, { label: string; color: string; bgClass: string }> = {
-  urgente: { label: "Urgente", color: "#EF4444", bgClass: "bg-[#EF4444]/15 text-[#F87171]" },
-  alta: { label: "Alta", color: "#F97316", bgClass: "bg-[#F97316]/15 text-[#FB923C]" },
-  media: { label: "Média", color: "#3B82F6", bgClass: "bg-[#3B82F6]/15 text-[#60A5FA]" },
-  baixa: { label: "Baixa", color: "#22C55E", bgClass: "bg-[#22C55E]/15 text-[#4ADE80]" },
-};
-
-const PLATAFORMA_COLORS: Record<string, string> = {
-  Instagram: "#E1306C",
-  YouTube: "#FF0000",
-  TikTok: "#00BCD4",
-};
-
-const MEMBER_CONFIG: Record<string, { inicial: string; cor: string; role: string }> = {
-  Yuri: { inicial: "Y", cor: "bg-teal-500", role: "Líder Marketing" },
-  John: { inicial: "J", cor: "bg-orange-500", role: "Produção" },
-  Rayan: { inicial: "R", cor: "bg-green-500", role: "Tráfego" },
-};
-
-const PIPELINE_ORDER: StatusId[] = ["brainstorm", "planning", "todo", "captando", "editando", "aprovacao", "publicado"];
-
-// Tags para os cards do Kanban
-const CARD_TAGS: Record<number, string[]> = {
-  1: ["#vestibular", "#resultado"],
-  2: ["#tour", "#escola"],
-  3: ["#aniversário", "#automação"],
-  4: ["#evento", "#cobertura"],
-  5: ["#reels", "#bastidores"],
-  6: ["#carrossel", "#guitarra"],
-  7: ["#newsletter", "#semanal"],
-  8: ["#vídeo", "#depoimento"],
-  9: ["#clipe", "#aluno"],
-  10: ["#matrícula", "#campanha"],
-  11: ["#tiktok", "#kids"],
-  12: ["#promoção", "#sazonal"],
-};
-
-// Eventos mock para o Calendário (semana 1-7 fev 2026)
-const MOCK_CALENDAR_EVENTS = [
-  { id: 1, projetoId: 1, titulo: "Post: Resultado Vestib...", dia: 1, hora: 10, cor: "#F97316" },
-  { id: 2, projetoId: 2, titulo: "Stories: Tour pela Esc...", dia: 2, hora: 10, cor: "#10B981" },
-  { id: 3, projetoId: 3, titulo: "Post Aniversário - Mar...", dia: 4, hora: 10, cor: "#22C55E" },
-  { id: 4, projetoId: 4, titulo: "Cobertura: Festival de...", dia: 4, hora: 10.5, cor: "#F59E0B" },
-  { id: 5, projetoId: 5, titulo: "Reels: Bastidores Show...", dia: 5, hora: 10, cor: "#EF4444" },
-  { id: 6, projetoId: 6, titulo: "Carrossel: Dicas de Gu...", dia: 6, hora: 10, cor: "#EC4899" },
-  { id: 7, projetoId: 7, titulo: "Newsletter Semanal #6", dia: 7, hora: 10, cor: "#3B82F6" },
-];
-
-// Datas de início para o Gantt (mês=1 = fevereiro, mês=0 = janeiro)
-const GANTT_DATES: Record<number, { inicioMes: number; inicioDia: number; fimMes: number; fimDia: number }> = {
-  1:  { inicioMes: 0, inicioDia: 31, fimMes: 1, fimDia: 1 },
-  2:  { inicioMes: 1, inicioDia: 1,  fimMes: 1, fimDia: 2 },
-  3:  { inicioMes: 1, inicioDia: 2,  fimMes: 1, fimDia: 4 },
-  4:  { inicioMes: 1, inicioDia: 3,  fimMes: 1, fimDia: 4 },
-  5:  { inicioMes: 1, inicioDia: 3,  fimMes: 1, fimDia: 5 },
-  6:  { inicioMes: 1, inicioDia: 4,  fimMes: 1, fimDia: 6 },
-  7:  { inicioMes: 1, inicioDia: 5,  fimMes: 1, fimDia: 7 },
-  8:  { inicioMes: 1, inicioDia: 7,  fimMes: 1, fimDia: 9 },
-  9:  { inicioMes: 1, inicioDia: 9,  fimMes: 1, fimDia: 11 },
-  10: { inicioMes: 1, inicioDia: 12, fimMes: 1, fimDia: 14 },
-  11: { inicioMes: 1, inicioDia: 17, fimMes: 1, fimDia: 19 },
-  12: { inicioMes: 1, inicioDia: 25, fimMes: 1, fimDia: 28 },
-};
-
-// Ordem dos projetos por pessoa
-const PROJETOS_POR_PESSOA: Record<string, number[]> = {
-  Yuri:  [11, 7, 2],
-  John:  [6, 5, 8, 4, 9],
-  Rayan: [3, 10, 12, 1],
-};
-
-// Membros para a seção Configurações
-const CONFIG_MEMBERS = [
-  { nome: "Yuri",  role: "Admin",     badgeCor: "bg-teal-500/20 text-teal-400" },
-  { nome: "John",  role: "Editor",    badgeCor: "bg-orange-500/20 text-orange-400" },
-  { nome: "Rayan", role: "Editor",    badgeCor: "bg-green-500/20 text-green-400" },
-  { nome: "Alf",   role: "Developer", badgeCor: "bg-violet-500/20 text-violet-400" },
-  { nome: "Hugo",  role: "Developer", badgeCor: "bg-violet-500/20 text-violet-400" },
-];
+import { getKanbanColumns, getKanbanCards, moveKanbanCard } from "@/lib/queries/kanban";
+import { getCalendarItems } from "@/lib/queries/calendar";
+import { getAllUsers } from "@/lib/queries/users";
+import { getUserDisplay } from "@/lib/utils/calendar-helpers";
+import {
+  getProgressFromColumn,
+  getStatusFromColumn,
+  getPriorityDisplay,
+  groupCardsByColumn,
+  groupCardsByUser,
+  getCardBrand,
+  PLATFORM_COLORS,
+  formatDateShort as formatDateHelper,
+  isOverdue as isOverdueHelper,
+} from "@/lib/utils/kanban-helpers";
+import type { KanbanColumn as KanbanColumnType, KanbanCard as KanbanCardType, CalendarItem, UserProfile } from "@/lib/types/database";
 
 // ============================================================
 // TABS
@@ -194,14 +79,71 @@ type TabId = (typeof TABS)[number]["id"];
 
 export default function ProjetosPage() {
   const [activeTab, setActiveTab] = useState<TabId>("dashboard");
+  const [columns, setColumns] = useState<KanbanColumnType[]>([]);
+  const [cards, setCards] = useState<KanbanCardType[]>([]);
+  const [users, setUsers] = useState<UserProfile[]>([]);
+  const [calendarItems, setCalendarItems] = useState<CalendarItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Carregar dados do Kanban
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [cols, cardsData, usersData] = await Promise.all([
+        getKanbanColumns(),
+        getKanbanCards(),
+        getAllUsers(),
+      ]);
+      setColumns(cols);
+      setCards(cardsData);
+      setUsers(usersData);
+    } catch (err) {
+      console.error("Erro ao carregar projetos:", err);
+      setError("Erro ao carregar dados dos projetos");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { loadData(); }, [loadData]);
+
+  // Carregar calendar items quando tab Calendário é selecionada
+  useEffect(() => {
+    if (activeTab === "calendario") {
+      const now = new Date();
+      const start = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+      const end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59).toISOString();
+      getCalendarItems(start, end).then(setCalendarItems).catch(console.error);
+    }
+  }, [activeTab]);
+
+  // Handler para mover card (optimistic update)
+  const handleMoveCard = useCallback(async (cardId: string, newColumnId: string, newPosition: number) => {
+    setCards((prev) =>
+      prev.map((c) =>
+        c.id === cardId
+          ? { ...c, column_id: newColumnId, position_in_column: newPosition, column: columns.find((col) => col.id === newColumnId) }
+          : c
+      )
+    );
+    try {
+      await moveKanbanCard(cardId, newColumnId, newPosition);
+    } catch (err) {
+      console.error("Erro ao mover card:", err);
+      const freshCards = await getKanbanCards();
+      setCards(freshCards);
+    }
+  }, [columns]);
 
   return (
     <>
-      <Header title="Projetos" subtitle={`${MOCK_PROJETOS.length} itens`}>
-        <button className="flex h-[34px] items-center gap-2 rounded-md bg-accent-cyan px-3 text-body-md font-medium text-slate-950 transition-colors hover:bg-accent-cyan/90">
+      <Header title="Projetos" subtitle={`${cards.length} itens`}>
+        <Button variant="primary" size="md">
           <Plus size={16} weight="bold" />
           Novo Projeto
-        </button>
+        </Button>
       </Header>
 
       {/* Tabs */}
@@ -229,13 +171,31 @@ export default function ProjetosPage() {
 
       {/* Content */}
       <div className="flex-1 overflow-auto p-6">
-        {activeTab === "dashboard" && <DashboardTab />}
-        {activeTab === "lista" && <ListaTab />}
-        {activeTab === "kanban" && <KanbanTab />}
-        {activeTab === "calendario" && <CalendarioTab />}
-        {activeTab === "timeline" && <TimelineTab />}
-        {activeTab === "por-pessoa" && <PorPessoaTab />}
-        {activeTab === "configuracoes" && <ConfiguracoesTab />}
+        {loading ? (
+          <div className="flex-1 flex items-center justify-center min-h-[400px]">
+            <div className="flex flex-col items-center gap-3">
+              <div className="w-8 h-8 border-2 border-accent-cyan border-t-transparent rounded-full animate-spin" />
+              <span className="text-sm text-slate-400">Carregando projetos...</span>
+            </div>
+          </div>
+        ) : error ? (
+          <div className="flex-1 flex items-center justify-center min-h-[400px]">
+            <div className="text-center">
+              <p className="text-sm text-red-400 mb-2">{error}</p>
+              <button onClick={loadData} className="text-sm text-accent-cyan hover:underline">Tentar novamente</button>
+            </div>
+          </div>
+        ) : (
+          <>
+            {activeTab === "dashboard" && <DashboardTab cards={cards} columns={columns} users={users} />}
+            {activeTab === "lista" && <ListaTab cards={cards} columns={columns} />}
+            {activeTab === "kanban" && <KanbanTab cards={cards} columns={columns} setCards={setCards} onMoveCard={handleMoveCard} />}
+            {activeTab === "calendario" && <CalendarioTab calendarItems={calendarItems} />}
+            {activeTab === "timeline" && <TimelineTab cards={cards} columns={columns} />}
+            {activeTab === "por-pessoa" && <PorPessoaTab cards={cards} columns={columns} />}
+            {activeTab === "configuracoes" && <ConfiguracoesTab columns={columns} users={users} />}
+          </>
+        )}
       </div>
     </>
   );
@@ -245,38 +205,33 @@ export default function ProjetosPage() {
 // TAB: DASHBOARD
 // ============================================================
 
-function DashboardTab() {
-  const totalProjetos = MOCK_PROJETOS.length;
-  const emProgresso = MOCK_PROJETOS.filter((p) =>
-    ["captando", "editando", "todo", "planning", "brainstorm", "aprovacao"].includes(p.status)
-  ).length;
-  const publicados = MOCK_PROJETOS.filter((p) => p.status === "publicado").length;
-  const urgentes = MOCK_PROJETOS.filter((p) => p.prioridade === "urgente").length;
+function DashboardTab({ cards, columns, users }: { cards: KanbanCardType[]; columns: KanbanColumnType[]; users: UserProfile[] }) {
+  const totalProjetos = cards.length;
+  const publishedSlugs = ["published", "archived"];
+  const inProgressSlugs = ["capturing", "editing", "todo", "planning", "brainstorming", "awaiting_approval", "approved"];
+  const emProgresso = cards.filter((c) => inProgressSlugs.includes(c.column?.slug ?? "")).length;
+  const publicados = cards.filter((c) => publishedSlugs.includes(c.column?.slug ?? "")).length;
+  const urgentes = cards.filter((c) => c.priority === "urgent").length;
 
   const pipelineCounts = useMemo(() => {
-    const counts: Record<StatusId, number> = {
-      brainstorm: 0, planning: 0, todo: 0, captando: 0, editando: 0, aprovacao: 0, publicado: 0,
-    };
-    MOCK_PROJETOS.forEach((p) => counts[p.status]++);
+    const counts = new Map<string, number>();
+    columns.forEach((col) => counts.set(col.id, 0));
+    cards.forEach((c) => counts.set(c.column_id, (counts.get(c.column_id) ?? 0) + 1));
     return counts;
-  }, []);
+  }, [cards, columns]);
 
-  const maxPipeline = Math.max(...Object.values(pipelineCounts), 1);
+  const maxPipeline = Math.max(...pipelineCounts.values(), 1);
 
-  const proximas24h = MOCK_PROJETOS
-    .filter((p) => p.prioridade === "urgente" || p.prioridade === "media")
-    .filter((p) => p.status !== "publicado")
-    .slice(0, 4);
+  const proximas24h = useMemo(() =>
+    cards
+      .filter((c) => c.priority === "urgent" || c.priority === "high")
+      .filter((c) => !publishedSlugs.includes(c.column?.slug ?? ""))
+      .slice(0, 4),
+  [cards]);
 
-  const cargaTime = useMemo(() => {
-    const carga: Record<string, number> = {};
-    MOCK_PROJETOS.forEach((p) => {
-      if (p.status !== "publicado") {
-        carga[p.responsavel] = (carga[p.responsavel] || 0) + 1;
-      }
-    });
-    return carga;
-  }, []);
+  const teamLoad = useMemo(() => groupCardsByUser(
+    cards.filter((c) => !publishedSlugs.includes(c.column?.slug ?? ""))
+  ), [cards]);
 
   return (
     <div className="space-y-6">
@@ -285,24 +240,18 @@ function DashboardTab() {
         <StatCard
           label="TOTAL PROJETOS"
           value={totalProjetos}
-          change="↑ 12% vs semana passada"
-          changePositive
           icon={<Flag size={20} weight="duotone" className="text-accent-cyan" />}
           barColor="bg-accent-cyan"
         />
         <StatCard
           label="EM PROGRESSO"
           value={emProgresso}
-          change="↓ 5% vs semana passada"
-          changePositive={false}
           icon={<Play size={20} weight="duotone" className="text-orange-400" />}
           barColor="bg-orange-400"
         />
         <StatCard
           label="PUBLICADOS"
           value={publicados}
-          change="↑ 25% vs semana passada"
-          changePositive
           icon={<CheckCircle size={20} weight="duotone" className="text-green-400" />}
           barColor="bg-green-400"
         />
@@ -317,102 +266,88 @@ function DashboardTab() {
       {/* Seção 2 — Pipeline + Próximas 24h */}
       <div className="grid grid-cols-3 gap-4">
         {/* Pipeline Status (2/3) */}
-        <div className="col-span-2 rounded-[14px] border border-slate-800 bg-slate-900/60 p-6">
+        <Card variant="default" className="col-span-2">
           <h3 className="mb-5 text-lg font-semibold text-slate-50">Pipeline Status</h3>
           <div className="space-y-3">
-            {PIPELINE_ORDER.map((statusId) => {
-              const cfg = STATUS_CONFIG[statusId];
-              const count = pipelineCounts[statusId];
+            {columns.map((col) => {
+              const status = getStatusFromColumn(col);
+              const count = pipelineCounts.get(col.id) ?? 0;
               const pct = (count / maxPipeline) * 100;
               return (
-                <div key={statusId} className="flex items-center gap-3">
-                  <span className="w-5 text-center text-sm">{cfg.emoji}</span>
-                  <span className="w-24 text-sm text-slate-300">{cfg.label}</span>
-                  <div className="flex-1 h-2.5 rounded-full bg-slate-800">
-                    <div
-                      className="h-full rounded-full transition-all"
-                      style={{ width: `${pct}%`, backgroundColor: cfg.color }}
-                    />
-                  </div>
+                <div key={col.id} className="flex items-center gap-3">
+                  <span className="w-5 text-center text-sm">{status.emoji}</span>
+                  <span className="w-24 text-sm text-slate-300">{status.label}</span>
+                  <ProgressBar value={pct} color={status.color} size="thick" className="flex-1" />
                   <span className="w-6 text-right text-sm font-semibold text-slate-300">{count}</span>
                 </div>
               );
             })}
           </div>
-        </div>
+        </Card>
 
         {/* Próximas 24h (1/3) */}
-        <div className="rounded-[14px] border border-slate-800 bg-slate-900/60 p-6">
+        <Card variant="default">
           <div className="mb-4 flex items-center gap-2">
             <Lightning size={18} weight="duotone" className="text-accent-yellow" />
             <h3 className="text-lg font-semibold text-slate-50">Próximas 24h</h3>
           </div>
           <div className="space-y-3">
             {proximas24h.map((p) => {
-              const isUrgente = p.prioridade === "urgente";
-              const borderColor = isUrgente ? "#F97316" : "#3B82F6";
+              const isUrgent = p.priority === "urgent";
+              const borderColor = isUrgent ? "#F97316" : "#3B82F6";
+              const display = getUserDisplay(p.responsible);
+              const platform = p.platforms?.[0] ?? "";
               return (
                 <div
                   key={p.id}
                   className="rounded-lg bg-slate-800/50 p-3"
                   style={{ borderLeft: `3px solid ${borderColor}` }}
                 >
-                  <p className="text-sm font-semibold text-slate-100">{p.titulo}</p>
+                  <p className="text-sm font-semibold text-slate-100">{p.title}</p>
                   <div className="mt-1 flex items-center justify-between">
                     <div className="flex items-center gap-1.5 text-xs text-slate-400">
-                      <span
-                        className="inline-block h-2 w-2 rounded-full"
-                        style={{ backgroundColor: PLATAFORMA_COLORS[p.plataforma] }}
-                      />
-                      {p.plataforma} • {p.responsavel}
+                      {platform && <Dot color={PLATFORM_COLORS[platform] ?? "#6B7280"} />}
+                      {platform || "—"} • {display.name}
                     </div>
-                    <span
-                      className={cn(
-                        "rounded-full px-2 py-0.5 text-[10px] font-bold uppercase",
-                        isUrgente
-                          ? "bg-red-500/20 text-red-400"
-                          : "bg-blue-500/20 text-blue-400"
-                      )}
-                    >
-                      {isUrgente ? "Urgente" : "Média"}
-                    </span>
+                    <Badge variant="type" size="sm" color={isUrgent ? "#EF4444" : "#3B82F6"}>
+                      {isUrgent ? "Urgente" : getPriorityDisplay(p.priority)?.label ?? "—"}
+                    </Badge>
                   </div>
                 </div>
               );
             })}
+            {proximas24h.length === 0 && (
+              <p className="text-sm text-slate-500">Nenhum item urgente no momento</p>
+            )}
           </div>
-        </div>
+        </Card>
       </div>
 
       {/* Seção 3 — Carga do Time */}
-      <div className="rounded-[14px] border border-slate-800 bg-slate-900/60 p-6">
+      <Card variant="default">
         <h3 className="mb-5 text-lg font-semibold text-slate-50">Carga do Time</h3>
         <div className="grid grid-cols-3 gap-4">
-          {Object.entries(MEMBER_CONFIG).map(([nome, cfg]) => (
-            <div
-              key={nome}
-              className="flex items-center gap-4 rounded-xl border border-slate-800 bg-slate-800/40 p-4"
-            >
+          {Array.from(teamLoad.entries()).map(([userId, { name, role, cards: userCards }]) => {
+            const display = getUserDisplay(userCards[0]?.responsible);
+            return (
               <div
-                className={cn(
-                  "flex h-12 w-12 items-center justify-center rounded-full text-lg font-bold text-white",
-                  cfg.cor
-                )}
+                key={userId}
+                className="flex items-center gap-4 rounded-xl border border-slate-800 bg-slate-800/40 p-4"
               >
-                {cfg.inicial}
+                <Avatar initial={display.initial} color={display.color} size="lg" />
+                <div className="flex-1">
+                  <p className="text-sm font-bold text-slate-100">{name}</p>
+                  <p className="text-xs text-slate-400">{role}</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-3xl font-bold text-slate-100">{userCards.length}</p>
+                  <p className="text-xs text-slate-500">ativas</p>
+                </div>
               </div>
-              <div className="flex-1">
-                <p className="text-sm font-bold text-slate-100">{nome}</p>
-                <p className="text-xs text-slate-400">{cfg.role}</p>
-              </div>
-              <div className="text-right">
-                <p className="text-3xl font-bold text-slate-100">{cargaTime[nome] || 0}</p>
-                <p className="text-xs text-slate-500">ativas</p>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
-      </div>
+      </Card>
     </div>
   );
 }
@@ -433,7 +368,7 @@ function StatCard({
   barColor: string;
 }) {
   return (
-    <div className="rounded-[14px] border border-slate-800 bg-slate-900/60 p-6">
+    <Card variant="default">
       <div className="flex items-start justify-between">
         <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
           {label}
@@ -452,7 +387,7 @@ function StatCard({
         </p>
       )}
       <div className={cn("mt-4 h-1 w-full rounded-full", barColor)} />
-    </div>
+    </Card>
   );
 }
 
@@ -460,32 +395,19 @@ function StatCard({
 // TAB: LISTA
 // ============================================================
 
-function ListaTab() {
+function ListaTab({ cards, columns }: { cards: KanbanCardType[]; columns: KanbanColumnType[] }) {
   const [sortAsc, setSortAsc] = useState(true);
 
-  const sortedProjetos = useMemo(() => {
-    return [...MOCK_PROJETOS].sort((a, b) => {
-      const diff = new Date(a.prazo).getTime() - new Date(b.prazo).getTime();
-      return sortAsc ? diff : -diff;
+  const sortedCards = useMemo(() => {
+    return [...cards].sort((a, b) => {
+      const aTime = a.due_date ? new Date(a.due_date).getTime() : Infinity;
+      const bTime = b.due_date ? new Date(b.due_date).getTime() : Infinity;
+      return sortAsc ? aTime - bTime : bTime - aTime;
     });
-  }, [sortAsc]);
-
-  const hoje = new Date();
-  hoje.setHours(0, 0, 0, 0);
-
-  function formatDate(iso: string) {
-    const d = new Date(iso + "T00:00:00");
-    const dia = d.getDate().toString().padStart(2, "0");
-    const meses = ["jan.", "fev.", "mar.", "abr.", "mai.", "jun.", "jul.", "ago.", "set.", "out.", "nov.", "dez."];
-    return `${dia} de ${meses[d.getMonth()]}`;
-  }
-
-  function isOverdue(iso: string) {
-    return new Date(iso + "T00:00:00") < hoje;
-  }
+  }, [cards, sortAsc]);
 
   return (
-    <div className="rounded-[14px] border border-slate-800 bg-slate-900/60 overflow-hidden">
+    <Card variant="default" className="overflow-hidden !p-0">
       <table className="w-full">
         <thead>
           <tr className="border-b border-slate-800">
@@ -521,21 +443,24 @@ function ListaTab() {
           </tr>
         </thead>
         <tbody>
-          {sortedProjetos.map((p, i) => {
-            const statusCfg = STATUS_CONFIG[p.status];
-            const prioCfg = PRIORIDADE_CONFIG[p.prioridade];
-            const memberCfg = MEMBER_CONFIG[p.responsavel];
-            const overdue = isOverdue(p.prazo) && p.status !== "publicado";
+          {sortedCards.map((card, i) => {
+            const status = getStatusFromColumn(card.column);
+            const prio = getPriorityDisplay(card.priority);
+            const display = getUserDisplay(card.responsible);
+            const progress = getProgressFromColumn(card.column, columns.length);
+            const platform = card.platforms?.[0] ?? "";
+            const brand = getCardBrand(card);
+            const overdue = card.due_date && isOverdueHelper(card.due_date) && card.column?.slug !== "published";
             const progressColor =
-              p.progresso === 100
+              progress === 100
                 ? "bg-green-400"
-                : p.progresso >= 50
+                : progress >= 50
                 ? "bg-accent-cyan"
                 : "bg-slate-500";
 
             return (
               <tr
-                key={p.id}
+                key={card.id}
                 className={cn(
                   "border-b border-slate-800/50 transition-colors hover:bg-slate-800/40",
                   i % 2 === 0 ? "bg-slate-900/30" : "bg-transparent"
@@ -543,22 +468,19 @@ function ListaTab() {
               >
                 {/* PROJETO */}
                 <td className="px-5 py-3.5">
-                  <p className="text-sm font-semibold text-slate-100">{p.titulo}</p>
+                  <p className="text-sm font-semibold text-slate-100">{card.title}</p>
                   <div className="mt-1 flex items-center gap-2">
-                    <span
-                      className="inline-block h-2 w-2 rounded-full"
-                      style={{ backgroundColor: PLATAFORMA_COLORS[p.plataforma] }}
-                    />
-                    <span className="text-xs text-slate-400">{p.plataforma}</span>
+                    {platform && <Dot color={PLATFORM_COLORS[platform] ?? "#6B7280"} />}
+                    <span className="text-xs text-slate-400">{platform || "—"}</span>
                     <span
                       className={cn(
                         "rounded px-1.5 py-0.5 text-[10px] font-bold uppercase",
-                        p.marca === "School"
-                          ? "bg-teal-500/20 text-teal-400"
-                          : "bg-orange-500/20 text-orange-400"
+                        brand === "la_kids"
+                          ? "bg-orange-500/20 text-orange-400"
+                          : "bg-teal-500/20 text-teal-400"
                       )}
                     >
-                      {p.marca}
+                      {brand === "la_kids" ? "Kids" : "School"}
                     </span>
                   </div>
                 </td>
@@ -566,15 +488,8 @@ function ListaTab() {
                 {/* RESPONSÁVEL */}
                 <td className="px-5 py-3.5">
                   <div className="flex items-center gap-2">
-                    <div
-                      className={cn(
-                        "flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold text-white",
-                        memberCfg?.cor || "bg-slate-600"
-                      )}
-                    >
-                      {memberCfg?.inicial || "?"}
-                    </div>
-                    <span className="text-sm text-slate-300">{p.responsavel}</span>
+                    <Avatar initial={display.initial} color={display.color} size="md" className="!h-7 !w-7 !text-xs" />
+                    <span className="text-sm text-slate-300">{display.name}</span>
                   </div>
                 </td>
 
@@ -583,23 +498,27 @@ function ListaTab() {
                   <span
                     className={cn(
                       "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold",
-                      statusCfg.bgClass
+                      status.bgClass
                     )}
                   >
-                    {statusCfg.emoji} {statusCfg.label}
+                    {status.emoji} {status.label}
                   </span>
                 </td>
 
                 {/* PRIORIDADE */}
                 <td className="px-5 py-3.5">
-                  <span
-                    className={cn(
-                      "inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold",
-                      prioCfg.bgClass
-                    )}
-                  >
-                    {prioCfg.label}
-                  </span>
+                  {prio ? (
+                    <span
+                      className={cn(
+                        "inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold",
+                        prio.bgClass
+                      )}
+                    >
+                      {prio.label}
+                    </span>
+                  ) : (
+                    <span className="text-xs text-slate-500">—</span>
+                  )}
                 </td>
 
                 {/* PRAZO */}
@@ -610,20 +529,15 @@ function ListaTab() {
                       overdue ? "font-semibold text-red-400" : "text-slate-300"
                     )}
                   >
-                    {formatDate(p.prazo)}
+                    {card.due_date ? formatDateHelper(card.due_date) : "—"}
                   </span>
                 </td>
 
                 {/* PROGRESSO */}
                 <td className="px-5 py-3.5">
                   <div className="flex items-center gap-2">
-                    <div className="h-1 w-20 rounded-full bg-slate-700">
-                      <div
-                        className={cn("h-full rounded-full transition-all", progressColor)}
-                        style={{ width: `${p.progresso}%` }}
-                      />
-                    </div>
-                    <span className="text-xs font-medium text-slate-400">{p.progresso}%</span>
+                    <ProgressBar value={progress} colorClass={progressColor} size="thin" className="w-20 !bg-slate-700" />
+                    <span className="text-xs font-medium text-slate-400">{progress}%</span>
                   </div>
                 </td>
 
@@ -638,7 +552,7 @@ function ListaTab() {
           })}
         </tbody>
       </table>
-    </div>
+    </Card>
   );
 }
 
@@ -646,26 +560,19 @@ function ListaTab() {
 // TAB: KANBAN
 // ============================================================
 
-function KanbanTab() {
-  const [projetos, setProjetos] = useState<Projeto[]>([...MOCK_PROJETOS]);
-  const [activeId, setActiveId] = useState<number | null>(null);
+function KanbanTab({ cards, columns, setCards, onMoveCard }: { cards: KanbanCardType[]; columns: KanbanColumnType[]; setCards: React.Dispatch<React.SetStateAction<KanbanCardType[]>>; onMoveCard: (cardId: string, newColumnId: string, newPosition: number) => Promise<void> }) {
+  const [activeId, setActiveId] = useState<string | null>(null);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
   );
 
-  const columnCards = useMemo(() => {
-    const map: Record<StatusId, Projeto[]> = {
-      brainstorm: [], planning: [], todo: [], captando: [], editando: [], aprovacao: [], publicado: [],
-    };
-    projetos.forEach((p) => map[p.status].push(p));
-    return map;
-  }, [projetos]);
+  const grouped = useMemo(() => groupCardsByColumn(cards, columns), [cards, columns]);
 
-  const activeCard = activeId ? projetos.find((p) => p.id === activeId) : null;
+  const activeCard = activeId ? cards.find((c) => c.id === activeId) : null;
 
   const handleDragStart = useCallback((event: DragStartEvent) => {
-    setActiveId(event.active.id as number);
+    setActiveId(event.active.id as string);
   }, []);
 
   const handleDragEnd = useCallback((event: DragEndEvent) => {
@@ -675,31 +582,17 @@ function KanbanTab() {
 
     const overId = String(over.id);
     // Se soltou sobre uma coluna
-    const targetColumn = PIPELINE_ORDER.find((s) => s === overId);
+    const targetColumn = columns.find((c) => c.id === overId);
     // Se soltou sobre um card, pegar a coluna do card
-    const targetCard = projetos.find((p) => p.id === Number(overId));
-    const newStatus = targetColumn || targetCard?.status;
+    const targetCard = cards.find((c) => c.id === overId);
+    const newColumnId = targetColumn?.id || targetCard?.column_id;
 
-    if (newStatus && newStatus !== projetos.find((p) => p.id === active.id)?.status) {
-      setProjetos((prev) =>
-        prev.map((p) => (p.id === active.id ? { ...p, status: newStatus } : p))
-      );
+    const currentCard = cards.find((c) => c.id === active.id);
+    if (newColumnId && currentCard && newColumnId !== currentCard.column_id) {
+      const targetCards = grouped.get(newColumnId) ?? [];
+      onMoveCard(currentCard.id, newColumnId, targetCards.length);
     }
-  }, [projetos]);
-
-  const hoje = new Date();
-  hoje.setHours(0, 0, 0, 0);
-
-  function formatDateShort(iso: string) {
-    const d = new Date(iso + "T00:00:00");
-    const dia = d.getDate().toString().padStart(2, "0");
-    const meses = ["jan.", "fev.", "mar.", "abr.", "mai.", "jun.", "jul.", "ago.", "set.", "out.", "nov.", "dez."];
-    return `${dia} de ${meses[d.getMonth()]}`;
-  }
-
-  function isOverdue(iso: string) {
-    return new Date(iso + "T00:00:00") < hoje;
-  }
+  }, [cards, columns, grouped, onMoveCard]);
 
   return (
     <DndContext
@@ -709,40 +602,36 @@ function KanbanTab() {
       onDragEnd={handleDragEnd}
     >
       <div className="flex gap-4 overflow-x-auto pb-4">
-        {PIPELINE_ORDER.map((statusId) => {
-          const cfg = STATUS_CONFIG[statusId];
-          const cards = columnCards[statusId];
+        {columns.map((col) => {
+          const status = getStatusFromColumn(col);
+          const colCards = grouped.get(col.id) ?? [];
           return (
             <div
-              key={statusId}
+              key={col.id}
               className="w-[280px] flex-shrink-0 rounded-[14px] border border-slate-800 bg-slate-950/50 p-3"
             >
               {/* Column Header */}
               <div className="mb-3 flex items-center gap-2">
-                <span
-                  className="inline-block h-2.5 w-2.5 rounded-full"
-                  style={{ backgroundColor: cfg.color }}
-                />
-                <span className="text-sm font-semibold text-slate-200">{cfg.label}</span>
-                <span className="ml-auto rounded-full bg-slate-800 px-2 py-0.5 text-xs font-medium text-slate-400">
-                  {cards.length}
-                </span>
+                <Dot color={status.color} size="lg" />
+                <span className="text-sm font-semibold text-slate-200">{status.label}</span>
+                <Badge variant="neutral" size="md" className="ml-auto">
+                  {colCards.length}
+                </Badge>
               </div>
 
               {/* Cards */}
               <SortableContext
-                id={statusId}
-                items={cards.map((c) => c.id)}
+                id={col.id}
+                items={colCards.map((c) => c.id)}
                 strategy={verticalListSortingStrategy}
               >
                 <div className="space-y-2">
-                  {cards.map((card) => (
-                    <KanbanCard
+                  {colCards.map((card) => (
+                    <KanbanCardItem
                       key={card.id}
                       card={card}
-                      color={cfg.color}
-                      formatDate={formatDateShort}
-                      isOverdue={isOverdue}
+                      color={status.color}
+                      totalColumns={columns.length}
                     />
                   ))}
                 </div>
@@ -761,9 +650,9 @@ function KanbanTab() {
         {activeCard ? (
           <div
             className="w-[256px] rounded-[12px] border border-slate-700 bg-slate-900 p-4 shadow-xl"
-            style={{ borderLeft: `3px solid ${STATUS_CONFIG[activeCard.status].color}` }}
+            style={{ borderLeft: `3px solid ${getStatusFromColumn(activeCard.column).color}` }}
           >
-            <p className="text-sm font-medium text-slate-100">{activeCard.titulo}</p>
+            <p className="text-sm font-medium text-slate-100">{activeCard.title}</p>
           </div>
         ) : null}
       </DragOverlay>
@@ -771,16 +660,14 @@ function KanbanTab() {
   );
 }
 
-function KanbanCard({
+function KanbanCardItem({
   card,
   color,
-  formatDate,
-  isOverdue,
+  totalColumns,
 }: {
-  card: Projeto;
+  card: KanbanCardType;
   color: string;
-  formatDate: (iso: string) => string;
-  isOverdue: (iso: string) => boolean;
+  totalColumns: number;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: card.id });
@@ -792,9 +679,10 @@ function KanbanCard({
     opacity: isDragging ? 0.4 : 1,
   };
 
-  const memberCfg = MEMBER_CONFIG[card.responsavel];
-  const tags = CARD_TAGS[card.id] || [];
-  const overdue = isOverdue(card.prazo) && card.status !== "publicado";
+  const display = getUserDisplay(card.responsible);
+  const tags = card.tags ?? [];
+  const progress = getProgressFromColumn(card.column, totalColumns);
+  const overdue = card.due_date && isOverdueHelper(card.due_date) && card.column?.slug !== "published";
 
   return (
     <div
@@ -804,7 +692,7 @@ function KanbanCard({
       {...listeners}
       className="cursor-grab rounded-[12px] border border-slate-800 bg-slate-900/80 p-4 transition-colors hover:bg-slate-800/60"
     >
-      <p className="text-sm font-medium text-slate-100">{card.titulo}</p>
+      <p className="text-sm font-medium text-slate-100">{card.title}</p>
 
       {/* Tags */}
       {tags.length > 0 && (
@@ -821,28 +709,16 @@ function KanbanCard({
       )}
 
       {/* Progress bar */}
-      <div className="mt-3 h-[3px] w-full rounded-full bg-slate-800">
-        <div
-          className="h-full rounded-full"
-          style={{ width: `${card.progresso}%`, backgroundColor: color }}
-        />
-      </div>
+      <ProgressBar value={progress} color={color} size="thin" className="mt-3" />
 
       {/* Footer */}
       <div className="mt-3 flex items-center justify-between">
         <div className="flex items-center gap-1.5">
-          <div
-            className={cn(
-              "flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-bold text-white",
-              memberCfg?.cor || "bg-slate-600"
-            )}
-          >
-            {memberCfg?.inicial || "?"}
-          </div>
-          <span className="text-xs text-slate-500">{card.responsavel}</span>
+          <Avatar initial={display.initial} color={display.color} size="sm" />
+          <span className="text-xs text-slate-500">{display.name}</span>
         </div>
         <span className={cn("text-xs", overdue ? "font-semibold text-red-400" : "text-slate-500")}>
-          {formatDate(card.prazo)}
+          {card.due_date ? formatDateHelper(card.due_date) : "—"}
         </span>
       </div>
     </div>
@@ -860,12 +736,14 @@ const MESES_NOME = [
   "julho", "agosto", "setembro", "outubro", "novembro", "dezembro",
 ];
 
-function CalendarioTab() {
+function CalendarioTab({ calendarItems }: { calendarItems: CalendarItem[] }) {
   const [weekOffset, setWeekOffset] = useState(0);
   const [view, setView] = useState<"dia" | "semana" | "mes">("semana");
 
-  // Semana base: 1-7 fev 2026 (Dom-Sáb)
-  const baseStart = new Date(2026, 1, 1); // 1 fev 2026 = Domingo
+  const now = new Date();
+  const baseStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  // Ajustar para domingo da semana
+  baseStart.setDate(baseStart.getDate() - baseStart.getDay());
   const weekStart = new Date(baseStart);
   weekStart.setDate(weekStart.getDate() + weekOffset * 7);
 
@@ -878,17 +756,20 @@ function CalendarioTab() {
   const mesNome = MESES_NOME[weekStart.getMonth()];
   const ano = weekStart.getFullYear();
 
-  // Dia de hoje (6 fev 2026 para mock)
-  const hoje = 6;
-  const hojeMes = 1; // fevereiro (0-indexed)
-  const hojeAno = 2026;
+  const hoje = now.getDate();
+  const hojeMes = now.getMonth();
+  const hojeAno = now.getFullYear();
 
   // Filtrar eventos da semana atual
   const weekEvents = useMemo(() => {
-    return MOCK_CALENDAR_EVENTS.filter((ev) => {
-      return weekDays.some((d) => d.getDate() === ev.dia && d.getMonth() === 1 && d.getFullYear() === 2026);
+    const wStart = weekDays[0];
+    const wEnd = weekDays[6];
+    if (!wStart || !wEnd) return [];
+    return calendarItems.filter((item) => {
+      const d = new Date(item.start_time);
+      return d >= wStart && d <= new Date(wEnd.getTime() + 86400000);
     });
-  }, [weekDays]);
+  }, [calendarItems, weekDays]);
 
   if (view !== "semana") {
     return (
@@ -906,21 +787,15 @@ function CalendarioTab() {
       {/* Header: navegação + toggle view */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <button
-            onClick={() => setWeekOffset((w) => w - 1)}
-            className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-700 text-slate-400 hover:bg-slate-800 hover:text-slate-200"
-          >
+          <IconButton size="sm" variant="outline" onClick={() => setWeekOffset((w) => w - 1)}>
             <CaretLeft size={16} weight="bold" />
-          </button>
+          </IconButton>
           <h3 className="text-lg font-bold text-slate-50">
             {mesNome} de {ano}
           </h3>
-          <button
-            onClick={() => setWeekOffset((w) => w + 1)}
-            className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-700 text-slate-400 hover:bg-slate-800 hover:text-slate-200"
-          >
+          <IconButton size="sm" variant="outline" onClick={() => setWeekOffset((w) => w + 1)}>
             <CaretRight size={16} weight="bold" />
-          </button>
+          </IconButton>
         </div>
 
         <div className="flex rounded-lg border border-slate-700 overflow-hidden">
@@ -942,7 +817,7 @@ function CalendarioTab() {
       </div>
 
       {/* Calendar Grid */}
-      <div className="rounded-[14px] border border-slate-800 bg-slate-900/60 overflow-hidden">
+      <Card variant="default" className="overflow-hidden !p-0">
         {/* Day headers */}
         <div className="grid grid-cols-[60px_repeat(7,1fr)] border-b border-slate-800">
           <div /> {/* spacer para coluna de horas */}
@@ -975,30 +850,34 @@ function CalendarioTab() {
               <div className="flex items-start justify-end pr-2 pt-1 text-xs text-slate-600">
                 {hora.toString().padStart(2, "0")}:00
               </div>
-              {weekDays.map((_, di) => (
+              {weekDays.map((wd, di) => (
                 <div key={di} className="border-l border-slate-800/30 relative">
                   {/* Render events */}
                   {weekEvents
-                    .filter((ev) => {
-                      const dayMatch = weekDays[di]?.getDate() === ev.dia;
-                      const horaMatch = Math.floor(ev.hora) === hora;
-                      return dayMatch && horaMatch;
+                    .filter((item) => {
+                      const d = new Date(item.start_time);
+                      return d.getDate() === wd.getDate() && d.getMonth() === wd.getMonth() && d.getHours() === hora;
                     })
-                    .map((ev) => {
-                      const topOffset = (ev.hora - hora) * 50;
+                    .map((item) => {
+                      const d = new Date(item.start_time);
+                      const topOffset = (d.getMinutes() / 60) * 50;
+                      const typeColors: Record<string, string> = {
+                        event: "#F97316", delivery: "#EF4444", creation: "#1AA8BF", task: "#10B981", meeting: "#8B5CF6",
+                      };
+                      const cor = typeColors[item.type] ?? "#6B7280";
                       return (
                         <div
-                          key={ev.id}
+                          key={item.id}
                           className="absolute inset-x-1 rounded-[8px] p-2 text-xs font-medium text-slate-100 transition-colors cursor-pointer z-10"
                           style={{
                             top: `${topOffset}px`,
                             height: "24px",
-                            backgroundColor: `${ev.cor}30`,
-                            borderLeft: `3px solid ${ev.cor}`,
+                            backgroundColor: `${cor}30`,
+                            borderLeft: `3px solid ${cor}`,
                           }}
-                          title={ev.titulo}
+                          title={item.title}
                         >
-                          <span className="block truncate leading-none">{ev.titulo}</span>
+                          <span className="block truncate leading-none">{item.title}</span>
                         </div>
                       );
                     })}
@@ -1007,7 +886,7 @@ function CalendarioTab() {
             </div>
           ))}
         </div>
-      </div>
+      </Card>
     </div>
   );
 }
@@ -1019,14 +898,13 @@ function CalendarioTab() {
 const GANTT_COL_W = 36; // largura de cada coluna de dia em px
 const GANTT_ROW_H = 48;
 
-function TimelineTab() {
-  // Gerar dias: 31 jan a 1 mar (31 dias de fev + 31jan + 1mar = 31 colunas)
+function TimelineTab({ cards, columns }: { cards: KanbanCardType[]; columns: KanbanColumnType[] }) {
+  // Gerar dias: 30 dias a partir do início do mês atual
   const days = useMemo(() => {
     const result: { date: Date; label: string; dayOfWeek: string }[] = [];
     const diasSemana = ["D", "S", "T", "Q", "Q", "S", "S"];
-    // 31 jan
-    const start = new Date(2026, 0, 31);
-    // até 1 mar = 29 dias (31jan, 1-28fev, 1mar)
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth(), 1);
     for (let i = 0; i < 30; i++) {
       const d = new Date(start);
       d.setDate(d.getDate() + i);
@@ -1039,24 +917,38 @@ function TimelineTab() {
     return result;
   }, []);
 
+  const now = new Date();
   const todayIdx = days.findIndex(
-    (d) => d.date.getDate() === 6 && d.date.getMonth() === 1 && d.date.getFullYear() === 2026
+    (d) => d.date.getDate() === now.getDate() && d.date.getMonth() === now.getMonth() && d.date.getFullYear() === now.getFullYear()
   );
 
+  // Cards com due_date para barras Gantt
+  const timelineCards = useMemo(() =>
+    cards
+      .filter((c) => c.due_date)
+      .map((card) => ({
+        ...card,
+        startDate: new Date(card.created_at),
+        endDate: new Date(card.due_date!),
+        progress: getProgressFromColumn(card.column, columns.length),
+        statusColor: getStatusFromColumn(card.column).color,
+        display: getUserDisplay(card.responsible),
+      }))
+      .sort((a, b) => a.startDate.getTime() - b.startDate.getTime()),
+  [cards, columns]);
+
   // Calcular posição de uma barra
-  function getBarPos(projetoId: number) {
-    const g = GANTT_DATES[projetoId];
-    if (!g) return null;
-    const startDate = new Date(2026, g.inicioMes, g.inicioDia);
-    const endDate = new Date(2026, g.fimMes, g.fimDia);
-    const origin = new Date(2026, 0, 31); // dia 0 do grid
+  function getBarPos(startDate: Date, endDate: Date) {
+    const origin = days[0]?.date;
+    if (!origin) return null;
     const startCol = Math.round((startDate.getTime() - origin.getTime()) / 86400000);
-    const span = Math.round((endDate.getTime() - startDate.getTime()) / 86400000) + 1;
-    return { startCol, span };
+    const span = Math.max(1, Math.round((endDate.getTime() - startDate.getTime()) / 86400000) + 1);
+    if (startCol + span < 0 || startCol >= days.length) return null;
+    return { startCol: Math.max(0, startCol), span: Math.min(span, days.length - Math.max(0, startCol)) };
   }
 
   return (
-    <div className="rounded-[14px] border border-slate-800 bg-slate-900/60 overflow-hidden">
+    <Card variant="default" className="overflow-hidden !p-0">
       <div className="flex">
         {/* Coluna fixa esquerda */}
         <div className="w-[280px] flex-shrink-0 border-r border-slate-800">
@@ -1070,32 +962,22 @@ function TimelineTab() {
             </span>
           </div>
           {/* Linhas */}
-          {MOCK_PROJETOS.map((p, i) => {
-            const memberCfg = MEMBER_CONFIG[p.responsavel];
-            return (
-              <div
-                key={p.id}
-                className={cn(
-                  "flex items-center gap-3 px-4 border-b border-slate-800/40",
-                  i % 2 === 0 ? "bg-slate-900/40" : "bg-transparent"
-                )}
-                style={{ height: GANTT_ROW_H }}
-              >
-                <div
-                  className={cn(
-                    "flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full text-[10px] font-bold text-white",
-                    memberCfg?.cor || "bg-slate-600"
-                  )}
-                >
-                  {memberCfg?.inicial || "?"}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-slate-200">{p.titulo}</p>
-                  <p className="text-[10px] text-slate-500">{p.responsavel}</p>
-                </div>
+          {timelineCards.map((card, i) => (
+            <div
+              key={card.id}
+              className={cn(
+                "flex items-center gap-3 px-4 border-b border-slate-800/40",
+                i % 2 === 0 ? "bg-slate-900/40" : "bg-transparent"
+              )}
+              style={{ height: GANTT_ROW_H }}
+            >
+              <Avatar initial={card.display.initial} color={card.display.color} size="sm" />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium text-slate-200">{card.title}</p>
+                <p className="text-[10px] text-slate-500">{card.display.name}</p>
               </div>
-            );
-          })}
+            </div>
+          ))}
         </div>
 
         {/* Grid scrollável */}
@@ -1121,12 +1003,11 @@ function TimelineTab() {
             </div>
 
             {/* Linhas com barras */}
-            {MOCK_PROJETOS.map((p, i) => {
-              const bar = getBarPos(p.id);
-              const statusColor = STATUS_CONFIG[p.status]?.color || "#64748b";
+            {timelineCards.map((card, i) => {
+              const bar = getBarPos(card.startDate, card.endDate);
               return (
                 <div
-                  key={p.id}
+                  key={card.id}
                   className={cn(
                     "relative flex items-center border-b border-slate-800/20",
                     i % 2 === 0 ? "bg-slate-900/40" : "bg-transparent"
@@ -1163,20 +1044,20 @@ function TimelineTab() {
                       <div
                         className="h-full flex items-center justify-center"
                         style={{
-                          width: `${p.progresso}%`,
-                          backgroundColor: statusColor,
+                          width: `${card.progress}%`,
+                          backgroundColor: card.statusColor,
                         }}
                       >
                         {bar.span * GANTT_COL_W > 50 && (
                           <span className="text-[10px] font-bold text-white/90 drop-shadow-sm">
-                            {p.progresso}%
+                            {card.progress}%
                           </span>
                         )}
                       </div>
                       {/* Parte restante */}
                       <div
                         className="h-full flex-1"
-                        style={{ backgroundColor: `${statusColor}40` }}
+                        style={{ backgroundColor: `${card.statusColor}40` }}
                       />
                     </div>
                   )}
@@ -1186,7 +1067,7 @@ function TimelineTab() {
           </div>
         </div>
       </div>
-    </div>
+    </Card>
   );
 }
 
@@ -1194,46 +1075,27 @@ function TimelineTab() {
 // TAB: POR PESSOA
 // ============================================================
 
-function PorPessoaTab() {
-  const hoje = new Date();
-  hoje.setHours(0, 0, 0, 0);
-
-  function formatDateShort(iso: string) {
-    const d = new Date(iso + "T00:00:00");
-    const dia = d.getDate().toString().padStart(2, "0");
-    const meses = ["jan.", "fev.", "mar.", "abr.", "mai.", "jun.", "jul.", "ago.", "set.", "out.", "nov.", "dez."];
-    return `${dia} de ${meses[d.getMonth()]}`;
-  }
-
-  function isOverdue(iso: string) {
-    return new Date(iso + "T00:00:00") < hoje;
-  }
+function PorPessoaTab({ cards, columns }: { cards: KanbanCardType[]; columns: KanbanColumnType[] }) {
+  const byUser = useMemo(() => groupCardsByUser(cards), [cards]);
+  const publishedSlugs = ["published", "archived"];
 
   return (
     <div className="space-y-8">
-      {Object.entries(PROJETOS_POR_PESSOA).map(([nome, ids]) => {
-        const memberCfg = MEMBER_CONFIG[nome];
-        const projetosDaPessoa = ids.map((id) => MOCK_PROJETOS.find((p) => p.id === id)!).filter(Boolean);
-        const ativas = projetosDaPessoa.filter((p) => p.status !== "publicado").length;
-        const total = projetosDaPessoa.length;
-        const publicados = projetosDaPessoa.filter((p) => p.status === "publicado").length;
+      {Array.from(byUser.entries()).map(([userId, { name, role, cards: userCards }]) => {
+        const display = getUserDisplay(userCards[0]?.responsible);
+        const ativas = userCards.filter((c) => !publishedSlugs.includes(c.column?.slug ?? "")).length;
+        const total = userCards.length;
+        const publicados = userCards.filter((c) => publishedSlugs.includes(c.column?.slug ?? "")).length;
 
         return (
-          <div key={nome} className="space-y-3">
+          <div key={userId} className="space-y-3">
             {/* Header da pessoa */}
-            <div className="flex items-center justify-between rounded-[14px] border border-slate-800 bg-slate-900/60 p-6">
+            <Card variant="default" className="flex items-center justify-between">
               <div className="flex items-center gap-4">
-                <div
-                  className={cn(
-                    "flex h-12 w-12 items-center justify-center rounded-full text-lg font-bold text-white",
-                    memberCfg?.cor || "bg-slate-600"
-                  )}
-                >
-                  {memberCfg?.inicial || "?"}
-                </div>
+                <Avatar initial={display.initial} color={display.color} size="lg" />
                 <div>
-                  <p className="text-xl font-bold text-slate-50">{nome}</p>
-                  <p className="text-sm text-slate-400">{memberCfg?.role}</p>
+                  <p className="text-xl font-bold text-slate-50">{name}</p>
+                  <p className="text-sm text-slate-400">{role}</p>
                 </div>
               </div>
               <div className="flex items-center gap-6">
@@ -1250,54 +1112,48 @@ function PorPessoaTab() {
                   <p className="text-xs text-slate-500">Publicados</p>
                 </div>
               </div>
-            </div>
+            </Card>
 
             {/* Cards de projetos */}
-            {projetosDaPessoa.map((p) => {
-              const statusCfg = STATUS_CONFIG[p.status];
-              const overdue = isOverdue(p.prazo) && p.status !== "publicado";
+            {userCards.map((card) => {
+              const status = getStatusFromColumn(card.column);
+              const progress = getProgressFromColumn(card.column, columns.length);
+              const platform = card.platforms?.[0] ?? "";
+              const overdue = card.due_date && isOverdueHelper(card.due_date) && card.column?.slug !== "published";
               const progressColor =
-                p.progresso === 100
+                progress === 100
                   ? "bg-green-400"
-                  : p.progresso >= 50
+                  : progress >= 50
                   ? "bg-accent-cyan"
                   : "bg-slate-500";
 
               return (
                 <div
-                  key={p.id}
+                  key={card.id}
                   className="rounded-[10px] border border-slate-800/60 bg-slate-900/40 p-4"
-                  style={{ borderLeft: `3px solid ${statusCfg.color}` }}
+                  style={{ borderLeft: `3px solid ${status.color}` }}
                 >
                   <div className="flex items-center justify-between">
                     <div className="min-w-0 flex-1">
-                      <p className="text-sm font-bold text-slate-100">{p.titulo}</p>
+                      <p className="text-sm font-bold text-slate-100">{card.title}</p>
                       <div className="mt-1.5 flex items-center gap-2">
-                        <span
-                          className="inline-block h-2 w-2 rounded-full"
-                          style={{ backgroundColor: PLATAFORMA_COLORS[p.plataforma] }}
-                        />
-                        <span className="text-xs text-slate-400">{p.plataforma}</span>
+                        {platform && <Dot color={PLATFORM_COLORS[platform] ?? "#6B7280"} />}
+                        <span className="text-xs text-slate-400">{platform || "—"}</span>
                         <span
                           className={cn(
                             "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold",
-                            statusCfg.bgClass
+                            status.bgClass
                           )}
                         >
-                          {statusCfg.emoji} {statusCfg.label}
+                          {status.emoji} {status.label}
                         </span>
                       </div>
                     </div>
                     <div className="flex items-center gap-4 pl-4">
                       <div className="flex items-center gap-2">
-                        <div className="h-1 w-16 rounded-full bg-slate-700">
-                          <div
-                            className={cn("h-full rounded-full", progressColor)}
-                            style={{ width: `${p.progresso}%` }}
-                          />
-                        </div>
+                        <ProgressBar value={progress} colorClass={progressColor} size="thin" className="w-16 !bg-slate-700" />
                         <span className="text-xs font-medium text-slate-400 w-8 text-right">
-                          {p.progresso}%
+                          {progress}%
                         </span>
                       </div>
                       <span
@@ -1306,7 +1162,7 @@ function PorPessoaTab() {
                           overdue ? "font-semibold text-red-400" : "text-slate-500"
                         )}
                       >
-                        {formatDateShort(p.prazo)}
+                        {card.due_date ? formatDateHelper(card.due_date) : "—"}
                       </span>
                     </div>
                   </div>
@@ -1324,7 +1180,14 @@ function PorPessoaTab() {
 // TAB: CONFIGURAÇÕES
 // ============================================================
 
-function ConfiguracoesTab() {
+const ROLE_BADGE: Record<string, string> = {
+  admin: "bg-teal-500/20 text-teal-400",
+  editor: "bg-orange-500/20 text-orange-400",
+  viewer: "bg-blue-500/20 text-blue-400",
+  developer: "bg-violet-500/20 text-violet-400",
+};
+
+function ConfiguracoesTab({ columns, users }: { columns: KanbanColumnType[]; users: UserProfile[] }) {
   const [notifs, setNotifs] = useState({
     novasTarefas: true,
     lembretePrazo: true,
@@ -1339,7 +1202,7 @@ function ConfiguracoesTab() {
   return (
     <div className="mx-auto max-w-[800px] space-y-6">
       {/* Seção 1 — Geral */}
-      <div className="rounded-[14px] border border-slate-800 bg-slate-900/60 p-6">
+      <Card variant="default">
         <h3 className="mb-4 text-lg font-semibold text-slate-50">Geral</h3>
         <div className="space-y-0 divide-y divide-slate-800/40">
           <div className="flex items-center justify-between py-3">
@@ -1359,10 +1222,10 @@ function ConfiguracoesTab() {
             </span>
           </div>
         </div>
-      </div>
+      </Card>
 
       {/* Seção 2 — Notificações WhatsApp */}
-      <div className="rounded-[14px] border border-slate-800 bg-slate-900/60 p-6">
+      <Card variant="default">
         <h3 className="mb-4 text-lg font-semibold text-slate-50">Notificações WhatsApp</h3>
         <div className="space-y-0 divide-y divide-slate-800/40">
           {([
@@ -1393,53 +1256,45 @@ function ConfiguracoesTab() {
             </div>
           ))}
         </div>
-      </div>
+      </Card>
 
       {/* Seção 3 — Colunas Kanban */}
-      <div className="rounded-[14px] border border-slate-800 bg-slate-900/60 p-6">
+      <Card variant="default">
         <h3 className="mb-4 text-lg font-semibold text-slate-50">Colunas Kanban</h3>
         <div className="divide-y divide-slate-800/30">
-          {PIPELINE_ORDER.map((statusId) => {
-            const cfg = STATUS_CONFIG[statusId];
+          {columns.map((col) => {
+            const status = getStatusFromColumn(col);
             return (
-              <div key={statusId} className="flex items-center justify-between py-3">
+              <div key={col.id} className="flex items-center justify-between py-3">
                 <div className="flex items-center gap-3">
-                  <span
-                    className="inline-block h-2.5 w-2.5 rounded-full"
-                    style={{ backgroundColor: cfg.color }}
-                  />
-                  <span className="text-sm text-slate-300">{cfg.label}</span>
+                  <Dot color={status.color} size="lg" />
+                  <span className="text-sm text-slate-300">{status.label}</span>
+                  <span className="text-xs text-slate-600">({col.slug})</span>
                 </div>
-                <span className="text-base">{cfg.emoji}</span>
+                <span className="text-base">{status.emoji}</span>
               </div>
             );
           })}
         </div>
-      </div>
+      </Card>
 
       {/* Seção 4 — Membros do Time */}
-      <div className="rounded-[14px] border border-slate-800 bg-slate-900/60 p-6">
+      <Card variant="default">
         <h3 className="mb-4 text-lg font-semibold text-slate-50">Membros do Time</h3>
         <div className="divide-y divide-slate-800/30">
-          {CONFIG_MEMBERS.map((m) => {
-            const memberCfg = MEMBER_CONFIG[m.nome];
+          {users.map((user) => {
+            const display = getUserDisplay(user);
+            const badgeClass = ROLE_BADGE[user.role] ?? "bg-slate-500/20 text-slate-400";
             return (
-              <div key={m.nome} className="flex items-center gap-3 py-3">
-                <div
-                  className={cn(
-                    "flex h-9 w-9 items-center justify-center rounded-full text-sm font-bold text-white",
-                    memberCfg?.cor || "bg-violet-500"
-                  )}
-                >
-                  {m.nome[0]}
-                </div>
+              <div key={user.id} className="flex items-center gap-3 py-3">
+                <Avatar initial={display.initial} color={display.color} size="md" className="!h-9 !w-9 !text-sm" />
                 <div className="flex-1">
-                  <span className="text-sm font-semibold text-slate-200">{m.nome}</span>
+                  <span className="text-sm font-semibold text-slate-200">{display.name}</span>
                 </div>
-                <span className={cn("rounded-full px-2.5 py-0.5 text-[10px] font-semibold", m.badgeCor)}>
-                  {m.role}
+                <span className={cn("rounded-full px-2.5 py-0.5 text-[10px] font-semibold", badgeClass)}>
+                  {user.role}
                 </span>
-                <span className="h-2.5 w-2.5 rounded-full bg-green-500" title="Online" />
+                <Dot color={user.is_active ? "#22C55E" : "#6B7280"} size="lg" />
               </div>
             );
           })}
@@ -1447,7 +1302,7 @@ function ConfiguracoesTab() {
         <button className="mt-4 flex w-full items-center justify-center gap-2 rounded-[10px] border border-dashed border-slate-700/50 py-2.5 text-sm text-slate-400 transition-colors hover:bg-slate-800/30 hover:text-slate-300">
           <Plus size={14} /> Convidar Membro
         </button>
-      </div>
+      </Card>
     </div>
   );
 }

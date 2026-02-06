@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { CaretLeft, CaretRight } from "@phosphor-icons/react";
@@ -8,21 +8,20 @@ import Image from "next/image";
 import { cn } from "@/lib/utils";
 import { SIDEBAR_NAV } from "@/lib/constants";
 
-export function AppSidebar() {
-  const [expanded, setExpanded] = useState(true);
+export function AppSidebar({ expanded, onToggle }: { expanded: boolean; onToggle: () => void }) {
   const pathname = usePathname();
 
   return (
     <aside
       className={cn(
-        "fixed left-0 top-0 h-screen flex flex-col border-r border-slate-800 bg-slate-900 transition-all duration-300 z-50",
-        expanded ? "w-72" : "w-16"
+        "fixed left-0 top-0 h-screen flex flex-col border-r border-slate-800 bg-slate-900 transition-[width] duration-200 z-50",
+        expanded ? "w-[250px]" : "w-16"
       )}
     >
       {/* Logo */}
       <div
         className={cn(
-          "flex items-center gap-3 px-6 py-6",
+          "flex items-center gap-3 px-4 py-5",
           !expanded && "justify-center px-3"
         )}
       >
@@ -42,7 +41,7 @@ export function AppSidebar() {
       </div>
 
       {/* Nav Items */}
-      <nav className="flex flex-1 flex-col gap-1 px-4 py-4">
+      <nav className="flex flex-1 flex-col gap-0.5 px-3 py-3">
         {SIDEBAR_NAV.map((item) => {
           const isActive =
             item.href === "/"
@@ -56,11 +55,11 @@ export function AppSidebar() {
               href={item.href}
               className={cn(
                 expanded
-                  ? `w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${isActive
+                  ? `w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors ${isActive
                     ? 'bg-gradient-to-r from-cyan-500/20 to-blue-500/20 text-cyan-400 border border-cyan-500/30'
                     : 'text-gray-400 hover:text-white hover:bg-slate-800/50'
                   }`
-                  : "w-full flex items-center justify-center py-3 rounded-xl transition-all",
+                  : "w-full flex items-center justify-center py-2.5 rounded-xl transition-colors",
                 !expanded && (isActive
                   ? 'bg-gradient-to-r from-cyan-500/20 to-blue-500/20 text-cyan-400 border border-cyan-500/30'
                   : 'text-gray-400 hover:text-white hover:bg-slate-800/50')
@@ -82,7 +81,7 @@ export function AppSidebar() {
 
       {/* Collapse Toggle */}
       <button
-        onClick={() => setExpanded(!expanded)}
+        onClick={onToggle}
         className="flex h-12 items-center justify-center border-t border-slate-800 text-slate-500 transition-colors hover:text-slate-300"
       >
         {expanded ? <CaretLeft size={16} /> : <CaretRight size={16} />}

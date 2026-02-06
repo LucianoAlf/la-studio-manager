@@ -6,8 +6,6 @@ import { AppSidebar } from "@/components/layout/app-sidebar";
 import { ensureUserProfile } from "@/lib/supabase/ensure-profile";
 import { createClient } from "@/lib/supabase/client";
 
-const AUTH_TOKEN_KEY = "la-studio-auth-token";
-
 export default function DashboardLayout({
   children,
 }: {
@@ -15,31 +13,37 @@ export default function DashboardLayout({
 }) {
   const router = useRouter();
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
-  const [debugMsg, setDebugMsg] = useState<string>("Verificando...");
+  const [sidebarExpanded, setSidebarExpanded] = useState(true);
 
   useEffect(() => {
     const checkAuth = async () => {
-      // 1. Primeiro tentar localStorage manual (funciona no Simple Browser)
-      const manualToken = localStorage.getItem(AUTH_TOKEN_KEY);
-      setDebugMsg(`Token manual: ${manualToken ? "SIM" : "NÃO"}`);
+      const supabase = createClient();
 
-      if (manualToken) {
-        // Configurar sessão no Supabase a partir do localStorage manual
-        const supabase = createClient();
-        await supabase.auth.setSession({
-          access_token: manualToken,
-          refresh_token: localStorage.getItem("la-studio-auth-refresh") || "",
+      // Restaurar sessão do localStorage (fallback para browsers que não persistem cookies)
+      const storedToken = localStorage.getItem("la-studio-auth-token");
+      if (storedToken) {
+        const storedRefresh = localStorage.getItem("la-studio-auth-refresh") || "";
+        const { data } = await supabase.auth.setSession({
+          access_token: storedToken,
+          refresh_token: storedRefresh,
         });
-        setIsAuthenticated(true);
-        ensureUserProfile();
-        return;
+        // Atualizar tokens se foram renovados
+        if (data.session) {
+          localStorage.setItem("la-studio-auth-token", data.session.access_token);
+          localStorage.setItem("la-studio-auth-refresh", data.session.refresh_token);
+          setIsAuthenticated(true);
+          ensureUserProfile();
+          return;
+        }
+        // Token expirado e não renovável — limpar e redirecionar
+        localStorage.removeItem("la-studio-auth-token");
+        localStorage.removeItem("la-studio-auth-refresh");
       }
 
-      // 2. Fallback: verificar Supabase client (cookies/normal)
-      const supabase = createClient();
-      const { data: { session } } = await supabase.auth.getSession();
-      
-      if (!session) {
+      // Verificar sessão via cookies (browser normal)
+      const { data: { user } } = await supabase.auth.getUser();
+
+      if (!user) {
         router.replace("/login");
       } else {
         setIsAuthenticated(true);
@@ -61,9 +65,12 @@ export default function DashboardLayout({
 
   return (
     <div className="flex h-screen overflow-hidden bg-slate-950 text-slate-50">
-      <AppSidebar />
+      <AppSidebar expanded={sidebarExpanded} onToggle={() => setSidebarExpanded((v) => !v)} />
       {/* Main content with margin for fixed sidebar */}
-      <main className="flex flex-1 flex-col ml-72 min-h-0 overflow-hidden transition-all">
+      <main
+        className="flex flex-1 flex-col min-h-0 overflow-hidden transition-[margin] duration-200"
+        style={{ marginLeft: sidebarExpanded ? 250 : 64 }}
+      >
         {children}
       </main>
     </div>

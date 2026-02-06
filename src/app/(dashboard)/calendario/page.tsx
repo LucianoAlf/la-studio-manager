@@ -1,96 +1,29 @@
 "use client";
 
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { Header } from "@/components/layout/header";
 import { CaretLeft, CaretRight, Plus } from "@phosphor-icons/react";
 import { cn } from "@/lib/utils";
+import { Button, Badge, Avatar, IconButton, Chip, Dot } from "@/components/ui";
+import { getCalendarItems, getCalendarItemConnections, getCalendarItemComments, addCalendarComment } from "@/lib/queries/calendar";
+import { getCurrentUserProfile } from "@/lib/queries/users";
+import { TYPE_COLORS, TYPE_EMOJIS, getDateRange, getUserDisplay, PLATFORM_COLORS } from "@/lib/utils/calendar-helpers";
+import type { CalendarItem, CalendarItemType, CalendarItemConnection, CalendarItemComment } from "@/lib/types/database";
 
 // ============================================================
-// TIPOS
+// TIPOS LOCAIS
 // ============================================================
 
-type ItemType = "event" | "delivery" | "creation" | "task" | "meeting";
 type ViewMode = "dia" | "semana" | "mes";
 
-interface CalendarItem {
-  id: string;
-  title: string;
-  description?: string;
-  type: ItemType;
-  status: "pending" | "in_progress" | "completed" | "cancelled";
-  start_time: string;
-  end_time?: string;
-  all_day?: boolean;
-  responsible: { name: string; initial: string; color: string };
-  content_type?: string;
-  platforms?: string[];
-  location?: string;
-  priority?: "urgent" | "high" | "medium" | "low";
-}
-
-// ============================================================
-// CONFIGURAÇÕES
-// ============================================================
-
-const TYPE_CONFIG: Record<ItemType, { color: string; emoji: string; label: string }> = {
-  event:    { color: "#F97316", emoji: "🎸", label: "Evento" },
-  delivery: { color: "#EF4444", emoji: "🔴", label: "Entrega" },
-  creation: { color: "#3B9CC2", emoji: "📹", label: "Criação" },
-  task:     { color: "#22C55E", emoji: "✅", label: "Tarefa" },
-  meeting:  { color: "#8B5CF6", emoji: "🧠", label: "Reunião" },
+// Mapa de config por tipo (derivado dos helpers centralizados)
+const TYPE_CONFIG: Record<CalendarItemType, { color: string; emoji: string; label: string }> = {
+  event:    { color: TYPE_COLORS.event.border,    emoji: TYPE_EMOJIS.event,    label: TYPE_COLORS.event.label },
+  delivery: { color: TYPE_COLORS.delivery.border,  emoji: TYPE_EMOJIS.delivery,  label: TYPE_COLORS.delivery.label },
+  creation: { color: TYPE_COLORS.creation.border,  emoji: TYPE_EMOJIS.creation,  label: TYPE_COLORS.creation.label },
+  task:     { color: TYPE_COLORS.task.border,      emoji: TYPE_EMOJIS.task,      label: TYPE_COLORS.task.label },
+  meeting:  { color: TYPE_COLORS.meeting.border,   emoji: TYPE_EMOJIS.meeting,   label: TYPE_COLORS.meeting.label },
 };
-
-const PLATFORM_COLORS: Record<string, string> = {
-  instagram: "#E1306C",
-  youtube: "#FF0000",
-  tiktok: "#25F4EE",
-};
-
-const RESPONSAVEIS = {
-  Yuri:  { name: "Yuri",  initial: "Y", color: "#3B9CC2" },
-  John:  { name: "John",  initial: "J", color: "#F97316" },
-  Rayan: { name: "Rayan", initial: "R", color: "#22C55E" },
-};
-
-// ============================================================
-// DADOS MOCK
-// ============================================================
-
-const MOCK_CALENDAR_ITEMS: CalendarItem[] = [
-  { id: "1",  title: "Gravação: Tour pela Escola", type: "creation", status: "in_progress", start_time: "2026-02-03T09:30", end_time: "2026-02-03T11:00", responsible: RESPONSAVEIS.John, platforms: ["youtube"], location: "LA Music — Unidade Barra" },
-  { id: "2",  title: "Entrega: Carrossel Dicas de Guitarra", type: "delivery", status: "pending", start_time: "2026-02-03T14:00", responsible: RESPONSAVEIS.John, platforms: ["instagram"], priority: "high" },
-  { id: "3",  title: "Brainstorm Semanal", type: "meeting", status: "pending", start_time: "2026-02-04T10:00", end_time: "2026-02-04T11:00", responsible: RESPONSAVEIS.Yuri, description: "Alinhamento de pauta semanal com todo o time" },
-  { id: "4",  title: "Post Aniversário — Maria Silva", type: "task", status: "pending", start_time: "2026-02-04T14:00", responsible: RESPONSAVEIS.Rayan, platforms: ["instagram"], content_type: "image" },
-  { id: "5",  title: "Gravação: Depoimento Aluno Piano", type: "creation", status: "pending", start_time: "2026-02-04T15:00", end_time: "2026-02-04T16:30", responsible: RESPONSAVEIS.John, platforms: ["youtube", "instagram"] },
-  { id: "6",  title: "Editar: Reels Bastidores Show Rock", type: "creation", status: "in_progress", start_time: "2026-02-05T08:00", end_time: "2026-02-05T10:00", responsible: RESPONSAVEIS.John, platforms: ["instagram"], content_type: "reels" },
-  { id: "7",  title: "Newsletter Semanal #6 — rascunho", type: "task", status: "pending", start_time: "2026-02-05T14:00", responsible: RESPONSAVEIS.Yuri, platforms: ["instagram"] },
-  { id: "8",  title: "Show Alunos — Unidade Barra", type: "event", status: "pending", start_time: "2026-02-06T09:00", end_time: "2026-02-06T11:00", responsible: RESPONSAVEIS.John, platforms: ["instagram", "youtube"], location: "LA Music — Unidade Barra", description: "Cobertura completa do show semestral. Gravar depoimentos dos alunos, backstage e performance no palco." },
-  { id: "9",  title: "Entrega: Cobertura Festival de Verão", type: "delivery", status: "pending", start_time: "2026-02-06T14:00", responsible: RESPONSAVEIS.John, platforms: ["instagram"], priority: "urgent" },
-  { id: "10", title: "Review Campanha Matrícula Março", type: "meeting", status: "pending", start_time: "2026-02-06T16:00", end_time: "2026-02-06T17:00", responsible: RESPONSAVEIS.Yuri },
-  { id: "11", title: "Gravar: Clipe Banda Velvet", type: "creation", status: "pending", start_time: "2026-02-07T09:00", end_time: "2026-02-07T12:00", responsible: RESPONSAVEIS.John, platforms: ["youtube"], content_type: "video" },
-  { id: "12", title: "TikTok Challenge Musical Kids — ideia", type: "task", status: "pending", start_time: "2026-02-07T14:00", responsible: RESPONSAVEIS.Yuri, platforms: ["tiktok"] },
-  { id: "13", title: "Festival de Verão LA Music", type: "event", status: "pending", start_time: "2026-02-08T10:00", end_time: "2026-02-08T14:00", responsible: RESPONSAVEIS.Yuri, platforms: ["instagram", "youtube", "tiktok"], location: "LA Music — Sede Principal" },
-  { id: "14", title: "Planejamento de Março", type: "meeting", status: "pending", start_time: "2026-02-24T10:00", end_time: "2026-02-24T11:30", responsible: RESPONSAVEIS.Yuri },
-  { id: "15", title: "Arte: Promoção Dia das Mães", type: "task", status: "pending", start_time: "2026-02-28T10:00", responsible: RESPONSAVEIS.Rayan, platforms: ["instagram"] },
-  // Extras para mês
-  { id: "16", title: "Post: Resultado Vestibular", type: "delivery", status: "completed", start_time: "2026-02-01T10:00", responsible: RESPONSAVEIS.Rayan, platforms: ["instagram"] },
-  { id: "17", title: "Stories: Tour pela Escola", type: "creation", status: "completed", start_time: "2026-02-02T09:00", end_time: "2026-02-02T10:00", responsible: RESPONSAVEIS.Yuri, platforms: ["instagram"] },
-  { id: "18", title: "Clipe Banda Velvet — edição", type: "creation", status: "pending", start_time: "2026-02-11T10:00", end_time: "2026-02-11T12:00", responsible: RESPONSAVEIS.John, platforms: ["youtube"] },
-  { id: "19", title: "Dia dos Namorados 💝", type: "event", status: "pending", start_time: "2026-02-14T10:00", responsible: RESPONSAVEIS.Rayan, platforms: ["instagram"] },
-  { id: "20", title: "Campanha Matrícula", type: "task", status: "pending", start_time: "2026-02-14T14:00", responsible: RESPONSAVEIS.Rayan, platforms: ["instagram"] },
-  { id: "21", title: "TikTok Kids", type: "task", status: "pending", start_time: "2026-02-19T10:00", responsible: RESPONSAVEIS.Yuri, platforms: ["tiktok"] },
-  { id: "22", title: "Gravar Março", type: "creation", status: "pending", start_time: "2026-02-26T10:00", responsible: RESPONSAVEIS.John, platforms: ["youtube"] },
-];
-
-const CONNECTED_ITEMS = [
-  { title: "Editar: Reels Bastidores", day: "Qua 5", type: "Criação" as const },
-  { title: "Publicar: Stories Tour", day: "Sex 7", type: "Entrega" as const },
-];
-
-const MOCK_COMMENTS = [
-  { author: RESPONSAVEIS.Yuri, time: "Ontem, 18:30", text: "John, não esquece de levar o estabilizador pra gravar os depoimentos." },
-  { author: RESPONSAVEIS.John, time: "Ontem, 19:15", text: "Beleza! Vou levar gimbal + GoPro pro backstage. 🎬" },
-];
 
 // ============================================================
 // HELPERS
@@ -138,27 +71,86 @@ const MESES = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julh
 // ============================================================
 
 export default function CalendarioPage() {
-  const TODAY = useMemo(() => new Date(2026, 1, 6, 10, 22), []);
+  const TODAY = useMemo(() => new Date(), []);
   const [view, setView] = useState<ViewMode>("semana");
-  const [currentDate, setCurrentDate] = useState(new Date(2026, 1, 6));
-  const [selectedItem, setSelectedItem] = useState<CalendarItem | null>(
-    MOCK_CALENDAR_ITEMS.find((i) => i.id === "8") || null
-  );
-  const [filters, setFilters] = useState<Record<ItemType, boolean>>({
+  const [currentDate, setCurrentDate] = useState(() => new Date());
+  const [selectedItem, setSelectedItem] = useState<CalendarItem | null>(null);
+  const [filters, setFilters] = useState<Record<CalendarItemType, boolean>>({
     event: true, delivery: true, creation: true, task: true, meeting: true,
   });
 
-  const toggleFilter = useCallback((type: ItemType) => {
+  // === Estado Supabase ===
+  const [items, setItems] = useState<CalendarItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [connections, setConnections] = useState<CalendarItemConnection[]>([]);
+  const [comments, setComments] = useState<CalendarItemComment[]>([]);
+  const [currentUser, setCurrentUser] = useState<{ userId: string; profile: { full_name: string; display_name: string | null; avatar_url: string | null } } | null>(null);
+  const [retryKey, setRetryKey] = useState(0);
+
+  // Carregar user atual uma vez
+  useEffect(() => {
+    getCurrentUserProfile().then(setCurrentUser).catch(console.error);
+  }, []);
+
+  // Carregar items quando muda data, view ou retry
+  useEffect(() => {
+    let cancelled = false;
+    async function loadItems() {
+      setLoading(true);
+      setError(null);
+      try {
+        const { start, end } = getDateRange(currentDate, view);
+        const data = await getCalendarItems(start, end);
+        if (!cancelled) setItems(data);
+      } catch (err) {
+        console.error("Erro ao carregar items:", err);
+        if (!cancelled) setError("Erro ao carregar dados do calendário");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    loadItems();
+    return () => { cancelled = true; };
+  }, [currentDate, view, retryKey]);
+
+  const toggleFilter = useCallback((type: CalendarItemType) => {
     setFilters((prev) => ({ ...prev, [type]: !prev[type] }));
   }, []);
 
   const filteredItems = useMemo(
-    () => MOCK_CALENDAR_ITEMS.filter((item) => filters[item.type]),
-    [filters]
+    () => items.filter((item) => filters[item.type]),
+    [items, filters]
   );
 
+  // Ao clicar em evento — carregar detalhes
+  const handleSelectItem = useCallback(async (item: CalendarItem) => {
+    setSelectedItem(item);
+    try {
+      const [conns, comms] = await Promise.all([
+        getCalendarItemConnections(item.id),
+        getCalendarItemComments(item.id),
+      ]);
+      setConnections(conns);
+      setComments(comms);
+    } catch (err) {
+      console.error("Erro ao carregar detalhes:", err);
+    }
+  }, []);
+
+  // Enviar comentário
+  const handleSendComment = useCallback(async (text: string) => {
+    if (!selectedItem || !currentUser || !text.trim()) return;
+    try {
+      const newComment = await addCalendarComment(selectedItem.id, currentUser.userId, text.trim());
+      setComments((prev) => [...prev, newComment]);
+    } catch (err) {
+      console.error("Erro ao enviar comentário:", err);
+    }
+  }, [selectedItem, currentUser]);
+
   // Navegação
-  function goToday() { setCurrentDate(new Date(2026, 1, 6)); }
+  function goToday() { setCurrentDate(new Date()); }
   function goPrev() {
     const d = new Date(currentDate);
     if (view === "dia") d.setDate(d.getDate() - 1);
@@ -191,42 +183,38 @@ export default function CalendarioPage() {
   return (
     <>
       <Header title="Calendário" subtitle="Super Calendário">
-        <button className="flex h-10 items-center gap-2 rounded-xl bg-orange-500 px-5 text-sm font-semibold text-white transition-colors hover:bg-orange-600">
+        <Button variant="primary" size="lg">
           <Plus size={16} weight="bold" /> Novo Item
-        </button>
+        </Button>
       </Header>
 
       {/* Toolbar */}
       <div className="flex flex-shrink-0 items-center justify-between border-b border-slate-800 bg-slate-950 px-6 py-2.5">
         <div className="flex items-center gap-3">
-          <button onClick={goPrev} className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-700 text-slate-400 hover:text-white hover:border-slate-500 transition-colors">
+          <IconButton size="sm" variant="outline" onClick={goPrev}>
             <CaretLeft size={14} weight="bold" />
-          </button>
-          <button onClick={goNext} className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-700 text-slate-400 hover:text-white hover:border-slate-500 transition-colors">
+          </IconButton>
+          <IconButton size="sm" variant="outline" onClick={goNext}>
             <CaretRight size={14} weight="bold" />
-          </button>
+          </IconButton>
           <span className="text-sm font-semibold text-slate-100 ml-1">{toolbarText}</span>
-          <button onClick={goToday} className="ml-2 rounded-lg border border-slate-700 px-3 py-1 text-xs font-medium text-slate-400 hover:text-white hover:border-slate-500 transition-colors">
+          <Button variant="outline" size="sm" onClick={goToday} className="ml-2">
             Hoje
-          </button>
+          </Button>
         </div>
 
         <div className="flex items-center gap-3">
           {/* Filter chips */}
-          {(Object.keys(TYPE_CONFIG) as ItemType[]).map((type) => {
+          {(Object.keys(TYPE_CONFIG) as CalendarItemType[]).map((type) => {
             const cfg = TYPE_CONFIG[type];
             return (
-              <button
+              <Chip
                 key={type}
+                label={cfg.label}
+                dotColor={cfg.color}
+                active={filters[type]}
                 onClick={() => toggleFilter(type)}
-                className={cn(
-                  "flex items-center gap-1.5 rounded-full border border-slate-700 px-3 py-1 text-xs font-medium transition-all",
-                  filters[type] ? "text-slate-200 bg-slate-800/50" : "opacity-40 text-slate-500"
-                )}
-              >
-                <span className="h-2 w-2 rounded-full" style={{ backgroundColor: cfg.color }} />
-                {cfg.label}
-              </button>
+              />
             );
           })}
 
@@ -252,13 +240,52 @@ export default function CalendarioPage() {
       <div className="flex flex-1 min-h-0 overflow-hidden">
         {/* Grid area */}
         <div className="flex-1 min-h-0 overflow-y-auto">
-          {view === "semana" && <WeekView currentDate={currentDate} today={TODAY} items={filteredItems} onSelectItem={setSelectedItem} />}
-          {view === "dia" && <DayView currentDate={currentDate} today={TODAY} items={filteredItems} onSelectItem={setSelectedItem} />}
-          {view === "mes" && <MonthView currentDate={currentDate} today={TODAY} items={filteredItems} onSelectItem={setSelectedItem} />}
+          {loading ? (
+            <div className="flex-1 flex items-center justify-center h-full">
+              <div className="flex flex-col items-center gap-3">
+                <div className="w-8 h-8 border-2 border-accent-cyan border-t-transparent rounded-full animate-spin" />
+                <span className="text-sm text-slate-500">Carregando calendário...</span>
+              </div>
+            </div>
+          ) : error ? (
+            <div className="flex-1 flex items-center justify-center h-full">
+              <div className="text-center">
+                <p className="text-sm text-red-400 mb-2">{error}</p>
+                <button onClick={() => setRetryKey((k) => k + 1)} className="text-sm text-accent-cyan hover:underline">
+                  Tentar novamente
+                </button>
+              </div>
+            </div>
+          ) : filteredItems.length === 0 ? (
+            <div className="flex-1 flex items-center justify-center h-full">
+              <div className="text-center">
+                <span className="text-4xl mb-3 block">📅</span>
+                <p className="text-sm text-slate-500 mb-2">Nenhum item neste período</p>
+              </div>
+            </div>
+          ) : (
+            <>
+              {view === "semana" && <WeekView currentDate={currentDate} today={TODAY} items={filteredItems} onSelectItem={handleSelectItem} />}
+              {view === "dia" && <DayView currentDate={currentDate} today={TODAY} items={filteredItems} onSelectItem={handleSelectItem} />}
+              {view === "mes" && <MonthView currentDate={currentDate} today={TODAY} items={filteredItems} onSelectItem={handleSelectItem} />}
+            </>
+          )}
         </div>
 
         {/* Painel lateral */}
-        <SidePanel today={TODAY} currentDate={currentDate} setCurrentDate={setCurrentDate} items={filteredItems} selectedItem={selectedItem} onSelectItem={setSelectedItem} />
+        <SidePanel
+          today={TODAY}
+          currentDate={currentDate}
+          setCurrentDate={setCurrentDate}
+          items={filteredItems}
+          allItems={items}
+          selectedItem={selectedItem}
+          onSelectItem={handleSelectItem}
+          connections={connections}
+          comments={comments}
+          currentUser={currentUser}
+          onSendComment={handleSendComment}
+        />
       </div>
     </>
   );
@@ -298,11 +325,11 @@ function WeekView({ currentDate, today, items, onSelectItem }: { currentDate: Da
 
       {/* Time grid */}
       <div className="flex-1 overflow-y-auto relative">
-        <div className="flex" style={{ minHeight: HOURS.length * HOUR_H }}>
+        <div className="flex pt-3" style={{ minHeight: HOURS.length * HOUR_H + 12 }}>
           {/* Time labels */}
           <div className="w-[60px] flex-shrink-0 relative">
             {HOURS.map((h) => (
-              <div key={h} className="absolute right-3 -translate-y-1/2 text-[11px] text-slate-600" style={{ top: (h - START_HOUR) * HOUR_H }}>
+              <div key={h} className="absolute right-3 -translate-y-1/2 text-[11px] text-slate-600" style={{ top: (h - START_HOUR) * HOUR_H + 12 }}>
                 {formatHour(h)}
               </div>
             ))}
@@ -320,7 +347,7 @@ function WeekView({ currentDate, today, items, onSelectItem }: { currentDate: Da
               <div key={dayIdx} className={cn("flex-1 relative border-l border-slate-800/30", isToday && "bg-accent-cyan/[0.03]")}>
                 {/* Hour lines */}
                 {HOURS.map((h) => (
-                  <div key={h} className="absolute left-0 right-0 border-t border-slate-800/20" style={{ top: (h - START_HOUR) * HOUR_H }} />
+                  <div key={h} className="absolute left-0 right-0 border-t border-slate-800/20" style={{ top: (h - START_HOUR) * HOUR_H + 12 }} />
                 ))}
 
                 {/* Event blocks */}
@@ -329,7 +356,7 @@ function WeekView({ currentDate, today, items, onSelectItem }: { currentDate: Da
                   const e = item.end_time ? parseTime(item.end_time) : null;
                   const startMin = (s.hour - START_HOUR) * 60 + s.minute;
                   const duration = e ? ((e.hour - s.hour) * 60 + (e.minute - s.minute)) : 45;
-                  const top = (startMin / 60) * HOUR_H;
+                  const top = (startMin / 60) * HOUR_H + 12;
                   const height = Math.max((duration / 60) * HOUR_H, 28);
                   const cfg = TYPE_CONFIG[item.type];
 
@@ -349,16 +376,17 @@ function WeekView({ currentDate, today, items, onSelectItem }: { currentDate: Da
                       {height > 30 && (
                         <p className="text-[10px] text-slate-500">{formatHour(s.hour, s.minute)}{e ? ` — ${formatHour(e.hour, e.minute)}` : ""}</p>
                       )}
-                      {height > 50 && (
-                        <div className="mt-1 flex items-center gap-1">
-                          <span className="flex h-4 w-4 items-center justify-center rounded-full text-[8px] font-bold text-white" style={{ backgroundColor: item.responsible.color }}>
-                            {item.responsible.initial}
-                          </span>
-                          {item.platforms?.map((p) => (
-                            <span key={p} className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: PLATFORM_COLORS[p] }} />
-                          ))}
-                        </div>
-                      )}
+                      {height > 50 && (() => {
+                        const resp = getUserDisplay(item.responsible);
+                        return (
+                          <div className="mt-1 flex items-center gap-1">
+                            <Avatar initial={resp.initial} color={resp.color} size="xs" />
+                            {item.platforms?.map((p) => (
+                              <Dot key={p} color={PLATFORM_COLORS[p]} size="sm" />
+                            ))}
+                          </div>
+                        );
+                      })()}
                     </button>
                   );
                 })}
@@ -393,7 +421,7 @@ function WeekView({ currentDate, today, items, onSelectItem }: { currentDate: Da
 function DayView({ currentDate, today, items, onSelectItem }: { currentDate: Date; today: Date; items: CalendarItem[]; onSelectItem: (i: CalendarItem) => void }) {
   const isToday = isSameDay(currentDate, today);
   const dayItems = items.filter((item) => isSameDay(new Date(item.start_time), currentDate));
-  const urgentCount = dayItems.filter((i) => i.priority === "urgent").length;
+  const urgentCount = dayItems.filter((i) => (i.metadata as Record<string, unknown>)?.priority === "urgent").length;
 
   return (
     <div className="flex flex-col h-full">
@@ -427,11 +455,11 @@ function DayView({ currentDate, today, items, onSelectItem }: { currentDate: Dat
 
       {/* Time grid */}
       <div className="flex-1 overflow-y-auto relative">
-        <div className="flex" style={{ minHeight: HOURS.length * HOUR_H }}>
+        <div className="flex pt-3" style={{ minHeight: HOURS.length * HOUR_H + 12 }}>
           {/* Time labels */}
           <div className="w-[60px] flex-shrink-0 relative">
             {HOURS.map((h) => (
-              <div key={h} className="absolute right-3 -translate-y-1/2 text-[11px] text-slate-600" style={{ top: (h - START_HOUR) * HOUR_H }}>
+              <div key={h} className="absolute right-3 -translate-y-1/2 text-[11px] text-slate-600" style={{ top: (h - START_HOUR) * HOUR_H + 12 }}>
                 {formatHour(h)}
               </div>
             ))}
@@ -440,7 +468,7 @@ function DayView({ currentDate, today, items, onSelectItem }: { currentDate: Dat
           {/* Single column */}
           <div className="flex-1 relative">
             {HOURS.map((h) => (
-              <div key={h} className="absolute left-0 right-0 border-t border-slate-800/20" style={{ top: (h - START_HOUR) * HOUR_H }} />
+              <div key={h} className="absolute left-0 right-0 border-t border-slate-800/20" style={{ top: (h - START_HOUR) * HOUR_H + 12 }} />
             ))}
 
             {dayItems.map((item) => {
@@ -448,7 +476,7 @@ function DayView({ currentDate, today, items, onSelectItem }: { currentDate: Dat
               const e = item.end_time ? parseTime(item.end_time) : null;
               const startMin = (s.hour - START_HOUR) * 60 + s.minute;
               const duration = e ? ((e.hour - s.hour) * 60 + (e.minute - s.minute)) : 45;
-              const top = (startMin / 60) * HOUR_H;
+              const top = (startMin / 60) * HOUR_H + 12;
               const height = Math.max((duration / 60) * HOUR_H, 36);
               const cfg = TYPE_CONFIG[item.type];
 
@@ -469,19 +497,20 @@ function DayView({ currentDate, today, items, onSelectItem }: { currentDate: Dat
                       <p className="text-[13px] font-semibold text-slate-100 truncate">{item.title}</p>
                       <p className="text-[12px] text-slate-500">{formatHour(s.hour, s.minute)}{e ? ` — ${formatHour(e.hour, e.minute)}` : ""} · {cfg.label}</p>
                     </div>
-                    {height > 40 && (
-                      <div className="flex items-center gap-1 ml-2">
-                        <span className="flex h-5 w-5 items-center justify-center rounded-full text-[9px] font-bold text-white" style={{ backgroundColor: item.responsible.color }}>
-                          {item.responsible.initial}
-                        </span>
-                      </div>
-                    )}
+                    {height > 40 && (() => {
+                      const resp = getUserDisplay(item.responsible);
+                      return (
+                        <div className="flex items-center gap-1 ml-2">
+                          <Avatar initial={resp.initial} color={resp.color} size="sm" className="!h-5 !w-5 !text-[9px]" />
+                        </div>
+                      );
+                    })()}
                   </div>
                   {height > 55 && item.platforms && (
                     <div className="mt-1 flex items-center gap-1.5">
                       {item.platforms.map((p) => (
                         <span key={p} className="flex items-center gap-1 text-[10px] text-slate-400">
-                          <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: PLATFORM_COLORS[p] }} />
+                          <Dot color={PLATFORM_COLORS[p]} size="sm" />
                           {p.charAt(0).toUpperCase() + p.slice(1)}
                         </span>
                       ))}
@@ -605,16 +634,22 @@ function MonthView({ currentDate, today, items, onSelectItem }: { currentDate: D
 // PAINEL LATERAL
 // ============================================================
 
-function SidePanel({ today, currentDate, setCurrentDate, items, selectedItem, onSelectItem }: {
+function SidePanel({ today, currentDate, setCurrentDate, items, allItems, selectedItem, onSelectItem, connections, comments, currentUser, onSendComment }: {
   today: Date;
   currentDate: Date;
   setCurrentDate: (d: Date) => void;
   items: CalendarItem[];
+  allItems: CalendarItem[];
   selectedItem: CalendarItem | null;
   onSelectItem: (i: CalendarItem) => void;
+  connections: CalendarItemConnection[];
+  comments: CalendarItemComment[];
+  currentUser: { userId: string; profile: { full_name: string; display_name: string | null; avatar_url: string | null } } | null;
+  onSendComment: (text: string) => void;
 }) {
   const [miniMonth, setMiniMonth] = useState(today.getMonth());
   const [miniYear, setMiniYear] = useState(today.getFullYear());
+  const commentInputRef = useRef<HTMLInputElement>(null);
 
   const todayItems = items.filter((item) => isSameDay(new Date(item.start_time), today));
 
@@ -631,12 +666,19 @@ function SidePanel({ today, currentDate, setCurrentDate, items, selectedItem, on
 
   const daysWithEvents = useMemo(() => {
     const set = new Set<string>();
-    MOCK_CALENDAR_ITEMS.forEach((item) => {
+    allItems.forEach((item) => {
       const d = new Date(item.start_time);
       set.add(`${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`);
     });
     return set;
-  }, []);
+  }, [allItems]);
+
+  function handleCommentSubmit() {
+    const text = commentInputRef.current?.value;
+    if (!text?.trim()) return;
+    onSendComment(text);
+    if (commentInputRef.current) commentInputRef.current.value = "";
+  }
 
   return (
     <div className="w-[340px] flex-shrink-0 min-h-0 border-l border-slate-800 bg-slate-950/80 overflow-y-auto">
@@ -660,7 +702,7 @@ function SidePanel({ today, currentDate, setCurrentDate, items, selectedItem, on
             ))}
             {miniDays.map((d, i) => {
               const isCurrentMonth = d.getMonth() === miniMonth;
-              const isToday = isSameDay(d, today);
+              const isTodayMini = isSameDay(d, today);
               const hasEvent = daysWithEvents.has(`${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`);
               const isWeekend = d.getDay() === 0 || d.getDay() === 6;
               return (
@@ -670,11 +712,11 @@ function SidePanel({ today, currentDate, setCurrentDate, items, selectedItem, on
                   className={cn(
                     "flex flex-col items-center justify-center h-8 rounded-full text-[11px] transition-colors",
                     !isCurrentMonth && "opacity-40",
-                    isToday ? "bg-accent-cyan text-white font-bold" : isWeekend ? "text-slate-600 hover:bg-slate-800" : "text-slate-400 hover:bg-slate-800"
+                    isTodayMini ? "bg-accent-cyan text-white font-bold" : isWeekend ? "text-slate-600 hover:bg-slate-800" : "text-slate-400 hover:bg-slate-800"
                   )}
                 >
                   {d.getDate()}
-                  {hasEvent && !isToday && <span className="h-1 w-1 rounded-full bg-orange-500 -mt-0.5" />}
+                  {hasEvent && !isTodayMini && <span className="h-1 w-1 rounded-full bg-orange-500 -mt-0.5" />}
                 </button>
               );
             })}
@@ -687,13 +729,18 @@ function SidePanel({ today, currentDate, setCurrentDate, items, selectedItem, on
             ⚡ Agenda de Hoje — {today.getDate()} {MESES[today.getMonth()].slice(0, 3).toUpperCase()}
           </p>
           <div className="space-y-2">
+            {todayItems.length === 0 && (
+              <p className="text-[12px] text-slate-600 italic">Nenhum item para hoje</p>
+            )}
             {todayItems.map((item) => {
               const s = parseTime(item.start_time);
               const e = item.end_time ? parseTime(item.end_time) : null;
               const duration = e ? ((e.hour - s.hour) * 60 + (e.minute - s.minute)) : 0;
               const durationLabel = duration >= 60 ? `${Math.floor(duration / 60)}h` : `${duration}min`;
               const cfg = TYPE_CONFIG[item.type];
-              const isUrgent = item.priority === "urgent";
+              const priority = (item.metadata as Record<string, unknown>)?.priority as string | undefined;
+              const isUrgent = priority === "urgent";
+              const resp = getUserDisplay(item.responsible);
 
               return (
                 <button
@@ -710,16 +757,16 @@ function SidePanel({ today, currentDate, setCurrentDate, items, selectedItem, on
                         {formatHour(s.hour, s.minute)}
                       </p>
                       {duration > 0 && <p className="text-[10px] text-slate-600">{durationLabel}</p>}
-                      <span className="inline-block mt-1 h-2 w-2 rounded-full" style={{ backgroundColor: cfg.color }} />
+                      <Dot color={cfg.color} className="mt-1" />
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-[13px] font-bold text-slate-100 truncate">{item.title}</p>
                       <div className="flex items-center gap-1.5 mt-0.5">
-                        <span className="rounded-full px-1.5 py-0.5 text-[9px] font-semibold" style={{ backgroundColor: `${cfg.color}30`, color: cfg.color }}>
+                        <Badge variant="type" size="sm" color={cfg.color}>
                           {cfg.label}
-                        </span>
+                        </Badge>
                         {isUrgent && (
-                          <span className="rounded-full bg-red-500/20 px-1.5 py-0.5 text-[9px] font-semibold text-red-400">Urgente</span>
+                          <Badge variant="type" size="sm" color="#EF4444">Urgente</Badge>
                         )}
                         {item.content_type && (
                           <span className="text-[9px] text-slate-500">{item.content_type}</span>
@@ -727,9 +774,7 @@ function SidePanel({ today, currentDate, setCurrentDate, items, selectedItem, on
                       </div>
                     </div>
                     <div className="flex -space-x-1 flex-shrink-0">
-                      <span className="flex h-[22px] w-[22px] items-center justify-center rounded-full text-[9px] font-bold text-white border-2 border-slate-900" style={{ backgroundColor: item.responsible.color }}>
-                        {item.responsible.initial}
-                      </span>
+                      <Avatar initial={resp.initial} color={resp.color} size="sm" bordered />
                     </div>
                   </div>
                 </button>
@@ -739,134 +784,157 @@ function SidePanel({ today, currentDate, setCurrentDate, items, selectedItem, on
         </div>
 
         {/* 3. Detalhes do Item Selecionado */}
-        {selectedItem && (
-          <div>
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 mb-3">📋 Detalhes do Item</p>
-            <div className="rounded-[10px] border border-slate-800/50 bg-slate-900/40 p-4 space-y-4">
-              {/* Header */}
-              <div className="flex items-start gap-3">
-                <span className="flex h-9 w-9 items-center justify-center rounded-[10px] text-lg" style={{ backgroundColor: `${TYPE_CONFIG[selectedItem.type].color}20` }}>
-                  {TYPE_CONFIG[selectedItem.type].emoji}
-                </span>
-                <div>
-                  <p className="text-base font-bold text-slate-100">{selectedItem.title}</p>
-                  <span className="inline-block mt-1 rounded-full px-2 py-0.5 text-[10px] font-semibold" style={{ backgroundColor: `${TYPE_CONFIG[selectedItem.type].color}30`, color: TYPE_CONFIG[selectedItem.type].color }}>
-                    {TYPE_CONFIG[selectedItem.type].label}
-                  </span>
-                </div>
-              </div>
-
-              {/* Rows */}
-              <div className="space-y-3 text-sm">
+        {selectedItem && (() => {
+          const selCfg = TYPE_CONFIG[selectedItem.type];
+          const selResp = getUserDisplay(selectedItem.responsible);
+          return (
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 mb-3">📋 Detalhes do Item</p>
+              <div className="rounded-[10px] border border-slate-800/50 bg-slate-900/40 p-4 space-y-4">
+                {/* Header */}
                 <div className="flex items-start gap-3">
-                  <span className="w-[80px] flex-shrink-0 text-slate-500 flex items-center gap-1.5">📅 Data</span>
-                  <span className="text-slate-200">
-                    {(() => {
-                      const s = parseTime(selectedItem.start_time);
-                      const e = selectedItem.end_time ? parseTime(selectedItem.end_time) : null;
-                      return `${s.day.toString().padStart(2, "0")} ${MESES[s.month].slice(0, 3)} ${s.year} · ${formatHour(s.hour, s.minute)}${e ? ` — ${formatHour(e.hour, e.minute)}` : ""}`;
-                    })()}
+                  <span className="flex h-9 w-9 items-center justify-center rounded-[10px] text-lg" style={{ backgroundColor: `${selCfg.color}20` }}>
+                    {selCfg.emoji}
                   </span>
-                </div>
-                <div className="flex items-center gap-3">
-                  <span className="w-[80px] flex-shrink-0 text-slate-500 flex items-center gap-1.5">👤 Responsável</span>
-                  <div className="flex items-center gap-2">
-                    <span className="flex h-5 w-5 items-center justify-center rounded-full text-[9px] font-bold text-white" style={{ backgroundColor: selectedItem.responsible.color }}>
-                      {selectedItem.responsible.initial}
-                    </span>
-                    <span className="text-slate-200">{selectedItem.responsible.name}</span>
+                  <div>
+                    <p className="text-base font-bold text-slate-100">{selectedItem.title}</p>
+                    <Badge variant="type" size="md" color={selCfg.color}>
+                      {selCfg.label}
+                    </Badge>
                   </div>
                 </div>
-                {selectedItem.location && (
+
+                {/* Rows */}
+                <div className="space-y-3 text-sm">
                   <div className="flex items-start gap-3">
-                    <span className="w-[80px] flex-shrink-0 text-slate-500 flex items-center gap-1.5">📍 Local</span>
-                    <span className="text-slate-200">{selectedItem.location}</span>
+                    <span className="w-[80px] flex-shrink-0 text-slate-500 flex items-center gap-1.5">📅 Data</span>
+                    <span className="text-slate-200">
+                      {(() => {
+                        const s = parseTime(selectedItem.start_time);
+                        const e = selectedItem.end_time ? parseTime(selectedItem.end_time) : null;
+                        return `${s.day.toString().padStart(2, "0")} ${MESES[s.month].slice(0, 3)} ${s.year} · ${formatHour(s.hour, s.minute)}${e ? ` — ${formatHour(e.hour, e.minute)}` : ""}`;
+                      })()}
+                    </span>
                   </div>
-                )}
-                {selectedItem.platforms && selectedItem.platforms.length > 0 && (
                   <div className="flex items-center gap-3">
-                    <span className="w-[80px] flex-shrink-0 text-slate-500 flex items-center gap-1.5">🏷️ Plataformas</span>
-                    <div className="flex gap-1.5">
-                      {selectedItem.platforms.map((p) => (
-                        <span key={p} className="flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold" style={{ backgroundColor: `${PLATFORM_COLORS[p]}20`, color: PLATFORM_COLORS[p] }}>
-                          ● {p.charAt(0).toUpperCase() + p.slice(1)}
-                        </span>
-                      ))}
+                    <span className="w-[80px] flex-shrink-0 text-slate-500 flex items-center gap-1.5">👤 Responsável</span>
+                    <div className="flex items-center gap-2">
+                      <Avatar initial={selResp.initial} color={selResp.color} size="sm" className="!h-5 !w-5 !text-[9px]" />
+                      <span className="text-slate-200">{selResp.name}</span>
                     </div>
                   </div>
-                )}
-                {selectedItem.description && (
-                  <div className="flex items-start gap-3">
-                    <span className="w-[80px] flex-shrink-0 text-slate-500 flex items-center gap-1.5">📝 Descrição</span>
-                    <span className="text-slate-400 text-[13px] leading-relaxed">{selectedItem.description}</span>
-                  </div>
-                )}
+                  {selectedItem.location && (
+                    <div className="flex items-start gap-3">
+                      <span className="w-[80px] flex-shrink-0 text-slate-500 flex items-center gap-1.5">📍 Local</span>
+                      <span className="text-slate-200">{selectedItem.location}</span>
+                    </div>
+                  )}
+                  {selectedItem.platforms && selectedItem.platforms.length > 0 && (
+                    <div className="flex items-center gap-3">
+                      <span className="w-[80px] flex-shrink-0 text-slate-500 flex items-center gap-1.5">🏷️ Plataformas</span>
+                      <div className="flex gap-1.5">
+                        {selectedItem.platforms.map((p) => (
+                          <Badge key={p} variant="platform" size="md" color={PLATFORM_COLORS[p]}>
+                            {p.charAt(0).toUpperCase() + p.slice(1)}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {selectedItem.description && (
+                    <div className="flex items-start gap-3">
+                      <span className="w-[80px] flex-shrink-0 text-slate-500 flex items-center gap-1.5">📝 Descrição</span>
+                      <span className="text-slate-400 text-[13px] leading-relaxed">{selectedItem.description}</span>
+                    </div>
+                  )}
+                </div>
               </div>
+            </div>
+          );
+        })()}
+
+        {/* 4. Itens Conectados */}
+        {connections.length > 0 && (
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 mb-3">🔗 Itens Conectados</p>
+            <div className="space-y-2">
+              {connections.map((conn) => {
+                const linked = conn.target_item_id === selectedItem?.id ? conn.source_item : conn.target_item;
+                if (!linked) return null;
+                const linkedCfg = TYPE_CONFIG[linked.type];
+                const linkedDate = new Date(linked.start_time);
+                const dayLabel = `${DIAS_SEMANA_CURTO[linkedDate.getDay() === 0 ? 6 : linkedDate.getDay() - 1]} ${linkedDate.getDate()}`;
+                return (
+                  <div key={conn.id} className="flex items-center justify-between rounded-[10px] border border-slate-800/50 bg-slate-900/40 p-3">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Dot color={linkedCfg.color} />
+                      <div className="min-w-0">
+                        <p className="text-[13px] font-semibold text-slate-200 truncate">{linked.title}</p>
+                        <p className="text-[11px] text-slate-500">{dayLabel} · {linkedCfg.label}</p>
+                      </div>
+                    </div>
+                    <span className="text-slate-600 flex-shrink-0">→</span>
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}
 
-        {/* 4. Itens Conectados */}
-        <div>
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 mb-3">🔗 Itens Conectados</p>
-          <div className="space-y-2">
-            {CONNECTED_ITEMS.map((ci, i) => (
-              <div key={i} className="flex items-center justify-between rounded-[10px] border border-slate-800/50 bg-slate-900/40 p-3">
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="h-2 w-2 rounded-full flex-shrink-0" style={{ backgroundColor: ci.type === "Criação" ? TYPE_CONFIG.creation.color : TYPE_CONFIG.delivery.color }} />
-                  <div className="min-w-0">
-                    <p className="text-[13px] font-semibold text-slate-200 truncate">{ci.title}</p>
-                    <p className="text-[11px] text-slate-500">{ci.day} · {ci.type}</p>
-                  </div>
-                </div>
-                <span className="text-slate-600 flex-shrink-0">→</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
         {/* 5. Comentários */}
-        <div>
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 mb-3">💬 Comentários ({MOCK_COMMENTS.length})</p>
-          <div className="space-y-3">
-            {MOCK_COMMENTS.map((c, i) => (
-              <div key={i} className="flex gap-2.5">
-                <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full text-[10px] font-bold text-white" style={{ backgroundColor: c.author.color }}>
-                  {c.author.initial}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-baseline gap-2">
-                    <span className="text-[13px] font-bold text-slate-200">{c.author.name}</span>
-                    <span className="text-[10px] text-slate-600">{c.time}</span>
+        {selectedItem && (
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 mb-3">💬 Comentários ({comments.length})</p>
+            <div className="space-y-3">
+              {comments.map((c) => {
+                const authorDisplay = getUserDisplay(c.user ?? null);
+                const timeLabel = new Date(c.created_at).toLocaleString("pt-BR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+                return (
+                  <div key={c.id} className="flex gap-2.5">
+                    <Avatar initial={authorDisplay.initial} color={authorDisplay.color} size="sm" className="!h-7 !w-7 !text-[10px]" />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-baseline gap-2">
+                        <span className="text-[13px] font-bold text-slate-200">{authorDisplay.name}</span>
+                        <span className="text-[10px] text-slate-600">{timeLabel}</span>
+                      </div>
+                      <p className="text-[13px] text-slate-400 leading-relaxed mt-0.5">{c.comment_text}</p>
+                    </div>
                   </div>
-                  <p className="text-[13px] text-slate-400 leading-relaxed mt-0.5">{c.text}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-          {/* Input */}
-          <div className="mt-3 flex items-center gap-2">
-            <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full text-[10px] font-bold text-white" style={{ backgroundColor: RESPONSAVEIS.Yuri.color }}>
-              Y
-            </span>
-            <div className="flex flex-1 items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5">
-              <input placeholder="Escrever comentário..." className="flex-1 bg-transparent text-[13px] text-slate-200 outline-none placeholder:text-slate-600" />
-              <button className="rounded-md bg-accent-cyan px-3 py-1 text-[11px] font-semibold text-white hover:bg-accent-cyan/80 transition-colors">
-                Enviar
-              </button>
+                );
+              })}
             </div>
+            {/* Input */}
+            {currentUser && (() => {
+              const userDisplay = getUserDisplay(currentUser.profile);
+              return (
+                <div className="mt-3 flex items-center gap-2">
+                  <Avatar initial={userDisplay.initial} color={userDisplay.color} size="sm" className="!h-7 !w-7 !text-[10px]" />
+                  <div className="flex flex-1 items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5">
+                    <input
+                      ref={commentInputRef}
+                      placeholder="Escrever comentário..."
+                      className="flex-1 bg-transparent text-[13px] text-slate-200 outline-none placeholder:text-slate-600"
+                      onKeyDown={(e) => { if (e.key === "Enter") handleCommentSubmit(); }}
+                    />
+                    <button onClick={handleCommentSubmit} className="rounded-md bg-accent-cyan px-3 py-1 text-[11px] font-semibold text-white hover:bg-accent-cyan/80 transition-colors">
+                      Enviar
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
-        </div>
+        )}
 
         {/* 6. Legenda */}
         <div className="pt-2 border-t border-slate-800/40">
           <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 mb-2">Tipos de Item</p>
           <div className="flex flex-wrap gap-3">
-            {(Object.keys(TYPE_CONFIG) as ItemType[]).map((type) => {
+            {(Object.keys(TYPE_CONFIG) as CalendarItemType[]).map((type) => {
               const cfg = TYPE_CONFIG[type];
               return (
                 <div key={type} className="flex items-center gap-1.5">
-                  <span className="h-2 w-2 rounded-full" style={{ backgroundColor: cfg.color }} />
+                  <Dot color={cfg.color} />
                   <span className="text-[11px] text-slate-400">{cfg.label}</span>
                 </div>
               );

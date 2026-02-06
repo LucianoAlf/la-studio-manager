@@ -94,6 +94,72 @@ export interface Database {
           Database["public"]["Tables"]["kanban_cards"]["Insert"]
         >;
       };
+      calendar_items: {
+        Row: {
+          id: string;
+          title: string;
+          description: string | null;
+          type: "event" | "delivery" | "creation" | "task" | "meeting";
+          status: "pending" | "in_progress" | "completed" | "cancelled";
+          start_time: string;
+          end_time: string | null;
+          all_day: boolean;
+          created_by: string;
+          responsible_user_id: string | null;
+          content_type: string | null;
+          platforms: string[];
+          color: string | null;
+          location: string | null;
+          kanban_card_id: string | null;
+          post_id: string | null;
+          metadata: Json;
+          created_at: string;
+          updated_at: string;
+          deleted_at: string | null;
+        };
+        Insert: Omit<
+          Database["public"]["Tables"]["calendar_items"]["Row"],
+          "id" | "created_at" | "updated_at"
+        >;
+        Update: Partial<
+          Database["public"]["Tables"]["calendar_items"]["Insert"]
+        >;
+      };
+      calendar_item_connections: {
+        Row: {
+          id: string;
+          source_item_id: string;
+          target_item_id: string;
+          connection_type: string | null;
+          notes: string | null;
+          created_at: string;
+        };
+        Insert: Omit<
+          Database["public"]["Tables"]["calendar_item_connections"]["Row"],
+          "id" | "created_at"
+        >;
+        Update: Partial<
+          Database["public"]["Tables"]["calendar_item_connections"]["Insert"]
+        >;
+      };
+      calendar_item_comments: {
+        Row: {
+          id: string;
+          calendar_item_id: string;
+          user_id: string;
+          comment_text: string;
+          created_at: string;
+          updated_at: string;
+          deleted_at: string | null;
+        };
+        Insert: Omit<
+          Database["public"]["Tables"]["calendar_item_comments"]["Row"],
+          "id" | "created_at" | "updated_at"
+        >;
+        Update: Partial<
+          Database["public"]["Tables"]["calendar_item_comments"]["Insert"]
+        >;
+      };
       // TODO: Run `npm run db:types` to generate complete types
       // after applying all Supabase migrations
     };
