@@ -1,0 +1,176 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* ===== DARK THEME - LA Performance Report Palette ===== */
+    /* Baseado em Tailwind Slate + accent cyan */
+
+    /* Background: slate-950 → #020617 */
+    --background: 222 47% 3%;
+    --foreground: 210 40% 98%;
+
+    /* Card: slate-900 → #0f172a */
+    --card: 222 47% 11%;
+    --card-foreground: 210 40% 98%;
+
+    /* Popover: slate-900 → #0f172a */
+    --popover: 222 47% 11%;
+    --popover-foreground: 210 40% 98%;
+
+    /* Primary: accent-cyan → #00d4ff */
+    --primary: 189 100% 50%;
+    --primary-foreground: 222 47% 11%;
+
+    /* Secondary: slate-800 → #1e293b */
+    --secondary: 217 33% 17%;
+    --secondary-foreground: 210 40% 98%;
+
+    /* Muted: slate-800/50 */
+    --muted: 217 33% 17%;
+    --muted-foreground: 215 20% 65%;
+
+    /* Accent: mantendo o laranja original do LA Studio */
+    --accent: 35 95% 55%;
+    --accent-foreground: 222 47% 11%;
+
+    /* Destructive: pink → #ff3366 */
+    --destructive: 345 100% 60%;
+    --destructive-foreground: 210 40% 98%;
+
+    /* Border: slate-700 → #334155 */
+    --border: 215 25% 27%;
+    --input: 217 33% 17%;
+    --ring: 189 100% 50%;
+
+    --radius: 0.625rem;
+
+    /* ===== CUSTOM TOKENS ===== */
+    --bg-raised: 217 33% 17%;
+    --bg-surface-hover: 215 28% 22%;
+    --bg-surface-active: 215 25% 27%;
+
+    --fg-emphasis: 210 40% 98%;
+    --fg-subtle: 215 20% 65%;
+
+    --border-muted: 222 47% 11%;
+    --border-emphasis: 215 25% 35%;
+
+    /* Sidebar */
+    --sidebar-background: 222 47% 11%;
+    --sidebar-foreground: 215 20% 65%;
+    --sidebar-primary: 189 100% 50%;
+    --sidebar-primary-foreground: 222 47% 11%;
+    --sidebar-accent: 217 33% 17%;
+    --sidebar-accent-foreground: 210 40% 98%;
+    --sidebar-border: 215 25% 27%;
+    --sidebar-ring: 189 100% 50%;
+
+    /* Chart colors - LA Performance Report */
+    --chart-1: 189 100% 50%;
+    /* cyan #00d4ff */
+    --chart-2: 35 95% 55%;
+    /* orange */
+    --chart-3: 155 100% 40%;
+    /* green #00cc66 */
+    --chart-4: 345 100% 60%;
+    /* pink #ff3366 */
+    --chart-5: 262 83% 58%;
+    /* purple #8b5cf6 */
+  }
+
+  /* ===== LIGHT THEME (futuro) ===== */
+  .light {
+    --background: 210 40% 98%;
+    --foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+    --primary: 189 100% 45%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 215 20% 92%;
+    --secondary-foreground: 222 47% 11%;
+    --muted: 215 20% 92%;
+    --muted-foreground: 215 20% 45%;
+    --accent: 35 95% 55%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 345 100% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 215 20% 85%;
+    --input: 215 20% 85%;
+    --ring: 189 100% 45%;
+    --radius: 0.625rem;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "rlig" 1, "calt" 1;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Scrollbar dark mode - LA Performance Report style */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: hsl(var(--background));
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: hsl(215 25% 27%);
+    border-radius: 5px;
+    border: 2px solid hsl(var(--background));
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: hsl(215 20% 35%);
+  }
+
+  /* Selection */
+  ::selection {
+    background: hsl(189 100% 50% / 0.3);
+    color: hsl(var(--fg-emphasis));
+  }
+}
+
+/* Scrollbar thin variant */
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(51 65 85) transparent;
+}
+
+.scrollbar-thin::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: rgb(51 65 85);
+  border-radius: 3px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background: rgb(71 85 105);
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

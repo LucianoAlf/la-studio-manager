@@ -1,0 +1,145 @@
+# LA STUDIO MANAGER — Cursor AI Rules
+# Marketing Hub para LA Music School
+# Última atualização: Fevereiro 2026
+
+## PROJETO
+- **App**: LA Studio Manager — Mission Control de marketing
+- **Cliente**: LA Music School (maior escola de música do Brasil, 1200+ alunos)
+- **Marcas**: LA Music School (principal) + LA Music Kids (infantil)
+- **Time**: Yuri (admin/líder), John (produção), Rayan (tráfego), Alf + Hugo (dev)
+- **Idioma da UI**: Português brasileiro (pt-BR)
+
+## STACK TÉCNICA
+- **Framework**: Next.js 14+ (App Router)
+- **Linguagem**: TypeScript (strict mode)
+- **UI**: shadcn/ui (customizado) + TailwindCSS
+- **Ícones**: Phosphor Icons (@phosphor-icons/react) — estilo duotone
+- **Tipografia**: Geist (sans + mono)
+- **Backend**: Supabase (Postgres + Auth + Storage + Realtime)
+- **Automação**: n8n (workflows externos)
+- **Deploy**: Vercel
+
+## DESIGN SYSTEM — REGRAS OBRIGATÓRIAS
+
+### Modo & Layout
+- Dark mode é o DEFAULT (não é alternativa)
+- Desktop first, responsivo para mobile (~30% uso mobile)
+- Sidebar colapsável: 240px expanded, 64px collapsed
+
+### Cores (NUNCA use hex direto, use tokens Tailwind)
+- **Background hierarchy**: bg-neutral-950 → 900 → 850 → 800 → 750
+- **Texto hierarchy**: text-neutral-50 (emphasis) → 200 (default) → 400 (muted) → 500 (subtle)
+- **Primary (Teal)**: primary-500 (#1AA8BF) para ações/interatividade
+- **Accent (Orange)**: accent-500 (#F97316) para CTAs especiais/urgência
+- **Status**: success-500 (#22C55E), warning-500 (#F59E0B), error-500 (#EF4444), info-500 (#06B6D4)
+- **Plataformas**: Instagram=#E1306C, YouTube=#FF0000, TikTok=#00F2EA, Facebook=#1877F2, WhatsApp=#25D366
+
+### Tipografia
+- Font: Geist Sans (body) + Geist Mono (code/dados)
+- Scale: display(36px) → h1(30px) → h2(24px) → h3(20px) → h4(16px) → body(14px) → small(12px) → tiny(11px)
+- Títulos: font-bold text-neutral-50
+- Body: font-normal text-neutral-200
+- Labels/metadata: font-medium text-neutral-400
+
+### Espaçamento
+- Base-4 system (4, 8, 12, 16, 20, 24, 32, 40, 48, 64px)
+- Card padding: 16px (compact) ou 24px (default)
+- Section gap: 24px
+- NUNCA use valores arbitrários como p-[13px]
+
+### Border Radius
+- Badges/chips: rounded-sm (6px)
+- Buttons/inputs: rounded-md (10px) — PADRÃO
+- Cards/modais: rounded-lg (14px)
+- Cards maiores: rounded-xl (20px)
+- Avatars/pills: rounded-full
+
+### Componentes
+- Buttons: primary, secondary, outline, ghost, accent, destructive, link
+- Button heights: sm(32px), md(36px), lg(40px), xl(48px)
+- Inputs: height 36px, bg-neutral-900, border-neutral-800, focus:border-primary-500
+- Cards: bg-neutral-850, border-neutral-800, rounded-lg, shadow-sm
+- Kanban cards: border-left 3px por prioridade (urgent=red, high=orange, medium=yellow, low=green)
+- Badges: height 22px, rounded-full, font-size 11px
+
+### Animações
+- Transições: 150ms ease para interações, 200ms ease-out para dropdowns, 300ms ease-in-out para modais
+- Hover: lighten 8% de background
+- Entrada: fadeIn + slideUp para listas, scaleIn para modais
+- Respeitar prefers-reduced-motion
+
+### Prioridades Kanban
+- Urgent: error-500 (#EF4444)
+- High: accent-500 (#F97316)
+- Medium: warning-500 (#F59E0B)
+- Low: success-500 (#22C55E)
+
+### Categorias Calendário
+- Evento: accent-500 (#F97316)
+- Entrega: error-500 (#EF4444)
+- Criação: primary-500 (#1AA8BF)
+- Tarefa: success-500 (#22C55E)
+- Reunião: violet (#A78BFA)
+
+## PADRÕES DE CÓDIGO
+
+### Estrutura de Arquivos
+```
+src/app/(dashboard)/         → Páginas autenticadas
+src/app/(auth)/              → Login/registro
+src/components/ui/           → shadcn/ui customizados
+src/components/layout/       → Sidebar, Header, PageContainer
+src/components/[feature]/    → Componentes por feature
+src/lib/supabase/            → Client, server client, types
+src/lib/utils.ts             → cn() helper + utilidades
+src/hooks/                   → Custom hooks
+src/types/                   → TypeScript types
+```
+
+### Convenções
+- Componentes: PascalCase (KanbanCard.tsx)
+- Hooks: camelCase com prefixo "use" (useKanbanCards.ts)
+- Utils/libs: camelCase (formatDate.ts)
+- Tipos: PascalCase com sufixo descritivo (KanbanCardWithRelations)
+- Constantes: UPPER_SNAKE_CASE em arquivo separado
+
+### Supabase
+- Client-side: createBrowserClient() de @supabase/ssr
+- Server-side: createServerClient() de @supabase/ssr
+- Todas as tabelas com RLS habilitado
+- Soft deletes: usar deleted_at, filtrar WHERE deleted_at IS NULL
+- UUIDs como chave primária
+- Timestamps: created_at, updated_at em todas as tabelas
+
+### Imports
+- Preferir imports absolutos com @/ prefix
+- Agrupar: 1) React/Next, 2) libs externas, 3) componentes, 4) utils/types, 5) styles
+
+### TypeScript
+- Strict mode habilitado
+- Prefer `interface` para objetos, `type` para unions/intersections
+- Exportar types do Supabase gerados automaticamente
+- Nunca usar `any` — preferir `unknown` e type guards
+
+## AGENTES DE IA DO SISTEMA
+- **Maestro**: Orquestrador geral (primary-500, MusicNotes icon)
+- **Luna**: Ideação/brainstorm (violet #A78BFA, Lightbulb icon)
+- **Atlas**: Planejamento/calendário (info-500 #06B6D4, MapPin icon)
+- **Nina**: Design/visual (accent-500 #F97316, PaintBrush icon)
+- **Theo**: Copywriting (warning-500 #F59E0B, PenNib icon)
+- **Ada**: Analytics/dados (success-500 #22C55E, ChartBar icon)
+
+## KANBAN FLOW
+Brainstorm → Planning → To Do → Captando → Editando → Aprovação → Publicado
+
+## MVP FEATURES (PRIORIDADE)
+1. Painel de projetos (todas as 7 views: Dashboard, Lista, Kanban, Calendário, Timeline, Por Pessoa, Configurações)
+2. Automação de carrosséis
+3. Posts de aniversário automáticos (Instagram)
+4. Sistema de aprovação via WhatsApp
+
+## ACESSIBILIDADE
+- WCAG AA mínimo (4.5:1 contraste para texto normal)
+- Focus states visíveis em todos os interativos
+- Respeitar prefers-reduced-motion
+- Rótulos ARIA em componentes interativos
