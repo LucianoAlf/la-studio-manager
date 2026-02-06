@@ -2,14 +2,18 @@
 
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { Header } from "@/components/layout/header";
-import { CaretLeft, CaretRight, Plus } from "@phosphor-icons/react";
+import { CaretLeft, CaretRight, Plus, X, Funnel } from "@phosphor-icons/react";
 import { cn } from "@/lib/utils";
 import { Button, Badge, Avatar, IconButton, Chip, Dot } from "@/components/ui";
-import { getCalendarItems, getCalendarItemConnections, getCalendarItemComments, addCalendarComment } from "@/lib/queries/calendar";
-import { getCurrentUserProfile } from "@/lib/queries/users";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/shadcn/select";
+import { getCalendarItems, getCalendarItemConnections, getCalendarItemComments, addCalendarComment, moveCalendarItem } from "@/lib/queries/calendar";
+import { getCurrentUserProfile, getAllUsers } from "@/lib/queries/users";
 import { TYPE_COLORS, TYPE_EMOJIS, getDateRange, getUserDisplay, PLATFORM_COLORS } from "@/lib/utils/calendar-helpers";
-import type { CalendarItem, CalendarItemType, CalendarItemConnection, CalendarItemComment } from "@/lib/types/database";
+import type { CalendarItem, CalendarItemType, CalendarItemConnection, CalendarItemComment, UserProfile } from "@/lib/types/database";
+import type { CalendarFilters } from "@/types/filters";
 import { CalendarItemModal } from "@/components/calendar/CalendarItemModal";
+import { useRealtimeSubscription } from "@/hooks/useRealtimeSubscription";
+import { toast } from "sonner";
 
 // ============================================================
 // TIPOS LOCAIS
@@ -76,9 +80,19 @@ export default function CalendarioPage() {
   const [view, setView] = useState<ViewMode>("semana");
   const [currentDate, setCurrentDate] = useState(() => new Date());
   const [selectedItem, setSelectedItem] = useState<CalendarItem | null>(null);
-  const [filters, setFilters] = useState<Record<CalendarItemType, boolean>>({
+  const [typeFilters, setTypeFilters] = useState<Record<CalendarItemType, boolean>>({
     event: true, delivery: true, creation: true, task: true, meeting: true,
   });
+
+  // === Filtros avançados ===
+  const [advancedFilters, setAdvancedFilters] = useState<Omit<CalendarFilters, 'startDate' | 'endDate'>>({
+    types: undefined,
+    platforms: undefined,
+    responsibleId: undefined,
+    priorities: undefined,
+  });
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+  const [teamMembers, setTeamMembers] = useState<UserProfile[]>([]);
 
   // === Estado Supabase ===
   const [items, setItems] = useState<CalendarItem[]>([]);
@@ -88,30 +102,52 @@ export default function CalendarioPage() {
   const [comments, setComments] = useState<CalendarItemComment[]>([]);
   const [currentUser, setCurrentUser] = useState<{ userId: string; profile: { full_name: string; display_name: string | null; avatar_url: string | null } } | null>(null);
   const [retryKey, setRetryKey] = useState(0);
+  const [realtimeNewIds, setRealtimeNewIds] = useState<Set<string>>(new Set());
 
   // === Estado do modal CRUD ===
   const [modalOpen, setModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<CalendarItem | null>(null);
   const [createDefaultDate, setCreateDefaultDate] = useState<Date | undefined>();
 
-  // Carregar user atual uma vez
+  // Carregar user atual e team members uma vez
   useEffect(() => {
     getCurrentUserProfile().then(setCurrentUser).catch(console.error);
+    getAllUsers().then(setTeamMembers).catch(console.error);
   }, []);
+
+  // Montar filtros combinados (type chips + filtros avançados)
+  const combinedFilters = useMemo(() => {
+    const activeTypes = (Object.keys(typeFilters) as CalendarItemType[]).filter((t) => typeFilters[t]);
+    const allActive = activeTypes.length === 5;
+    return {
+      ...advancedFilters,
+      types: allActive ? advancedFilters.types : activeTypes,
+    };
+  }, [typeFilters, advancedFilters]);
+
+  // Contagem de filtros avançados ativos
+  const activeFilterCount = useMemo(() => {
+    return [
+      advancedFilters.priorities?.length,
+      advancedFilters.responsibleId,
+      advancedFilters.platforms?.length,
+      advancedFilters.contentType,
+    ].filter(Boolean).length;
+  }, [advancedFilters]);
 
   // Reload items após CRUD
   const reloadItems = useCallback(async () => {
     try {
       const { start, end } = getDateRange(currentDate, view);
-      const data = await getCalendarItems(start, end);
+      const data = await getCalendarItems(start, end, combinedFilters);
       setItems(data);
       setSelectedItem(null);
     } catch (err) {
       console.error("Erro ao recarregar:", err);
     }
-  }, [currentDate, view]);
+  }, [currentDate, view, combinedFilters]);
 
-  // Carregar items quando muda data, view ou retry
+  // Carregar items quando muda data, view, filtros ou retry
   useEffect(() => {
     let cancelled = false;
     async function loadItems() {
@@ -119,7 +155,7 @@ export default function CalendarioPage() {
       setError(null);
       try {
         const { start, end } = getDateRange(currentDate, view);
-        const data = await getCalendarItems(start, end);
+        const data = await getCalendarItems(start, end, combinedFilters);
         if (!cancelled) setItems(data);
       } catch (err) {
         console.error("Erro ao carregar items:", err);
@@ -130,16 +166,106 @@ export default function CalendarioPage() {
     }
     loadItems();
     return () => { cancelled = true; };
-  }, [currentDate, view, retryKey]);
+  }, [currentDate, view, retryKey, combinedFilters]);
+
+  // === Realtime Subscription ===
+  useRealtimeSubscription({
+    table: 'calendar_items',
+    onInsert: useCallback(async () => {
+      const { start, end } = getDateRange(currentDate, view);
+      const data = await getCalendarItems(start, end, combinedFilters);
+      const currentIds = new Set(items.map((i) => i.id));
+      const newIds = new Set(data.filter((i) => !currentIds.has(i.id)).map((i) => i.id));
+      setItems(data);
+      if (newIds.size > 0) {
+        setRealtimeNewIds(newIds);
+        setTimeout(() => setRealtimeNewIds(new Set()), 1500);
+      }
+    }, [currentDate, view, combinedFilters, items]),
+    onUpdate: useCallback(async () => {
+      const { start, end } = getDateRange(currentDate, view);
+      const data = await getCalendarItems(start, end, combinedFilters);
+      setItems(data);
+    }, [currentDate, view, combinedFilters]),
+    onDelete: useCallback(async () => {
+      const { start, end } = getDateRange(currentDate, view);
+      const data = await getCalendarItems(start, end, combinedFilters);
+      setItems(data);
+      setSelectedItem((prev) => {
+        if (prev && !data.find((i) => i.id === prev.id)) return null;
+        return prev;
+      });
+    }, [currentDate, view, combinedFilters]),
+  });
 
   const toggleFilter = useCallback((type: CalendarItemType) => {
-    setFilters((prev) => ({ ...prev, [type]: !prev[type] }));
+    setTypeFilters((prev) => ({ ...prev, [type]: !prev[type] }));
   }, []);
 
+  // Filtro client-side pelos type chips (os filtros avançados já são server-side)
   const filteredItems = useMemo(
-    () => items.filter((item) => filters[item.type]),
-    [items, filters]
+    () => items.filter((item) => typeFilters[item.type]),
+    [items, typeFilters]
   );
+
+  // Handler para filtros avançados
+  const handleAdvancedFilterChange = useCallback((key: keyof typeof advancedFilters, value: unknown) => {
+    setAdvancedFilters((prev) => ({ ...prev, [key]: value || undefined }));
+  }, []);
+
+  const handleClearAdvancedFilters = useCallback(() => {
+    setAdvancedFilters({ types: undefined, platforms: undefined, responsibleId: undefined, priorities: undefined });
+  }, []);
+
+  // === Calendar Drag & Drop Handler ===
+  const handleCalendarDrop = useCallback(async (
+    itemId: string,
+    targetDate: Date,
+    targetHour?: number
+  ) => {
+    const originalItem = items.find((item) => item.id === itemId);
+    if (!originalItem) return;
+
+    const newStart = new Date(targetDate);
+    if (targetHour !== undefined) {
+      newStart.setHours(targetHour, 0, 0, 0);
+    } else {
+      const originalStart = new Date(originalItem.start_time);
+      newStart.setHours(originalStart.getHours(), originalStart.getMinutes(), 0, 0);
+    }
+
+    let newEnd: string | undefined;
+    if (originalItem.end_time) {
+      const originalStart = new Date(originalItem.start_time);
+      const originalEnd = new Date(originalItem.end_time);
+      const durationMs = originalEnd.getTime() - originalStart.getTime();
+      newEnd = new Date(newStart.getTime() + durationMs).toISOString();
+    }
+
+    // Optimistic update
+    setItems((prev) =>
+      prev.map((item) =>
+        item.id === itemId
+          ? { ...item, start_time: newStart.toISOString(), end_time: newEnd || item.end_time }
+          : item
+      )
+    );
+
+    try {
+      await moveCalendarItem(itemId, newStart.toISOString(), newEnd);
+      toast.success('Item movido!', {
+        description: `${originalItem.title} → ${newStart.toLocaleDateString('pt-BR', { weekday: 'short', day: 'numeric', month: 'short' })}`,
+      });
+    } catch {
+      // Rollback
+      setItems((prev) =>
+        prev.map((item) =>
+          item.id === itemId ? originalItem : item
+        )
+      );
+      toast.error('Erro ao mover item', { description: 'Tente novamente.' });
+    }
+  }, [items]);
 
   // Ao clicar em evento — carregar detalhes
   const handleSelectItem = useCallback(async (item: CalendarItem) => {
@@ -234,11 +360,27 @@ export default function CalendarioPage() {
                 key={type}
                 label={cfg.label}
                 dotColor={cfg.color}
-                active={filters[type]}
+                active={typeFilters[type]}
                 onClick={() => toggleFilter(type)}
               />
             );
           })}
+
+          {/* Botão filtros avançados */}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowAdvancedFilters((v) => !v)}
+            className={cn("ml-1", showAdvancedFilters && "border-accent-cyan text-accent-cyan")}
+          >
+            <Funnel size={14} weight="bold" />
+            Filtros
+            {activeFilterCount > 0 && (
+              <span className="ml-1 flex h-5 w-5 items-center justify-center rounded-full bg-accent-cyan text-[10px] font-bold text-slate-950">
+                {activeFilterCount}
+              </span>
+            )}
+          </Button>
 
           {/* View toggle */}
           <div className="ml-2 flex rounded-lg border border-slate-700 overflow-hidden">
@@ -257,6 +399,84 @@ export default function CalendarioPage() {
           </div>
         </div>
       </div>
+
+      {/* Painel de filtros avançados */}
+      {showAdvancedFilters && (
+        <div className="flex flex-shrink-0 items-center gap-2 flex-wrap border-b border-slate-800 bg-slate-950/80 px-6 py-2">
+          {/* Prioridade */}
+          <Select
+            value={advancedFilters.priorities?.[0] || "__all__"}
+            onValueChange={(val) => handleAdvancedFilterChange('priorities', val === "__all__" ? undefined : [val])}
+          >
+            <SelectTrigger className="w-[140px] h-8 text-xs bg-slate-900 border-slate-700">
+              <SelectValue placeholder="Prioridade" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">Todas</SelectItem>
+              <SelectItem value="urgent">
+                <span className="flex items-center gap-2"><span className="text-[#EF4444]">●</span> Urgente</span>
+              </SelectItem>
+              <SelectItem value="high">
+                <span className="flex items-center gap-2"><span className="text-[#F97316]">●</span> Alta</span>
+              </SelectItem>
+              <SelectItem value="medium">
+                <span className="flex items-center gap-2"><span className="text-[#F59E0B]">●</span> Média</span>
+              </SelectItem>
+              <SelectItem value="low">
+                <span className="flex items-center gap-2"><span className="text-[#6B7280]">●</span> Baixa</span>
+              </SelectItem>
+            </SelectContent>
+          </Select>
+
+          {/* Responsável */}
+          <Select
+            value={advancedFilters.responsibleId || "__all__"}
+            onValueChange={(val) => handleAdvancedFilterChange('responsibleId', val === "__all__" ? undefined : val)}
+          >
+            <SelectTrigger className="w-[160px] h-8 text-xs bg-slate-900 border-slate-700">
+              <SelectValue placeholder="Responsável" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">Todos</SelectItem>
+              {teamMembers.map((member) => (
+                <SelectItem key={member.user_id} value={member.user_id}>
+                  {member.full_name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          {/* Plataforma */}
+          <Select
+            value={advancedFilters.platforms?.[0] || "__all__"}
+            onValueChange={(val) => handleAdvancedFilterChange('platforms', val === "__all__" ? undefined : [val])}
+          >
+            <SelectTrigger className="w-[140px] h-8 text-xs bg-slate-900 border-slate-700">
+              <SelectValue placeholder="Plataforma" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">Todas</SelectItem>
+              <SelectItem value="instagram">Instagram</SelectItem>
+              <SelectItem value="youtube">YouTube</SelectItem>
+              <SelectItem value="tiktok">TikTok</SelectItem>
+              <SelectItem value="facebook">Facebook</SelectItem>
+            </SelectContent>
+          </Select>
+
+          {/* Limpar filtros */}
+          {activeFilterCount > 0 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleClearAdvancedFilters}
+              className="h-8 px-2 text-xs text-slate-400 hover:text-slate-200"
+            >
+              <X size={14} className="mr-1" />
+              Limpar filtros
+            </Button>
+          )}
+        </div>
+      )}
 
       {/* Main content */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
@@ -287,9 +507,9 @@ export default function CalendarioPage() {
             </div>
           ) : (
             <>
-              {view === "semana" && <WeekView currentDate={currentDate} today={TODAY} items={filteredItems} onSelectItem={handleSelectItem} />}
-              {view === "dia" && <DayView currentDate={currentDate} today={TODAY} items={filteredItems} onSelectItem={handleSelectItem} />}
-              {view === "mes" && <MonthView currentDate={currentDate} today={TODAY} items={filteredItems} onSelectItem={handleSelectItem} />}
+              {view === "semana" && <WeekView currentDate={currentDate} today={TODAY} items={filteredItems} onSelectItem={handleSelectItem} onDrop={handleCalendarDrop} realtimeNewIds={realtimeNewIds} />}
+              {view === "dia" && <DayView currentDate={currentDate} today={TODAY} items={filteredItems} onSelectItem={handleSelectItem} onDrop={handleCalendarDrop} realtimeNewIds={realtimeNewIds} />}
+              {view === "mes" && <MonthView currentDate={currentDate} today={TODAY} items={filteredItems} onSelectItem={handleSelectItem} onDrop={handleCalendarDrop} realtimeNewIds={realtimeNewIds} />}
             </>
           )}
         </div>
@@ -330,9 +550,10 @@ export default function CalendarioPage() {
 // VIEW: SEMANA
 // ============================================================
 
-function WeekView({ currentDate, today, items, onSelectItem }: { currentDate: Date; today: Date; items: CalendarItem[]; onSelectItem: (i: CalendarItem) => void }) {
+function WeekView({ currentDate, today, items, onSelectItem, onDrop, realtimeNewIds }: { currentDate: Date; today: Date; items: CalendarItem[]; onSelectItem: (i: CalendarItem) => void; onDrop: (itemId: string, targetDate: Date, targetHour?: number) => void; realtimeNewIds: Set<string> }) {
   const weekStart = getWeekStart(currentDate);
   const weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
+  const [dragOverSlot, setDragOverSlot] = useState<string | null>(null);
 
   return (
     <div className="flex flex-col h-full">
@@ -380,10 +601,29 @@ function WeekView({ currentDate, today, items, onSelectItem }: { currentDate: Da
 
             return (
               <div key={dayIdx} className={cn("flex-1 relative border-l border-slate-800/30", isToday && "bg-accent-cyan/[0.03]")}>
-                {/* Hour lines */}
-                {HOURS.map((h) => (
-                  <div key={h} className="absolute left-0 right-0 border-t border-slate-800/20" style={{ top: (h - START_HOUR) * HOUR_H + 12 }} />
-                ))}
+                {/* Hour drop zones */}
+                {HOURS.map((h) => {
+                  const slotKey = `${dayIdx}-${h}`;
+                  const isDragOver = dragOverSlot === slotKey;
+                  return (
+                    <div
+                      key={h}
+                      className={cn(
+                        "absolute left-0 right-0 border-t border-slate-800/20",
+                        isDragOver && "calendar-slot-drag-over"
+                      )}
+                      style={{ top: (h - START_HOUR) * HOUR_H + 12, height: HOUR_H }}
+                      onDragOver={(e) => { e.preventDefault(); setDragOverSlot(slotKey); }}
+                      onDragLeave={() => setDragOverSlot(null)}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        setDragOverSlot(null);
+                        const itemId = e.dataTransfer.getData("text/calendar-item-id");
+                        if (itemId) onDrop(itemId, d, h);
+                      }}
+                    />
+                  );
+                })}
 
                 {/* Event blocks */}
                 {dayItems.map((item) => {
@@ -394,12 +634,25 @@ function WeekView({ currentDate, today, items, onSelectItem }: { currentDate: Da
                   const top = (startMin / 60) * HOUR_H + 12;
                   const height = Math.max((duration / 60) * HOUR_H, 28);
                   const cfg = TYPE_CONFIG[item.type];
+                  const isNew = realtimeNewIds.has(item.id);
 
                   return (
-                    <button
+                    <div
                       key={item.id}
+                      draggable
+                      onDragStart={(e) => {
+                        e.dataTransfer.setData("text/calendar-item-id", item.id);
+                        e.dataTransfer.effectAllowed = "move";
+                        (e.currentTarget as HTMLElement).classList.add("calendar-item-dragging");
+                      }}
+                      onDragEnd={(e) => {
+                        (e.currentTarget as HTMLElement).classList.remove("calendar-item-dragging");
+                      }}
                       onClick={() => onSelectItem(item)}
-                      className="absolute left-1 right-1 rounded-[6px] p-1 px-2 text-left transition-all hover:-translate-y-px hover:shadow-lg cursor-pointer overflow-hidden"
+                      className={cn(
+                        "absolute left-1 right-1 rounded-[6px] p-1 px-2 text-left transition-all hover:-translate-y-px hover:shadow-lg cursor-grab overflow-hidden z-10",
+                        isNew && "realtime-new-item"
+                      )}
                       style={{
                         top,
                         height,
@@ -422,7 +675,7 @@ function WeekView({ currentDate, today, items, onSelectItem }: { currentDate: Da
                           </div>
                         );
                       })()}
-                    </button>
+                    </div>
                   );
                 })}
 
@@ -453,10 +706,11 @@ function WeekView({ currentDate, today, items, onSelectItem }: { currentDate: Da
 // VIEW: DIA
 // ============================================================
 
-function DayView({ currentDate, today, items, onSelectItem }: { currentDate: Date; today: Date; items: CalendarItem[]; onSelectItem: (i: CalendarItem) => void }) {
+function DayView({ currentDate, today, items, onSelectItem, onDrop, realtimeNewIds }: { currentDate: Date; today: Date; items: CalendarItem[]; onSelectItem: (i: CalendarItem) => void; onDrop: (itemId: string, targetDate: Date, targetHour?: number) => void; realtimeNewIds: Set<string> }) {
   const isToday = isSameDay(currentDate, today);
   const dayItems = items.filter((item) => isSameDay(new Date(item.start_time), currentDate));
   const urgentCount = dayItems.filter((i) => (i.metadata as Record<string, unknown>)?.priority === "urgent").length;
+  const [dragOverHour, setDragOverHour] = useState<number | null>(null);
 
   return (
     <div className="flex flex-col h-full">
@@ -502,8 +756,24 @@ function DayView({ currentDate, today, items, onSelectItem }: { currentDate: Dat
 
           {/* Single column */}
           <div className="flex-1 relative">
+            {/* Hour drop zones */}
             {HOURS.map((h) => (
-              <div key={h} className="absolute left-0 right-0 border-t border-slate-800/20" style={{ top: (h - START_HOUR) * HOUR_H + 12 }} />
+              <div
+                key={h}
+                className={cn(
+                  "absolute left-0 right-0 border-t border-slate-800/20",
+                  dragOverHour === h && "calendar-slot-drag-over"
+                )}
+                style={{ top: (h - START_HOUR) * HOUR_H + 12, height: HOUR_H }}
+                onDragOver={(e) => { e.preventDefault(); setDragOverHour(h); }}
+                onDragLeave={() => setDragOverHour(null)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragOverHour(null);
+                  const itemId = e.dataTransfer.getData("text/calendar-item-id");
+                  if (itemId) onDrop(itemId, currentDate, h);
+                }}
+              />
             ))}
 
             {dayItems.map((item) => {
@@ -514,12 +784,25 @@ function DayView({ currentDate, today, items, onSelectItem }: { currentDate: Dat
               const top = (startMin / 60) * HOUR_H + 12;
               const height = Math.max((duration / 60) * HOUR_H, 36);
               const cfg = TYPE_CONFIG[item.type];
+              const isNew = realtimeNewIds.has(item.id);
 
               return (
-                <button
+                <div
                   key={item.id}
+                  draggable
+                  onDragStart={(e) => {
+                    e.dataTransfer.setData("text/calendar-item-id", item.id);
+                    e.dataTransfer.effectAllowed = "move";
+                    (e.currentTarget as HTMLElement).classList.add("calendar-item-dragging");
+                  }}
+                  onDragEnd={(e) => {
+                    (e.currentTarget as HTMLElement).classList.remove("calendar-item-dragging");
+                  }}
                   onClick={() => onSelectItem(item)}
-                  className="absolute left-2 right-[60px] rounded-[6px] p-2 px-3 text-left transition-all hover:-translate-y-px hover:shadow-lg cursor-pointer overflow-hidden"
+                  className={cn(
+                    "absolute left-2 right-[60px] rounded-[6px] p-2 px-3 text-left transition-all hover:-translate-y-px hover:shadow-lg cursor-grab overflow-hidden z-10",
+                    isNew && "realtime-new-item"
+                  )}
                   style={{
                     top,
                     height,
@@ -551,7 +834,7 @@ function DayView({ currentDate, today, items, onSelectItem }: { currentDate: Dat
                       ))}
                     </div>
                   )}
-                </button>
+                </div>
               );
             })}
 
@@ -580,14 +863,14 @@ function DayView({ currentDate, today, items, onSelectItem }: { currentDate: Dat
 // VIEW: MÊS
 // ============================================================
 
-function MonthView({ currentDate, today, items, onSelectItem }: { currentDate: Date; today: Date; items: CalendarItem[]; onSelectItem: (i: CalendarItem) => void }) {
+function MonthView({ currentDate, today, items, onSelectItem, onDrop, realtimeNewIds }: { currentDate: Date; today: Date; items: CalendarItem[]; onSelectItem: (i: CalendarItem) => void; onDrop: (itemId: string, targetDate: Date, targetHour?: number) => void; realtimeNewIds: Set<string> }) {
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
+  const [dragOverDay, setDragOverDay] = useState<number | null>(null);
 
   const calendarDays = useMemo(() => {
     const firstDay = new Date(year, month, 1);
     const lastDay = new Date(year, month + 1, 0);
-    // Ajustar para começar na segunda
     let startOffset = firstDay.getDay() - 1;
     if (startOffset < 0) startOffset = 6;
     const gridStart = addDays(firstDay, -startOffset);
@@ -618,6 +901,7 @@ function MonthView({ currentDate, today, items, onSelectItem }: { currentDate: D
             const dayItems = items.filter((item) => isSameDay(new Date(item.start_time), d));
             const visibleItems = dayItems.slice(0, 3);
             const moreCount = dayItems.length - 3;
+            const isDragOver = dragOverDay === i;
 
             return (
               <div
@@ -625,8 +909,17 @@ function MonthView({ currentDate, today, items, onSelectItem }: { currentDate: D
                 className={cn(
                   "min-h-[110px] border-r border-b border-slate-800/30 p-2 transition-colors hover:bg-accent-cyan/[0.04]",
                   !isCurrentMonth && "opacity-30",
-                  isToday && "bg-accent-cyan/[0.06]"
+                  isToday && "bg-accent-cyan/[0.06]",
+                  isDragOver && "calendar-slot-drag-over"
                 )}
+                onDragOver={(e) => { e.preventDefault(); setDragOverDay(i); }}
+                onDragLeave={() => setDragOverDay(null)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragOverDay(null);
+                  const itemId = e.dataTransfer.getData("text/calendar-item-id");
+                  if (itemId) onDrop(itemId, d);
+                }}
               >
                 <span className={cn(
                   "inline-flex items-center justify-center text-sm font-semibold mb-1",
@@ -637,11 +930,20 @@ function MonthView({ currentDate, today, items, onSelectItem }: { currentDate: D
                 <div className="space-y-[2px]">
                   {visibleItems.map((item) => {
                     const cfg = TYPE_CONFIG[item.type];
+                    const isNew = realtimeNewIds.has(item.id);
                     return (
-                      <button
+                      <div
                         key={item.id}
+                        draggable
+                        onDragStart={(e) => {
+                          e.dataTransfer.setData("text/calendar-item-id", item.id);
+                          e.dataTransfer.effectAllowed = "move";
+                        }}
                         onClick={() => onSelectItem(item)}
-                        className="w-full text-left rounded-[4px] text-[10px] font-medium p-[2px_6px] truncate transition-colors hover:brightness-125"
+                        className={cn(
+                          "w-full text-left rounded-[4px] text-[10px] font-medium p-[2px_6px] truncate transition-colors hover:brightness-125 cursor-grab",
+                          isNew && "realtime-new-item"
+                        )}
                         style={{
                           borderLeft: `3px solid ${cfg.color}`,
                           backgroundColor: `${cfg.color}1F`,
@@ -649,7 +951,7 @@ function MonthView({ currentDate, today, items, onSelectItem }: { currentDate: D
                         }}
                       >
                         {cfg.emoji} {item.title}
-                      </button>
+                      </div>
                     );
                   })}
                   {moreCount > 0 && (

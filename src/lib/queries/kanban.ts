@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/client";
 import type { KanbanColumn, KanbanCard } from "@/lib/types/database";
+import type { KanbanFilters } from "@/types/filters";
 
 function getSupabase() {
   return createClient();
@@ -17,15 +18,37 @@ export async function getKanbanColumns(): Promise<KanbanColumn[]> {
 }
 
 // Buscar cards ativos com joins manuais (FK aponta para auth.users, não user_profiles)
-export async function getKanbanCards(): Promise<KanbanCard[]> {
+export async function getKanbanCards(filters?: KanbanFilters): Promise<KanbanCard[]> {
   const supabase = getSupabase();
 
   // 1. Buscar cards
-  const { data: cards, error } = await supabase
+  let query = supabase
     .from("kanban_cards")
     .select("*")
     .is("deleted_at", null)
     .order("position_in_column", { ascending: true });
+
+  // Filtros opcionais
+  if (filters?.priorities && filters.priorities.length > 0) {
+    query = query.in("priority", filters.priorities);
+  }
+  if (filters?.responsibleId) {
+    query = query.eq("responsible_user_id", filters.responsibleId);
+  }
+  if (filters?.contentType) {
+    query = query.eq("content_type", filters.contentType);
+  }
+  if (filters?.platforms && filters.platforms.length > 0) {
+    query = query.overlaps("platforms", filters.platforms);
+  }
+  if (filters?.brand) {
+    query = query.eq("brand", filters.brand);
+  }
+  if (filters?.search) {
+    query = query.ilike("title", `%${filters.search}%`);
+  }
+
+  const { data: cards, error } = await query;
 
   if (error) throw error;
   if (!cards || cards.length === 0) return [];
@@ -119,12 +142,11 @@ export async function createKanbanCard(card: Partial<KanbanCard>) {
   return data;
 }
 
-// Soft delete
 export async function deleteKanbanCard(id: string) {
   const supabase = getSupabase();
   const { error } = await supabase
     .from("kanban_cards")
-    .update({ deleted_at: new Date().toISOString() } as never)
+    .delete()
     .eq("id", id);
   if (error) throw error;
 }

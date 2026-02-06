@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Header } from "@/components/layout/header";
 import {
   SquaresFour,
@@ -56,7 +56,11 @@ import {
   isOverdue as isOverdueHelper,
 } from "@/lib/utils/kanban-helpers";
 import type { KanbanColumn as KanbanColumnType, KanbanCard as KanbanCardType, CalendarItem, UserProfile } from "@/lib/types/database";
+import type { KanbanFilters } from "@/types/filters";
 import { KanbanCardModal } from "@/components/kanban/KanbanCardModal";
+import { useRealtimeSubscription } from "@/hooks/useRealtimeSubscription";
+import { Select, SelectContent, SelectItem as ShadSelectItem, SelectTrigger, SelectValue } from "@/components/ui/shadcn/select";
+import { Funnel, X, MagnifyingGlass } from "@phosphor-icons/react";
 
 // ============================================================
 // TABS
@@ -87,6 +91,12 @@ export default function ProjetosPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // === Filtros Kanban ===
+  const [kanbanFilters, setKanbanFilters] = useState<KanbanFilters>({});
+  const [showKanbanFilters, setShowKanbanFilters] = useState(false);
+  const [searchInput, setSearchInput] = useState("");
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout>>();
+
   // === Estado do modal CRUD ===
   const [cardModalOpen, setCardModalOpen] = useState(false);
   const [editingCard, setEditingCard] = useState<KanbanCardType | null>(null);
@@ -114,6 +124,82 @@ export default function ProjetosPage() {
   }, []);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  // === Realtime Subscriptions ===
+  useRealtimeSubscription({
+    table: 'kanban_cards',
+    onInsert: useCallback(async () => {
+      const data = await getKanbanCards();
+      setCards(data);
+    }, []),
+    onUpdate: useCallback(async () => {
+      const data = await getKanbanCards();
+      setCards(data);
+    }, []),
+    onDelete: useCallback(async () => {
+      const data = await getKanbanCards();
+      setCards(data);
+    }, []),
+  });
+
+  useRealtimeSubscription({
+    table: 'kanban_columns',
+    onChange: useCallback(async () => {
+      const data = await getKanbanColumns();
+      setColumns(data);
+    }, []),
+  });
+
+  // === Filtros Kanban: contagem e handlers ===
+  const activeKanbanFilterCount = useMemo(() => {
+    return [
+      kanbanFilters.priorities?.length,
+      kanbanFilters.responsibleId,
+      kanbanFilters.platforms?.length,
+      kanbanFilters.brand,
+      kanbanFilters.search,
+    ].filter(Boolean).length;
+  }, [kanbanFilters]);
+
+  const handleKanbanFilterChange = useCallback((key: keyof KanbanFilters, value: unknown) => {
+    setKanbanFilters((prev) => ({ ...prev, [key]: value || undefined }));
+  }, []);
+
+  const handleClearKanbanFilters = useCallback(() => {
+    setKanbanFilters({});
+    setSearchInput("");
+  }, []);
+
+  // Debounce para busca por título
+  const handleSearchChange = useCallback((value: string) => {
+    setSearchInput(value);
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    searchDebounceRef.current = setTimeout(() => {
+      setKanbanFilters((prev) => ({ ...prev, search: value || undefined }));
+    }, 300);
+  }, []);
+
+  // Cards filtrados client-side (filtros server-side são aplicados no re-fetch)
+  const filteredCards = useMemo(() => {
+    let result = cards;
+    if (kanbanFilters.priorities?.length) {
+      result = result.filter((c) => c.priority && kanbanFilters.priorities!.includes(c.priority));
+    }
+    if (kanbanFilters.responsibleId) {
+      result = result.filter((c) => c.responsible_user_id === kanbanFilters.responsibleId);
+    }
+    if (kanbanFilters.platforms?.length) {
+      result = result.filter((c) => c.platforms?.some((p: string) => kanbanFilters.platforms!.includes(p)));
+    }
+    if (kanbanFilters.brand) {
+      result = result.filter((c) => getCardBrand(c) === kanbanFilters.brand);
+    }
+    if (kanbanFilters.search) {
+      const q = kanbanFilters.search.toLowerCase();
+      result = result.filter((c) => c.title.toLowerCase().includes(q));
+    }
+    return result;
+  }, [cards, kanbanFilters]);
 
   // Carregar calendar items quando tab Calendário é selecionada
   useEffect(() => {
@@ -145,7 +231,16 @@ export default function ProjetosPage() {
 
   return (
     <>
-      <Header title="Projetos" subtitle={`${cards.length} itens`}>
+      <Header title="Projetos" subtitle={`${filteredCards.length} itens`}>
+        <Button variant="outline" size="sm" onClick={() => setShowKanbanFilters((v) => !v)} className={cn("mr-2", showKanbanFilters && "border-accent-cyan text-accent-cyan")}>
+          <Funnel size={14} weight="bold" />
+          Filtros
+          {activeKanbanFilterCount > 0 && (
+            <span className="ml-1 flex h-5 w-5 items-center justify-center rounded-full bg-accent-cyan text-[10px] font-bold text-slate-950">
+              {activeKanbanFilterCount}
+            </span>
+          )}
+        </Button>
         <Button variant="primary" size="md" onClick={() => {
           setEditingCard(null);
           setCreateDefaultColumnId(undefined);
@@ -179,6 +274,100 @@ export default function ProjetosPage() {
         })}
       </div>
 
+      {/* Painel de filtros Kanban */}
+      {showKanbanFilters && (activeTab === "kanban" || activeTab === "lista" || activeTab === "dashboard") && (
+        <div className="flex flex-shrink-0 items-center gap-2 flex-wrap border-b border-slate-800 bg-slate-950/80 px-6 py-2">
+          {/* Busca */}
+          <div className="flex items-center gap-1.5 rounded-md border border-slate-700 bg-slate-900 px-2 h-8">
+            <MagnifyingGlass size={14} className="text-slate-500" />
+            <input
+              value={searchInput}
+              onChange={(e) => handleSearchChange(e.target.value)}
+              placeholder="Buscar por título..."
+              className="bg-transparent text-xs text-slate-200 outline-none placeholder:text-slate-600 w-[140px]"
+            />
+          </div>
+
+          {/* Prioridade */}
+          <Select
+            value={kanbanFilters.priorities?.[0] || "__all__"}
+            onValueChange={(val) => handleKanbanFilterChange('priorities', val === "__all__" ? undefined : [val])}
+          >
+            <SelectTrigger className="w-[130px] h-8 text-xs bg-slate-900 border-slate-700">
+              <SelectValue placeholder="Prioridade" />
+            </SelectTrigger>
+            <SelectContent>
+              <ShadSelectItem value="__all__">Todas</ShadSelectItem>
+              <ShadSelectItem value="urgent">Urgente</ShadSelectItem>
+              <ShadSelectItem value="high">Alta</ShadSelectItem>
+              <ShadSelectItem value="medium">Média</ShadSelectItem>
+              <ShadSelectItem value="low">Baixa</ShadSelectItem>
+            </SelectContent>
+          </Select>
+
+          {/* Responsável */}
+          <Select
+            value={kanbanFilters.responsibleId || "__all__"}
+            onValueChange={(val) => handleKanbanFilterChange('responsibleId', val === "__all__" ? undefined : val)}
+          >
+            <SelectTrigger className="w-[150px] h-8 text-xs bg-slate-900 border-slate-700">
+              <SelectValue placeholder="Responsável" />
+            </SelectTrigger>
+            <SelectContent>
+              <ShadSelectItem value="__all__">Todos</ShadSelectItem>
+              {users.map((u) => (
+                <ShadSelectItem key={u.user_id} value={u.user_id}>{u.full_name}</ShadSelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          {/* Plataforma */}
+          <Select
+            value={kanbanFilters.platforms?.[0] || "__all__"}
+            onValueChange={(val) => handleKanbanFilterChange('platforms', val === "__all__" ? undefined : [val])}
+          >
+            <SelectTrigger className="w-[130px] h-8 text-xs bg-slate-900 border-slate-700">
+              <SelectValue placeholder="Plataforma" />
+            </SelectTrigger>
+            <SelectContent>
+              <ShadSelectItem value="__all__">Todas</ShadSelectItem>
+              <ShadSelectItem value="instagram">Instagram</ShadSelectItem>
+              <ShadSelectItem value="youtube">YouTube</ShadSelectItem>
+              <ShadSelectItem value="tiktok">TikTok</ShadSelectItem>
+              <ShadSelectItem value="facebook">Facebook</ShadSelectItem>
+            </SelectContent>
+          </Select>
+
+          {/* Marca */}
+          <Select
+            value={kanbanFilters.brand || "__all__"}
+            onValueChange={(val) => handleKanbanFilterChange('brand', val === "__all__" ? undefined : val)}
+          >
+            <SelectTrigger className="w-[130px] h-8 text-xs bg-slate-900 border-slate-700">
+              <SelectValue placeholder="Marca" />
+            </SelectTrigger>
+            <SelectContent>
+              <ShadSelectItem value="__all__">Todas</ShadSelectItem>
+              <ShadSelectItem value="la_music">LA Music</ShadSelectItem>
+              <ShadSelectItem value="la_kids">LA Kids</ShadSelectItem>
+            </SelectContent>
+          </Select>
+
+          {/* Limpar */}
+          {activeKanbanFilterCount > 0 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleClearKanbanFilters}
+              className="h-8 px-2 text-xs text-slate-400 hover:text-slate-200"
+            >
+              <X size={14} className="mr-1" />
+              Limpar
+            </Button>
+          )}
+        </div>
+      )}
+
       {/* Content */}
       <div className="flex-1 overflow-auto p-6">
         {loading ? (
@@ -197,12 +386,12 @@ export default function ProjetosPage() {
           </div>
         ) : (
           <>
-            {activeTab === "dashboard" && <DashboardTab cards={cards} columns={columns} users={users} />}
-            {activeTab === "lista" && <ListaTab cards={cards} columns={columns} onEditCard={(card) => { setEditingCard(card); setCardModalOpen(true); }} />}
-            {activeTab === "kanban" && <KanbanTab cards={cards} columns={columns} setCards={setCards} onMoveCard={handleMoveCard} onEditCard={(card) => { setEditingCard(card); setCardModalOpen(true); }} onAddCard={(colId) => { setEditingCard(null); setCreateDefaultColumnId(colId); setCardModalOpen(true); }} />}
+            {activeTab === "dashboard" && <DashboardTab cards={filteredCards} columns={columns} users={users} />}
+            {activeTab === "lista" && <ListaTab cards={filteredCards} columns={columns} onEditCard={(card) => { setEditingCard(card); setCardModalOpen(true); }} />}
+            {activeTab === "kanban" && <KanbanTab cards={filteredCards} columns={columns} setCards={setCards} onMoveCard={handleMoveCard} onEditCard={(card) => { setEditingCard(card); setCardModalOpen(true); }} onAddCard={(colId) => { setEditingCard(null); setCreateDefaultColumnId(colId); setCardModalOpen(true); }} />}
             {activeTab === "calendario" && <CalendarioTab calendarItems={calendarItems} />}
-            {activeTab === "timeline" && <TimelineTab cards={cards} columns={columns} />}
-            {activeTab === "por-pessoa" && <PorPessoaTab cards={cards} columns={columns} />}
+            {activeTab === "timeline" && <TimelineTab cards={filteredCards} columns={columns} />}
+            {activeTab === "por-pessoa" && <PorPessoaTab cards={filteredCards} columns={columns} />}
             {activeTab === "configuracoes" && <ConfiguracoesTab columns={columns} users={users} />}
           </>
         )}

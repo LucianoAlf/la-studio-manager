@@ -1,22 +1,42 @@
 import { createClient } from "@/lib/supabase/client";
 import type { CalendarItem, CalendarItemConnection, CalendarItemComment } from "@/lib/types/database";
+import type { CalendarFilters } from "@/types/filters";
 
 function getSupabase() {
   return createClient();
 }
 
-// Buscar items por período
-export async function getCalendarItems(startDate: string, endDate: string): Promise<CalendarItem[]> {
+// Buscar items por período (com filtros opcionais)
+export async function getCalendarItems(startDate: string, endDate: string, filters?: Omit<CalendarFilters, 'startDate' | 'endDate'>): Promise<CalendarItem[]> {
   const supabase = getSupabase();
 
   // 1. Buscar items do calendário
-  const { data: items, error } = await supabase
+  let query = supabase
     .from("calendar_items")
     .select("*")
     .gte("start_time", startDate)
     .lte("start_time", endDate)
     .is("deleted_at", null)
     .order("start_time", { ascending: true });
+
+  // Filtros opcionais
+  if (filters?.types && filters.types.length > 0) {
+    query = query.in("type", filters.types);
+  }
+  if (filters?.priorities && filters.priorities.length > 0) {
+    query = query.in("priority", filters.priorities);
+  }
+  if (filters?.responsibleId) {
+    query = query.eq("responsible_user_id", filters.responsibleId);
+  }
+  if (filters?.contentType) {
+    query = query.eq("content_type", filters.contentType);
+  }
+  if (filters?.platforms && filters.platforms.length > 0) {
+    query = query.overlaps("platforms", filters.platforms);
+  }
+
+  const { data: items, error } = await query;
 
   if (error) throw error;
   if (!items || items.length === 0) return [];
@@ -131,9 +151,37 @@ export async function deleteCalendarItem(id: string) {
   const supabase = getSupabase();
   const { error } = await supabase
     .from("calendar_items")
-    .update({ deleted_at: new Date().toISOString() } as never)
+    .delete()
     .eq("id", id);
   if (error) throw error;
+}
+
+// Mover item (drag & drop persistence)
+export async function moveCalendarItem(
+  itemId: string,
+  newStartTime: string,
+  newEndTime?: string
+) {
+  const supabase = getSupabase();
+
+  const updateData: Record<string, unknown> = {
+    start_time: newStartTime,
+    updated_at: new Date().toISOString(),
+  };
+
+  if (newEndTime) {
+    updateData.end_time = newEndTime;
+  }
+
+  const { data, error } = await supabase
+    .from("calendar_items")
+    .update(updateData as never)
+    .eq("id", itemId)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
 }
 
 export async function addCalendarComment(

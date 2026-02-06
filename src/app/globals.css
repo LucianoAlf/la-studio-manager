@@ -173,6 +173,36 @@ input[type="time"] {
   color-scheme: dark;
 }
 
+/* Animação para novos itens via realtime */
+@keyframes realtime-flash {
+  0% {
+    background-color: hsl(188 76% 43% / 0.15);
+    transform: scale(1.02);
+  }
+  100% {
+    background-color: transparent;
+    transform: scale(1);
+  }
+}
+
+.realtime-new-item {
+  animation: realtime-flash 1.5s ease-out;
+}
+
+/* Calendar drag & drop */
+.calendar-item-dragging {
+  opacity: 0.5;
+  transform: rotate(2deg);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  z-index: 50;
+}
+
+.calendar-slot-drag-over {
+  background-color: hsl(188 76% 43% / 0.08);
+  border: 1px dashed hsl(188 76% 43% / 0.3);
+  border-radius: 4px;
+}
+
 /* Reduced motion */
 @media (prefers-reduced-motion: reduce) {
   * {
