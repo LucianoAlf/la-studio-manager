@@ -1,5 +1,11 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  headers: async () => [{
+    source: '/(.*)',
+    headers: [
+      { key: 'X-Frame-Options', value: 'ALLOWALL' },
+    ],
+  }],
   images: {
     remotePatterns: [
       {

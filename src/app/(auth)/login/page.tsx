@@ -1,37 +1,33 @@
 "use client";
 
 import { useState } from "react";
+import { useFormStatus } from "react-dom";
 import { MusicNotes, Envelope, Lock } from "@phosphor-icons/react";
-import { createClient } from "@/lib/supabase/client";
+import { loginAction } from "./actions";
+
+function SubmitButton() {
+  const { pending } = useFormStatus();
+  return (
+    <button
+      type="submit"
+      disabled={pending}
+      className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-accent-cyan text-sm font-bold text-slate-900 transition-all hover:opacity-90 hover:scale-[1.02] disabled:opacity-50 disabled:hover:scale-100"
+    >
+      {pending ? "Entrando..." : "Entrar"}
+    </button>
+  );
+}
 
 export default function LoginPage() {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
+  async function handleSubmit(formData: FormData) {
     setError(null);
-
-    const supabase = createClient();
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-
-    if (error) {
-      setError("Email ou senha incorretos.");
-      setLoading(false);
-      return;
+    const result = await loginAction(formData);
+    if (result?.error) {
+      setError(result.error);
     }
-
-    // Aguardar cookies serem salvos e redirecionar
-    setTimeout(() => {
-      window.location.href = "/";
-    }, 2000);
-  };
+  }
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-950">
@@ -50,7 +46,7 @@ export default function LoginPage() {
         </div>
 
         {/* Form */}
-        <form onSubmit={handleLogin} className="space-y-4">
+        <form action={handleSubmit} className="space-y-4">
           <div>
             <label className="mb-1.5 block text-sm font-medium text-slate-400">
               Email
@@ -59,8 +55,7 @@ export default function LoginPage() {
               <Envelope size={18} className="text-slate-500" />
               <input
                 type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                name="email"
                 placeholder="seu@email.com"
                 required
                 className="flex-1 bg-transparent text-sm text-slate-200 outline-none placeholder:text-slate-600"
@@ -76,8 +71,7 @@ export default function LoginPage() {
               <Lock size={18} className="text-slate-500" />
               <input
                 type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                name="password"
                 placeholder="••••••••"
                 required
                 className="flex-1 bg-transparent text-sm text-slate-200 outline-none placeholder:text-slate-600"
@@ -91,13 +85,7 @@ export default function LoginPage() {
             </p>
           )}
 
-          <button
-            type="submit"
-            disabled={loading}
-            className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-accent-cyan text-sm font-bold text-slate-900 transition-all hover:opacity-90 hover:scale-[1.02] disabled:opacity-50 disabled:hover:scale-100"
-          >
-            {loading ? "Entrando..." : "Entrar"}
-          </button>
+          <SubmitButton />
         </form>
 
         <p className="mt-8 text-center text-xs text-slate-600">
