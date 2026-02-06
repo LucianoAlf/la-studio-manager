@@ -9,6 +9,7 @@ import { getCalendarItems, getCalendarItemConnections, getCalendarItemComments, 
 import { getCurrentUserProfile } from "@/lib/queries/users";
 import { TYPE_COLORS, TYPE_EMOJIS, getDateRange, getUserDisplay, PLATFORM_COLORS } from "@/lib/utils/calendar-helpers";
 import type { CalendarItem, CalendarItemType, CalendarItemConnection, CalendarItemComment } from "@/lib/types/database";
+import { CalendarItemModal } from "@/components/calendar/CalendarItemModal";
 
 // ============================================================
 // TIPOS LOCAIS
@@ -88,10 +89,27 @@ export default function CalendarioPage() {
   const [currentUser, setCurrentUser] = useState<{ userId: string; profile: { full_name: string; display_name: string | null; avatar_url: string | null } } | null>(null);
   const [retryKey, setRetryKey] = useState(0);
 
+  // === Estado do modal CRUD ===
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editingItem, setEditingItem] = useState<CalendarItem | null>(null);
+  const [createDefaultDate, setCreateDefaultDate] = useState<Date | undefined>();
+
   // Carregar user atual uma vez
   useEffect(() => {
     getCurrentUserProfile().then(setCurrentUser).catch(console.error);
   }, []);
+
+  // Reload items após CRUD
+  const reloadItems = useCallback(async () => {
+    try {
+      const { start, end } = getDateRange(currentDate, view);
+      const data = await getCalendarItems(start, end);
+      setItems(data);
+      setSelectedItem(null);
+    } catch (err) {
+      console.error("Erro ao recarregar:", err);
+    }
+  }, [currentDate, view]);
 
   // Carregar items quando muda data, view ou retry
   useEffect(() => {
@@ -183,7 +201,11 @@ export default function CalendarioPage() {
   return (
     <>
       <Header title="Calendário" subtitle="Super Calendário">
-        <Button variant="primary" size="lg">
+        <Button variant="primary" size="lg" onClick={() => {
+          setEditingItem(null);
+          setCreateDefaultDate(new Date());
+          setModalOpen(true);
+        }}>
           <Plus size={16} weight="bold" /> Novo Item
         </Button>
       </Header>
@@ -281,12 +303,25 @@ export default function CalendarioPage() {
           allItems={items}
           selectedItem={selectedItem}
           onSelectItem={handleSelectItem}
+          onEditItem={(item) => {
+            setEditingItem(item);
+            setModalOpen(true);
+          }}
           connections={connections}
           comments={comments}
           currentUser={currentUser}
           onSendComment={handleSendComment}
         />
       </div>
+
+      {/* Modal CRUD */}
+      <CalendarItemModal
+        open={modalOpen}
+        onOpenChange={setModalOpen}
+        item={editingItem}
+        defaultDate={createDefaultDate}
+        onSaved={reloadItems}
+      />
     </>
   );
 }
@@ -634,7 +669,7 @@ function MonthView({ currentDate, today, items, onSelectItem }: { currentDate: D
 // PAINEL LATERAL
 // ============================================================
 
-function SidePanel({ today, currentDate, setCurrentDate, items, allItems, selectedItem, onSelectItem, connections, comments, currentUser, onSendComment }: {
+function SidePanel({ today, currentDate, setCurrentDate, items, allItems, selectedItem, onSelectItem, onEditItem, connections, comments, currentUser, onSendComment }: {
   today: Date;
   currentDate: Date;
   setCurrentDate: (d: Date) => void;
@@ -642,6 +677,7 @@ function SidePanel({ today, currentDate, setCurrentDate, items, allItems, select
   allItems: CalendarItem[];
   selectedItem: CalendarItem | null;
   onSelectItem: (i: CalendarItem) => void;
+  onEditItem: (item: CalendarItem) => void;
   connections: CalendarItemConnection[];
   comments: CalendarItemComment[];
   currentUser: { userId: string; profile: { full_name: string; display_name: string | null; avatar_url: string | null } } | null;
@@ -789,7 +825,15 @@ function SidePanel({ today, currentDate, setCurrentDate, items, allItems, select
           const selResp = getUserDisplay(selectedItem.responsible);
           return (
             <div>
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 mb-3">📋 Detalhes do Item</p>
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">📋 Detalhes do Item</p>
+                <button
+                  onClick={() => onEditItem(selectedItem)}
+                  className="text-xs text-primary hover:underline"
+                >
+                  ✏️ Editar
+                </button>
+              </div>
               <div className="rounded-[10px] border border-slate-800/50 bg-slate-900/40 p-4 space-y-4">
                 {/* Header */}
                 <div className="flex items-start gap-3">

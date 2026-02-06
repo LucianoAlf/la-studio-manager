@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { AppSidebar } from "@/components/layout/app-sidebar";
 import { ensureUserProfile } from "@/lib/supabase/ensure-profile";
 import { createClient } from "@/lib/supabase/client";
+import { Toaster } from "@/components/ui/shadcn/sonner";
 
 export default function DashboardLayout({
   children,
@@ -73,6 +74,7 @@ export default function DashboardLayout({
       >
         {children}
       </main>
+      <Toaster />
     </div>
   );
 }

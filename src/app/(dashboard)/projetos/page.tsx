@@ -56,6 +56,7 @@ import {
   isOverdue as isOverdueHelper,
 } from "@/lib/utils/kanban-helpers";
 import type { KanbanColumn as KanbanColumnType, KanbanCard as KanbanCardType, CalendarItem, UserProfile } from "@/lib/types/database";
+import { KanbanCardModal } from "@/components/kanban/KanbanCardModal";
 
 // ============================================================
 // TABS
@@ -85,6 +86,11 @@ export default function ProjetosPage() {
   const [calendarItems, setCalendarItems] = useState<CalendarItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // === Estado do modal CRUD ===
+  const [cardModalOpen, setCardModalOpen] = useState(false);
+  const [editingCard, setEditingCard] = useState<KanbanCardType | null>(null);
+  const [createDefaultColumnId, setCreateDefaultColumnId] = useState<string | undefined>();
 
   // Carregar dados do Kanban
   const loadData = useCallback(async () => {
@@ -140,7 +146,11 @@ export default function ProjetosPage() {
   return (
     <>
       <Header title="Projetos" subtitle={`${cards.length} itens`}>
-        <Button variant="primary" size="md">
+        <Button variant="primary" size="md" onClick={() => {
+          setEditingCard(null);
+          setCreateDefaultColumnId(undefined);
+          setCardModalOpen(true);
+        }}>
           <Plus size={16} weight="bold" />
           Novo Projeto
         </Button>
@@ -188,8 +198,8 @@ export default function ProjetosPage() {
         ) : (
           <>
             {activeTab === "dashboard" && <DashboardTab cards={cards} columns={columns} users={users} />}
-            {activeTab === "lista" && <ListaTab cards={cards} columns={columns} />}
-            {activeTab === "kanban" && <KanbanTab cards={cards} columns={columns} setCards={setCards} onMoveCard={handleMoveCard} />}
+            {activeTab === "lista" && <ListaTab cards={cards} columns={columns} onEditCard={(card) => { setEditingCard(card); setCardModalOpen(true); }} />}
+            {activeTab === "kanban" && <KanbanTab cards={cards} columns={columns} setCards={setCards} onMoveCard={handleMoveCard} onEditCard={(card) => { setEditingCard(card); setCardModalOpen(true); }} onAddCard={(colId) => { setEditingCard(null); setCreateDefaultColumnId(colId); setCardModalOpen(true); }} />}
             {activeTab === "calendario" && <CalendarioTab calendarItems={calendarItems} />}
             {activeTab === "timeline" && <TimelineTab cards={cards} columns={columns} />}
             {activeTab === "por-pessoa" && <PorPessoaTab cards={cards} columns={columns} />}
@@ -197,6 +207,16 @@ export default function ProjetosPage() {
           </>
         )}
       </div>
+
+      {/* Modal CRUD Kanban */}
+      <KanbanCardModal
+        open={cardModalOpen}
+        onOpenChange={setCardModalOpen}
+        card={editingCard}
+        defaultColumnId={createDefaultColumnId}
+        columns={columns}
+        onSaved={loadData}
+      />
     </>
   );
 }
@@ -395,7 +415,7 @@ function StatCard({
 // TAB: LISTA
 // ============================================================
 
-function ListaTab({ cards, columns }: { cards: KanbanCardType[]; columns: KanbanColumnType[] }) {
+function ListaTab({ cards, columns, onEditCard }: { cards: KanbanCardType[]; columns: KanbanColumnType[]; onEditCard?: (card: KanbanCardType) => void }) {
   const [sortAsc, setSortAsc] = useState(true);
 
   const sortedCards = useMemo(() => {
@@ -461,8 +481,9 @@ function ListaTab({ cards, columns }: { cards: KanbanCardType[]; columns: Kanban
             return (
               <tr
                 key={card.id}
+                onClick={() => onEditCard?.(card)}
                 className={cn(
-                  "border-b border-slate-800/50 transition-colors hover:bg-slate-800/40",
+                  "border-b border-slate-800/50 transition-colors hover:bg-slate-800/40 cursor-pointer",
                   i % 2 === 0 ? "bg-slate-900/30" : "bg-transparent"
                 )}
               >
@@ -560,7 +581,7 @@ function ListaTab({ cards, columns }: { cards: KanbanCardType[]; columns: Kanban
 // TAB: KANBAN
 // ============================================================
 
-function KanbanTab({ cards, columns, setCards, onMoveCard }: { cards: KanbanCardType[]; columns: KanbanColumnType[]; setCards: React.Dispatch<React.SetStateAction<KanbanCardType[]>>; onMoveCard: (cardId: string, newColumnId: string, newPosition: number) => Promise<void> }) {
+function KanbanTab({ cards, columns, setCards, onMoveCard, onEditCard, onAddCard }: { cards: KanbanCardType[]; columns: KanbanColumnType[]; setCards: React.Dispatch<React.SetStateAction<KanbanCardType[]>>; onMoveCard: (cardId: string, newColumnId: string, newPosition: number) => Promise<void>; onEditCard: (card: KanbanCardType) => void; onAddCard: (columnId: string) => void }) {
   const [activeId, setActiveId] = useState<string | null>(null);
 
   const sensors = useSensors(
@@ -632,13 +653,17 @@ function KanbanTab({ cards, columns, setCards, onMoveCard }: { cards: KanbanCard
                       card={card}
                       color={status.color}
                       totalColumns={columns.length}
+                      onClick={() => onEditCard(card)}
                     />
                   ))}
                 </div>
               </SortableContext>
 
               {/* Adicionar */}
-              <button className="mt-2 flex w-full items-center justify-center gap-1 rounded-[10px] border border-dashed border-slate-700/50 py-2 text-sm text-slate-500 transition-colors hover:bg-slate-800/30 hover:text-slate-400">
+              <button
+                onClick={() => onAddCard(col.id)}
+                className="mt-2 flex w-full items-center justify-center gap-1 rounded-[10px] border border-dashed border-slate-700/50 py-2 text-sm text-slate-500 transition-colors hover:bg-slate-800/30 hover:text-slate-400"
+              >
                 <Plus size={14} /> Adicionar
               </button>
             </div>
@@ -664,10 +689,12 @@ function KanbanCardItem({
   card,
   color,
   totalColumns,
+  onClick,
 }: {
   card: KanbanCardType;
   color: string;
   totalColumns: number;
+  onClick?: () => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: card.id });
@@ -691,6 +718,7 @@ function KanbanCardItem({
       {...attributes}
       {...listeners}
       className="cursor-grab rounded-[12px] border border-slate-800 bg-slate-900/80 p-4 transition-colors hover:bg-slate-800/60"
+      onDoubleClick={onClick}
     >
       <p className="text-sm font-medium text-slate-100">{card.title}</p>
 

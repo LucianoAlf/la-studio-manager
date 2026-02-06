@@ -166,6 +166,13 @@
   background: rgb(71 85 105);
 }
 
+/* Dark mode datetime/date inputs */
+input[type="datetime-local"],
+input[type="date"],
+input[type="time"] {
+  color-scheme: dark;
+}
+
 /* Reduced motion */
 @media (prefers-reduced-motion: reduce) {
   * {
