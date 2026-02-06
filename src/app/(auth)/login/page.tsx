@@ -1,33 +1,65 @@
 "use client";
 
-import { useState } from "react";
-import { useFormStatus } from "react-dom";
+import { useState, useEffect } from "react";
 import { MusicNotes, Envelope, Lock } from "@phosphor-icons/react";
-import { loginAction } from "./actions";
 
-function SubmitButton() {
-  const { pending } = useFormStatus();
-  return (
-    <button
-      type="submit"
-      disabled={pending}
-      className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-accent-cyan text-sm font-bold text-slate-900 transition-all hover:opacity-90 hover:scale-[1.02] disabled:opacity-50 disabled:hover:scale-100"
-    >
-      {pending ? "Entrando..." : "Entrar"}
-    </button>
-  );
-}
+// Chaves do localStorage
+const AUTH_TOKEN_KEY = "la-studio-auth-token";
+const AUTH_REFRESH_KEY = "la-studio-auth-refresh";
 
 export default function LoginPage() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [debug, setDebug] = useState<string>("");
 
-  async function handleSubmit(formData: FormData) {
-    setError(null);
-    const result = await loginAction(formData);
-    if (result?.error) {
-      setError(result.error);
+  // Verificar se já está logado
+  useEffect(() => {
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
+    if (token) {
+      setDebug("Sessão existente encontrada, redirecionando...");
+      window.location.replace("/");
     }
-  }
+  }, []);
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
+    setDebug("Iniciando login...");
+
+    try {
+      setDebug("Chamando API...");
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+
+      setDebug(`API retornou: ${res.status}`);
+      const data = await res.json();
+
+      if (!res.ok) {
+        setError(data.error || "Erro ao fazer login.");
+        setLoading(false);
+        return;
+      }
+
+      setDebug("Salvando tokens no localStorage...");
+      // Salvar tokens manualmente no localStorage
+      localStorage.setItem(AUTH_TOKEN_KEY, data.access_token);
+      localStorage.setItem(AUTH_REFRESH_KEY, data.refresh_token);
+
+      setDebug("Tokens salvos! Redirecionando...");
+      // Redirecionar
+      window.location.replace("/");
+    } catch (err: any) {
+      setDebug(`Erro: ${err.message}`);
+      setError("Erro de conexão. Tente novamente.");
+      setLoading(false);
+    }
+  };
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-950">
@@ -46,7 +78,7 @@ export default function LoginPage() {
         </div>
 
         {/* Form */}
-        <form action={handleSubmit} className="space-y-4">
+        <form onSubmit={handleLogin} className="space-y-4">
           <div>
             <label className="mb-1.5 block text-sm font-medium text-slate-400">
               Email
@@ -55,7 +87,8 @@ export default function LoginPage() {
               <Envelope size={18} className="text-slate-500" />
               <input
                 type="email"
-                name="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
                 placeholder="seu@email.com"
                 required
                 className="flex-1 bg-transparent text-sm text-slate-200 outline-none placeholder:text-slate-600"
@@ -71,7 +104,8 @@ export default function LoginPage() {
               <Lock size={18} className="text-slate-500" />
               <input
                 type="password"
-                name="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••"
                 required
                 className="flex-1 bg-transparent text-sm text-slate-200 outline-none placeholder:text-slate-600"
@@ -85,7 +119,19 @@ export default function LoginPage() {
             </p>
           )}
 
-          <SubmitButton />
+          {debug && (
+            <p className="rounded-xl bg-slate-800 border border-slate-700 px-4 py-2 text-xs text-slate-400">
+              Debug: {debug}
+            </p>
+          )}
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-accent-cyan text-sm font-bold text-slate-900 transition-all hover:opacity-90 hover:scale-[1.02] disabled:opacity-50 disabled:hover:scale-100"
+          >
+            {loading ? "Entrando..." : "Entrar"}
+          </button>
         </form>
 
         <p className="mt-8 text-center text-xs text-slate-600">

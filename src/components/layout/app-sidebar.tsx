@@ -3,7 +3,8 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { MusicNotes, CaretLeft, CaretRight } from "@phosphor-icons/react";
+import { CaretLeft, CaretRight } from "@phosphor-icons/react";
+import Image from "next/image";
 import { cn } from "@/lib/utils";
 import { SIDEBAR_NAV } from "@/lib/constants";
 
@@ -25,8 +26,8 @@ export function AppSidebar() {
           !expanded && "justify-center px-3"
         )}
       >
-        <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-accent-cyan to-accent-purple">
-          <MusicNotes size={22} weight="duotone" className="text-slate-900" />
+        <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center">
+          <Image src="/images/logos/logo-LA-colapsed.png" alt="LA Studio" width={40} height={40} className="object-contain" />
         </div>
         {expanded && (
           <div className="overflow-hidden">

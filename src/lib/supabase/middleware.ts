@@ -25,26 +25,8 @@ export async function updateSession(request: NextRequest) {
     }
   );
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  console.log("Middleware auth check:", {
-    path: request.nextUrl.pathname,
-    hasUser: !!user,
-    cookies: request.cookies.getAll().map(c => c.name)
-  });
-
-  // Redirect unauthenticated users to login (except auth routes)
-  if (
-    !user &&
-    !request.nextUrl.pathname.startsWith("/login") &&
-    !request.nextUrl.pathname.startsWith("/auth")
-  ) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/login";
-    return NextResponse.redirect(url);
-  }
+  // Apenas refresh da sessão via cookies (se disponíveis)
+  await supabase.auth.getUser();
 
   return supabaseResponse;
 }
