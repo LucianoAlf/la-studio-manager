@@ -1,10 +1,11 @@
 // ============================================
-// Message Router — WA-02 (classificação Gemini)
+// Message Router — WA-03 (execução de ações)
 // ============================================
 // WA-02: Classifica intenção via Gemini e responde com confirmação
-// WA-03: Vai adicionar execução de ações após confirmação
+// WA-03: Executa ações reais após confirmação (INSERT no banco)
 
 import { classifyMessage, getHelpText } from './gemini-classifier.ts'
+import { executeConfirmedAction } from './action-executor.ts'
 import type { ClassificationResult } from './gemini-classifier.ts'
 import type { RouteMessageParams, MessageResponse } from './types.ts'
 
@@ -12,6 +13,8 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
   const { supabase, user, parsed } = params
   const firstName = user.full_name.split(' ')[0]
   const userId = user.profile_id
+  const authUserId = user.auth_user_id
+  const phone = parsed.from
 
   // Mensagens não-texto: informar limitação (WA-06 vai resolver)
   if (parsed.type === 'audio') {
@@ -87,30 +90,67 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
   if (activeContext?.context_data?.step === 'awaiting_confirmation') {
     const lower = parsed.text.toLowerCase().trim()
 
-    if (['sim', 's', 'confirma', 'ok', 'pode', 'isso', 'bora', 'manda'].includes(lower)) {
-      // WA-03 vai executar a ação aqui
-      // Por enquanto, confirmar e desativar contexto
+    // --- CONFIRMOU: SIM → executar ação real (WA-03) ---
+    if (['sim', 's', 'yes', 'y', 'confirma', 'confirmo', 'ok', 'pode', 'pode criar', 'manda', 'bora', 'isso'].includes(lower)) {
+      // Executar ação real PRIMEIRO (se falhar, contexto fica rastreável)
+      const result = await executeConfirmedAction(
+        activeContext.context_type,
+        {
+          supabase,
+          profileId: userId,
+          authUserId,
+          userName: firstName,
+          phone,
+          entities: activeContext.context_data.entities,
+        }
+      )
+
+      // Desativar contexto APÓS execução (com status condicional)
       await supabase
         .from('whatsapp_conversation_context')
-        .update({ is_active: false, updated_at: new Date().toISOString() })
+        .update({
+          is_active: false,
+          context_data: {
+            ...activeContext.context_data,
+            step: result.success ? 'executed' : 'execution_failed',
+            executed_at: new Date().toISOString(),
+            record_id: result.record_id || null,
+            error: result.error || null,
+          },
+          updated_at: new Date().toISOString(),
+        })
         .eq('id', activeContext.id)
 
       return {
-        text: `✅ Beleza, ${firstName}! Ação registrada. (A execução real vem no próximo update!)`,
-        intent: `confirmed_${activeContext.context_type}`,
+        text: result.message,
+        intent: `${activeContext.context_type}_${result.success ? 'executed' : 'failed'}`,
         confidence: 1.0,
+        metadata: {
+          record_id: result.record_id,
+          success: result.success,
+          error: result.error,
+        },
       }
     }
 
-    if (['não', 'nao', 'n', 'cancela', 'cancelar', 'deixa'].includes(lower)) {
+    // --- CANCELOU: NÃO ---
+    if (['não', 'nao', 'n', 'no', 'cancela', 'cancelar', 'deixa', 'esquece'].includes(lower)) {
       await supabase
         .from('whatsapp_conversation_context')
-        .update({ is_active: false, updated_at: new Date().toISOString() })
+        .update({
+          is_active: false,
+          context_data: {
+            ...activeContext.context_data,
+            step: 'cancelled',
+            cancelled_at: new Date().toISOString(),
+          },
+          updated_at: new Date().toISOString(),
+        })
         .eq('id', activeContext.id)
 
       return {
-        text: `❌ Cancelado, ${firstName}! Se precisar de algo, é só falar.`,
-        intent: 'cancelled',
+        text: `👍 Tudo bem, cancelei! Nenhuma alteração foi feita.\n\nQuando quiser, é só me mandar um novo comando. 😉`,
+        intent: `${activeContext.context_type}_cancelled`,
         confidence: 1.0,
       }
     }
@@ -311,26 +351,27 @@ async function saveConversationContext(
   contextData: Record<string, unknown>
 ): Promise<void> {
   try {
-    // Desativar contextos anteriores do mesmo tipo
-    await supabase
+    // UPSERT: tabela tem UNIQUE(user_id, context_type)
+    // Se já existe registro para este user+type, atualiza em vez de falhar
+    const { error } = await supabase
       .from('whatsapp_conversation_context')
-      .update({ is_active: false, updated_at: new Date().toISOString() })
-      .eq('user_id', userId)
-      .eq('context_type', contextType)
-      .eq('is_active', true)
+      .upsert(
+        {
+          user_id: userId,
+          context_type: contextType,
+          context_data: contextData,
+          is_active: true,
+          expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'user_id,context_type' }
+      )
 
-    // Criar novo contexto (expira em 10 min)
-    await supabase
-      .from('whatsapp_conversation_context')
-      .insert({
-        user_id: userId,
-        context_type: contextType,
-        context_data: contextData,
-        is_active: true,
-        expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
-      })
-
-    console.log(`[WA] Context saved: ${contextType} for user ${userId}`)
+    if (error) {
+      console.error('[WA] Context upsert error:', JSON.stringify(error))
+    } else {
+      console.log(`[WA] Context saved: ${contextType} for user ${userId}`)
+    }
   } catch (error) {
     console.error('[WA] Error saving context:', error)
   }

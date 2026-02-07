@@ -1,17 +1,18 @@
-import { createClient } from "@/lib/supabase/server";
+"use client";
+
+import { useEffect, useState, useCallback } from "react";
+import { createClient } from "@/lib/supabase/client";
 import { Header } from "@/components/layout/header";
 import {
   Briefcase,
   Play,
   CheckCircle,
   Clock,
-  TrendUp,
-  TrendDown,
   CalendarBlank,
   FolderOpen,
   Plus,
   User
-} from "@phosphor-icons/react/dist/ssr";
+} from "@phosphor-icons/react";
 import Link from "next/link";
 
 // Cores das colunas do Kanban
@@ -36,89 +37,218 @@ const CALENDAR_TYPE_COLORS: Record<string, string> = {
   meeting: "#A78BFA",
 };
 
-export default async function DashboardPage() {
-  const supabase = await createClient();
+// Tipos para os dados do dashboard
+interface ColumnData {
+  id: string;
+  slug: string;
+  name: string;
+  position: number;
+}
 
-  // ===== STAT CARDS DATA =====
-  // Projetos Ativos (todos os cards não deletados)
-  const { count: totalProjects } = await supabase
-    .from("kanban_cards")
-    .select("*", { count: "exact", head: true })
-    .is("deleted_at", null);
+interface UpcomingItem {
+  id: string;
+  title: string;
+  item_type: string;
+  start_time: string;
+}
 
-  // Em Produção (capturing ou editing)
-  const { count: inProduction } = await supabase
-    .from("kanban_cards")
-    .select("*, kanban_columns!inner(slug)", { count: "exact", head: true })
-    .is("deleted_at", null)
-    .in("kanban_columns.slug", ["capturing", "editing"]);
+interface TeamMember {
+  id: string;
+  user_id: string;
+  full_name: string;
+  display_name: string | null;
+  role: string;
+}
 
-  // Publicados
-  const { count: published } = await supabase
-    .from("kanban_cards")
-    .select("*, kanban_columns!inner(slug)", { count: "exact", head: true })
-    .is("deleted_at", null)
-    .eq("kanban_columns.slug", "published");
+interface DashboardData {
+  totalProjects: number;
+  inProduction: number;
+  published: number;
+  awaitingApproval: number;
+  columns: ColumnData[];
+  countByColumn: Record<string, number>;
+  totalCards: number;
+  upcomingItems: UpcomingItem[];
+  teamMembers: TeamMember[];
+  projectsByUser: Record<string, number>;
+  maxProjects: number;
+}
 
-  // Aguardando Aprovação
-  const { count: awaitingApproval } = await supabase
-    .from("kanban_cards")
-    .select("*, kanban_columns!inner(slug)", { count: "exact", head: true })
-    .is("deleted_at", null)
-    .eq("kanban_columns.slug", "awaiting_approval");
+export default function DashboardPage() {
+  const [data, setData] = useState<DashboardData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  // ===== PIPELINE DATA =====
-  const { data: columns } = await supabase
-    .from("kanban_columns")
-    .select("id, slug, name, position")
-    .order("position", { ascending: true });
+  const loadDashboard = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const supabase = createClient();
 
-  // Contar cards por coluna
-  const { data: cardCounts } = await supabase
-    .from("kanban_cards")
-    .select("column_id")
-    .is("deleted_at", null);
+      // Executar todas as queries em paralelo para máxima performance
+      const [
+        totalProjectsRes,
+        inProductionRes,
+        publishedRes,
+        awaitingApprovalRes,
+        columnsRes,
+        cardCountsRes,
+        upcomingItemsRes,
+        teamMembersRes,
+        userCardCountsRes,
+      ] = await Promise.all([
+        // Projetos Ativos
+        supabase
+          .from("kanban_cards")
+          .select("*", { count: "exact", head: true })
+          .is("deleted_at", null),
+        // Em Produção
+        supabase
+          .from("kanban_cards")
+          .select("*, kanban_columns!inner(slug)", { count: "exact", head: true })
+          .is("deleted_at", null)
+          .in("kanban_columns.slug", ["capturing", "editing"]),
+        // Publicados
+        supabase
+          .from("kanban_cards")
+          .select("*, kanban_columns!inner(slug)", { count: "exact", head: true })
+          .is("deleted_at", null)
+          .eq("kanban_columns.slug", "published"),
+        // Aguardando Aprovação
+        supabase
+          .from("kanban_cards")
+          .select("*, kanban_columns!inner(slug)", { count: "exact", head: true })
+          .is("deleted_at", null)
+          .eq("kanban_columns.slug", "awaiting_approval"),
+        // Colunas
+        supabase
+          .from("kanban_columns")
+          .select("id, slug, name, position")
+          .order("position", { ascending: true }),
+        // Cards por coluna
+        supabase
+          .from("kanban_cards")
+          .select("column_id")
+          .is("deleted_at", null),
+        // Próximas entregas (48h)
+        (() => {
+          const now = new Date();
+          const in48h = new Date(now.getTime() + 48 * 60 * 60 * 1000);
+          return supabase
+            .from("calendar_items")
+            .select("id, title, item_type, start_time")
+            .is("deleted_at", null)
+            .gte("start_time", now.toISOString())
+            .lte("start_time", in48h.toISOString())
+            .order("start_time", { ascending: true })
+            .limit(5);
+        })(),
+        // Team members
+        supabase
+          .from("user_profiles")
+          .select("id, user_id, full_name, display_name, role"),
+        // Cards por usuário
+        supabase
+          .from("kanban_cards")
+          .select("responsible_user_id")
+          .is("deleted_at", null)
+          .not("responsible_user_id", "is", null),
+      ]);
 
-  const countByColumn: Record<string, number> = {};
-  cardCounts?.forEach((card) => {
-    countByColumn[card.column_id] = (countByColumn[card.column_id] || 0) + 1;
-  });
+      // Processar contagem por coluna
+      const countByColumn: Record<string, number> = {};
+      (cardCountsRes.data as { column_id: string }[] | null)?.forEach((card) => {
+        countByColumn[card.column_id] = (countByColumn[card.column_id] || 0) + 1;
+      });
 
-  const totalCards = cardCounts?.length || 0;
+      // Processar projetos por usuário
+      const projectsByUser: Record<string, number> = {};
+      (userCardCountsRes.data as { responsible_user_id: string | null }[] | null)?.forEach((card) => {
+        if (card.responsible_user_id) {
+          projectsByUser[card.responsible_user_id] = (projectsByUser[card.responsible_user_id] || 0) + 1;
+        }
+      });
 
-  // ===== PRÓXIMAS ENTREGAS (48h) =====
-  const now = new Date();
-  const in48h = new Date(now.getTime() + 48 * 60 * 60 * 1000);
-
-  const { data: upcomingItems } = await supabase
-    .from("calendar_items")
-    .select("id, title, item_type, start_time")
-    .is("deleted_at", null)
-    .gte("start_time", now.toISOString())
-    .lte("start_time", in48h.toISOString())
-    .order("start_time", { ascending: true })
-    .limit(5);
-
-  // ===== CARGA DO TIME =====
-  const { data: teamMembers } = await supabase
-    .from("user_profiles")
-    .select("id, user_id, full_name, display_name, role");
-
-  // Contar projetos por usuário
-  const { data: userCardCounts } = await supabase
-    .from("kanban_cards")
-    .select("responsible_user_id")
-    .is("deleted_at", null)
-    .not("responsible_user_id", "is", null);
-
-  const projectsByUser: Record<string, number> = {};
-  userCardCounts?.forEach((card) => {
-    if (card.responsible_user_id) {
-      projectsByUser[card.responsible_user_id] = (projectsByUser[card.responsible_user_id] || 0) + 1;
+      setData({
+        totalProjects: totalProjectsRes.count || 0,
+        inProduction: inProductionRes.count || 0,
+        published: publishedRes.count || 0,
+        awaitingApproval: awaitingApprovalRes.count || 0,
+        columns: (columnsRes.data as ColumnData[]) || [],
+        countByColumn,
+        totalCards: cardCountsRes.data?.length || 0,
+        upcomingItems: (upcomingItemsRes.data as UpcomingItem[]) || [],
+        teamMembers: (teamMembersRes.data as TeamMember[]) || [],
+        projectsByUser,
+        maxProjects: Math.max(...Object.values(projectsByUser), 1),
+      });
+    } catch (err) {
+      console.error("Erro ao carregar dashboard:", err);
+      setError("Erro ao carregar dados do dashboard");
+    } finally {
+      setLoading(false);
     }
-  });
+  }, []);
 
-  const maxProjects = Math.max(...Object.values(projectsByUser), 1);
+  useEffect(() => { loadDashboard(); }, [loadDashboard]);
+
+  // Loading state — transição instantânea, sem bloquear navegação
+  if (loading) {
+    return (
+      <>
+        <Header title="Dashboard" subtitle="Visão Geral" />
+        <div className="flex-1 overflow-auto p-8 bg-slate-950">
+          <div className="mx-auto max-w-7xl">
+            <div className="mb-8 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <div key={i} className="rounded-2xl border border-slate-700/30 bg-gradient-to-br from-slate-800 to-slate-900 p-6">
+                  <div className="flex items-start justify-between mb-4">
+                    <div className="h-4 w-24 animate-pulse rounded bg-slate-700/50" />
+                    <div className="h-10 w-10 animate-pulse rounded-xl bg-slate-700/50" />
+                  </div>
+                  <div className="h-10 w-16 animate-pulse rounded bg-slate-700/50" />
+                  <div className="mt-4 h-1.5 w-full animate-pulse rounded-full bg-slate-700/30" />
+                </div>
+              ))}
+            </div>
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-3 mb-6">
+              <div className="col-span-2 rounded-2xl border border-slate-700/30 bg-gradient-to-br from-slate-800 to-slate-900 p-6">
+                <div className="h-6 w-48 animate-pulse rounded bg-slate-700/50 mb-4" />
+                <div className="h-4 w-full animate-pulse rounded-full bg-slate-700/30 mb-4" />
+              </div>
+              <div className="rounded-2xl border border-slate-700/30 bg-gradient-to-br from-slate-800 to-slate-900 p-6">
+                <div className="h-6 w-40 animate-pulse rounded bg-slate-700/50 mb-4" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  if (error) {
+    return (
+      <>
+        <Header title="Dashboard" subtitle="Visão Geral" />
+        <div className="flex-1 flex items-center justify-center bg-slate-950">
+          <div className="text-center">
+            <p className="text-sm text-red-400 mb-2">{error}</p>
+            <button onClick={loadDashboard} className="text-sm text-accent-cyan hover:underline">
+              Tentar novamente
+            </button>
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  if (!data) return null;
+
+  const {
+    totalProjects, inProduction, published, awaitingApproval,
+    columns, countByColumn, totalCards,
+    upcomingItems, teamMembers, projectsByUser, maxProjects,
+  } = data;
 
   return (
     <>
@@ -129,25 +259,25 @@ export default async function DashboardPage() {
           <div className="mb-8 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
             <StatCard
               label="Projetos Ativos"
-              value={totalProjects || 0}
+              value={totalProjects}
               icon={<Briefcase size={20} weight="duotone" className="text-slate-900" />}
               accentColor="cyan"
             />
             <StatCard
               label="Em Produção"
-              value={inProduction || 0}
+              value={inProduction}
               icon={<Play size={20} weight="duotone" className="text-slate-900" />}
               accentColor="yellow"
             />
             <StatCard
               label="Publicados"
-              value={published || 0}
+              value={published}
               icon={<CheckCircle size={20} weight="duotone" className="text-slate-900" />}
               accentColor="green"
             />
             <StatCard
               label="Aguardando Aprovação"
-              value={awaitingApproval || 0}
+              value={awaitingApproval}
               icon={<Clock size={20} weight="duotone" className="text-slate-900" />}
               accentColor="pink"
             />
@@ -177,7 +307,7 @@ export default async function DashboardPage() {
                 <>
                   {/* Barra segmentada */}
                   <div className="flex h-4 w-full rounded-full overflow-hidden mb-4">
-                    {columns?.map((col) => {
+                    {columns.map((col) => {
                       const count = countByColumn[col.id] || 0;
                       const width = (count / totalCards) * 100;
                       if (width === 0) return null;
@@ -196,7 +326,7 @@ export default async function DashboardPage() {
 
                   {/* Labels */}
                   <div className="flex flex-wrap gap-3">
-                    {columns?.map((col) => {
+                    {columns.map((col) => {
                       const count = countByColumn[col.id] || 0;
                       return (
                         <div key={col.id} className="flex items-center gap-2">
@@ -221,7 +351,7 @@ export default async function DashboardPage() {
                 Próximas Entregas
               </h2>
 
-              {!upcomingItems || upcomingItems.length === 0 ? (
+              {upcomingItems.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-8 text-center">
                   <CalendarBlank size={48} className="text-slate-600 mb-3" />
                   <p className="text-slate-400">Nenhuma entrega próxima</p>
@@ -255,7 +385,7 @@ export default async function DashboardPage() {
               Carga do Time
             </h2>
 
-            {!teamMembers || teamMembers.length === 0 ? (
+            {teamMembers.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-8 text-center">
                 <User size={48} className="text-slate-600 mb-3" />
                 <p className="text-slate-400">Nenhum membro do time</p>

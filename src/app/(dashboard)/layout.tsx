@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { AppSidebar } from "@/components/layout/app-sidebar";
 import { ensureUserProfile } from "@/lib/supabase/ensure-profile";
@@ -15,8 +15,12 @@ export default function DashboardLayout({
   const router = useRouter();
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
   const [sidebarExpanded, setSidebarExpanded] = useState(true);
+  const authCheckedRef = useRef(false);
 
   useEffect(() => {
+    // Evitar re-verificação de auth em navegações subsequentes
+    if (authCheckedRef.current) return;
+
     const checkAuth = async () => {
       const supabase = createClient();
 
@@ -32,6 +36,7 @@ export default function DashboardLayout({
         if (data.session) {
           localStorage.setItem("la-studio-auth-token", data.session.access_token);
           localStorage.setItem("la-studio-auth-refresh", data.session.refresh_token);
+          authCheckedRef.current = true;
           setIsAuthenticated(true);
           ensureUserProfile();
           return;
@@ -47,6 +52,7 @@ export default function DashboardLayout({
       if (!user) {
         router.replace("/login");
       } else {
+        authCheckedRef.current = true;
         setIsAuthenticated(true);
         ensureUserProfile();
       }
@@ -55,7 +61,7 @@ export default function DashboardLayout({
     checkAuth();
   }, [router]);
 
-  // Tela de loading enquanto verifica auth
+  // Tela de loading enquanto verifica auth (apenas no primeiro acesso)
   if (isAuthenticated === null) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-950">
