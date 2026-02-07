@@ -91,7 +91,7 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
     .maybeSingle()
 
   if (activeContext?.context_data?.step === 'awaiting_confirmation') {
-    const lower = parsed.text.toLowerCase().trim()
+    const lower = parsed.text.toLowerCase().trim().replace(/[.,!?;:]+$/g, '').trim()
 
     // --- CONFIRMOU: SIM → executar ação real (WA-03) ---
     if (['sim', 's', 'yes', 'y', 'confirma', 'confirmo', 'ok', 'pode', 'pode criar', 'manda', 'bora', 'isso'].includes(lower)) {
@@ -550,8 +550,97 @@ async function handleAudioMessage(
     importance: 0.3,
   }).catch(e => console.error('[WA-06] Episode save error:', e))
 
-  // Agora processar o texto transcrito pelo NLP (mesmo fluxo de texto)
-  // Substituir parsed.text pelo texto transcrito e reprocessar como texto
+  // ========================================
+  // VERIFICAR CONTEXTO DE CONFIRMAÇÃO PENDENTE
+  // Se o áudio transcrito for "sim/não" e houver contexto ativo,
+  // tratar como confirmação (mesmo fluxo do texto)
+  // ========================================
+  // Normalizar: Whisper retorna "Sim." com ponto e maiúscula — remover pontuação
+  const transcribedLower = result.transcription.toLowerCase().trim().replace(/[.,!?;:]+$/g, '').trim()
+  console.log(`[WA-06] Transcribed normalized for confirmation check: "${transcribedLower}"`)
+  const confirmWords = ['sim', 's', 'yes', 'y', 'confirma', 'confirmo', 'ok', 'pode', 'pode criar', 'manda', 'bora', 'isso']
+  const cancelWords = ['não', 'nao', 'n', 'no', 'cancela', 'cancelar', 'deixa', 'esquece', 'para']
+
+  const { data: activeContext } = await supabase
+    .from('whatsapp_conversation_context')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('is_active', true)
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (activeContext?.context_data?.step === 'awaiting_confirmation') {
+    const phone = parsed.from
+
+    if (confirmWords.includes(transcribedLower)) {
+      // Executar ação confirmada (mesmo fluxo do texto)
+      const execResult = await executeConfirmedAction(
+        activeContext.context_type,
+        {
+          supabase,
+          profileId: userId,
+          authUserId,
+          userName: firstName,
+          phone,
+          entities: activeContext.context_data.entities,
+        }
+      )
+
+      await supabase
+        .from('whatsapp_conversation_context')
+        .update({
+          is_active: false,
+          context_data: {
+            ...activeContext.context_data,
+            step: execResult.success ? 'executed' : 'execution_failed',
+            executed_at: new Date().toISOString(),
+            record_id: execResult.record_id || null,
+            error: execResult.error || null,
+          },
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', activeContext.id)
+
+      if (execResult.success) {
+        saveEpisode(supabase, {
+          userId,
+          summary: `${firstName} confirmou por áudio ${activeContext.context_type}: "${activeContext.context_data.entities?.title || 'sem título'}".`,
+          entities: { action_type: activeContext.context_type, record_id: execResult.record_id, source: 'audio_confirmation' },
+          outcome: 'action_completed', importance: 0.6,
+        }).catch(e => console.error('[WA-06] Episode save error:', e))
+      }
+
+      return {
+        text: execResult.message,
+        intent: `audio_${activeContext.context_type}_${execResult.success ? 'executed' : 'failed'}`,
+        confidence: 1.0,
+        metadata: { transcription: result.transcription, record_id: execResult.record_id },
+      }
+    }
+
+    if (cancelWords.includes(transcribedLower)) {
+      await supabase
+        .from('whatsapp_conversation_context')
+        .update({
+          is_active: false,
+          context_data: { ...activeContext.context_data, step: 'cancelled_by_user' },
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', activeContext.id)
+
+      return {
+        text: `❌ Cancelado, ${firstName}! Se precisar de algo, é só falar.`,
+        intent: `audio_${activeContext.context_type}_cancelled`,
+        confidence: 1.0,
+        metadata: { transcription: result.transcription },
+      }
+    }
+  }
+
+  // ========================================
+  // SEM CONTEXTO PENDENTE — processar normalmente via NLP
+  // ========================================
   const textParsed = { ...parsed, text: result.transcription, type: 'text' }
   const textParams = { ...params, parsed: textParsed }
 
@@ -565,7 +654,7 @@ async function handleAudioMessage(
   // Classificar o texto transcrito
   const classification = await classifyMessage(result.transcription, firstName, undefined, memoryPrompt)
 
-  // Rotear pela intenção classificada (reutilizar switch do routeMessage)
+  // Rotear pela intenção classificada
   // A transcrição é interna — o usuário recebe apenas a resposta natural
   const response = await routeClassifiedMessage(classification, textParams, firstName, userId, authUserId, memoryPrompt)
 
