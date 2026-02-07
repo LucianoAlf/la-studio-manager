@@ -151,7 +151,6 @@ export async function analyzeImage(params: AnalyzeImageParams): Promise<ImageRes
           generationConfig: {
             temperature: 0.3,
             maxOutputTokens: 500,
-            responseMimeType: 'application/json',
           },
         }),
       }
@@ -204,7 +203,7 @@ export async function analyzeImage(params: AnalyzeImageParams): Promise<ImageRes
 
 /**
  * Parse da resposta do Vision com fallback robusto.
- * O Gemini pode retornar JSON puro ou envolvido em markdown.
+ * O Gemini pode retornar JSON puro, envolvido em markdown, ou texto livre.
  */
 function parseVisionResponse(raw: string): {
   description: string
@@ -217,16 +216,24 @@ function parseVisionResponse(raw: string): {
     const jsonStr = jsonMatch ? jsonMatch[1].trim() : raw.trim()
 
     const parsed = JSON.parse(jsonStr)
+
+    // Garantir que description é texto limpo (não JSON escapado)
+    let desc = parsed.description || 'Imagem recebida'
+    if (desc.startsWith('{') || desc.startsWith('[')) {
+      desc = 'Imagem recebida'
+    }
+
     return {
-      description: parsed.description || 'Imagem recebida',
+      description: desc.substring(0, 300),
       suggested_action: parsed.suggested_action || 'none',
       suggested_entities: parsed.suggested_entities || null,
     }
   } catch {
-    // Fallback: usar texto bruto como descrição
+    // Fallback: usar texto bruto como descrição (limpar JSON residual)
     console.warn('[WA-06] Failed to parse Vision JSON, using raw text as description')
+    const cleanText = raw.replace(/[{}"\[\]]/g, '').replace(/\n/g, ' ').trim()
     return {
-      description: raw.substring(0, 300),
+      description: cleanText.substring(0, 300) || 'Imagem recebida',
       suggested_action: 'none',
       suggested_entities: null,
     }
