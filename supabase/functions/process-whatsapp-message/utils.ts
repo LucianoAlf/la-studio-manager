@@ -70,35 +70,82 @@ export function parseWebhookPayload(body: unknown): ParsedMessage | null {
     const isGroup = msg?.isGroup === true || chatid.includes('@g.us')
     console.log(`[WA] chatid: ${chatid}, isGroup: ${isGroup}`)
 
-    // Extrair texto — UAZAPI coloca em msg.text ou msg.content
-    let text: string | null = msg?.text || msg?.content || null
-    let type: string = msg?.type || 'text'
-    let mediaUrl: string | null = msg?.mediaUrl || null
+    // =============================================
+    // EXTRAIR TEXTO E METADADOS DE MÍDIA
+    // UAZAPI: msg.content pode ser:
+    //   - STRING JSON (mídia): '{"URL":"...","mimetype":"audio/ogg","PTT":true,"seconds":12}'
+    //   - STRING simples (texto em alguns casos)
+    //   - OBJETO (já parseado em alguns webhooks)
+    // =============================================
+    const rawContent = msg?.content
+    let parsedContent: Record<string, unknown> | null = null
 
-    // Normalizar messageType da UAZAPI para nossos tipos
+    // Tentar parsear content como JSON string (caso mais comum para mídia)
+    if (typeof rawContent === 'string' && rawContent.startsWith('{')) {
+      try {
+        parsedContent = JSON.parse(rawContent)
+      } catch {
+        // Não é JSON válido — tratar como texto
+      }
+    } else if (rawContent && typeof rawContent === 'object') {
+      // Já é objeto (alguns webhooks enviam assim)
+      parsedContent = rawContent as Record<string, unknown>
+    }
+
+    // Texto: msg.text é a fonte principal (legenda para imagem, vazio para áudio)
+    let text: string | null = msg?.text || null
+    // Se não tem msg.text e content não é JSON de mídia, usar content como texto
+    if (!text && typeof rawContent === 'string' && !parsedContent) {
+      text = rawContent
+    }
+
+    let type: string = msg?.type || 'text'
+    let mediaUrl: string | null = msg?.mediaUrl || msg?.fileURL || null
+    let durationSeconds: number | null = null
+
+    // Se content é mídia (JSON parseado), extrair metadados
+    if (parsedContent) {
+      mediaUrl = mediaUrl || (parsedContent.URL as string) || null
+      durationSeconds = (parsedContent.seconds as number) || null
+      // Caption da imagem (redundante com msg.text, mas fallback)
+      if (!text && parsedContent.caption) {
+        text = parsedContent.caption as string
+      }
+    }
+
+    // =============================================
+    // NORMALIZAR messageType DA UAZAPI
+    // Payload real: messageType vem lowercase ("audio", "image", "video")
+    // Alguns webhooks enviam PascalCase ("AudioMessage", "ImageMessage")
+    // Tratar ambos os formatos
+    // =============================================
     const uazapiType = (msg?.messageType || '').toLowerCase()
+    const uazapiMediaType = (msg?.mediaType || '').toLowerCase()
+
     if (uazapiType === 'conversation' || uazapiType === 'extendedtextmessage') {
       type = 'text'
-    } else if (uazapiType === 'imagemessage') {
+    } else if (uazapiType === 'image' || uazapiType === 'imagemessage') {
       type = 'image'
-    } else if (uazapiType === 'audiomessage' || uazapiType === 'pttmessage') {
+    } else if (uazapiType === 'audio' || uazapiType === 'audiomessage' || uazapiType === 'pttmessage' || uazapiMediaType === 'ptt') {
       type = 'audio'
-    } else if (uazapiType === 'videomessage') {
+    } else if (uazapiType === 'video' || uazapiType === 'videomessage') {
       type = 'video'
-    } else if (uazapiType === 'documentmessage') {
+    } else if (uazapiType === 'document' || uazapiType === 'documentmessage') {
       type = 'document'
-    } else if (uazapiType === 'stickermessage') {
+    } else if (uazapiType === 'sticker' || uazapiType === 'stickermessage') {
       type = 'sticker'
       text = text || '[sticker]'
-    } else if (uazapiType === 'locationmessage') {
+    } else if (uazapiType === 'location' || uazapiType === 'locationmessage') {
       type = 'location'
       text = text || '[location]'
     }
 
-    console.log(`[WA] Parsed: type=${type}, text=${text?.substring(0, 50)}, mediaUrl=${mediaUrl}`)
+    console.log(`[WA] Parsed: type=${type}, messageType=${uazapiType}, mediaType=${uazapiMediaType}, text=${text?.substring(0, 50) || '(vazio)'}, mediaUrl=${mediaUrl ? 'yes' : 'no'}, duration=${durationSeconds}`)
 
     // Se não conseguiu extrair nada útil, ignorar
-    if (!text && !mediaUrl && type === 'text') {
+    // Para mídia (audio/image/video/document), não exigir texto
+    const isMediaType = ['audio', 'image', 'video', 'document', 'sticker'].includes(type)
+    if (!text && !mediaUrl && !isMediaType) {
       console.log('[WA] No text or media found, ignoring')
       return null
     }
@@ -122,6 +169,7 @@ export function parseWebhookPayload(body: unknown): ParsedMessage | null {
       senderInGroup: isGroup ? senderPn : null,
       timestamp: msg?.messageTimestamp ? Math.floor(msg.messageTimestamp / 1000) : Math.floor(Date.now() / 1000),
       pushName: msg?.senderName || payload?.chat?.wa_name || null,
+      durationSeconds,
     }
   } catch (error) {
     console.error('[WA] Parse error:', error)

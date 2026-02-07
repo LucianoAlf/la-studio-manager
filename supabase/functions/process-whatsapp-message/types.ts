@@ -50,6 +50,7 @@ export interface ParsedMessage {
   senderInGroup: string | null // quem mandou no grupo
   timestamp: number
   pushName: string | null
+  durationSeconds: number | null // WA-06: duração do áudio em segundos
 }
 
 export interface UserInfo {

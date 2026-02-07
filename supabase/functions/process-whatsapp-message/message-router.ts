@@ -1,14 +1,17 @@
 // ============================================
-// Message Router — WA-04 (memória + consultas)
+// Message Router — WA-04 (memória + consultas) + WA-06 (áudio/imagem)
 // ============================================
 // WA-02: Classifica intenção via Gemini e responde com confirmação
 // WA-03: Executa ações reais após confirmação (INSERT no banco)
 // WA-04: Sistema de memória + consultas reais ao banco
+// WA-06: Processamento de áudio (transcrição) e imagem (Vision)
 
 import { classifyMessage, getHelpText } from './gemini-classifier.ts'
 import { executeConfirmedAction } from './action-executor.ts'
 import { loadMemoryContext, formatMemoryForPrompt, saveEpisode, learnFact } from './memory-manager.ts'
 import { handleQueryCalendar, handleQueryCards, handleQueryProjects, handleGenerateReport } from './query-handler.ts'
+import { transcribeAudio } from './audio-handler.ts'
+import { analyzeImage } from './image-handler.ts'
 import type { ClassificationResult } from './gemini-classifier.ts'
 import type { RouteMessageParams, MessageResponse } from './types.ts'
 
@@ -19,21 +22,18 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
   const authUserId = user.auth_user_id
   const phone = parsed.from
 
-  // Mensagens não-texto: informar limitação (WA-06 vai resolver)
+  // ========================================
+  // WA-06: PROCESSAMENTO DE ÁUDIO
+  // ========================================
   if (parsed.type === 'audio') {
-    return {
-      text: `🎤 Recebi seu áudio, ${firstName}! Em breve vou conseguir ouvir e processar áudios. Por enquanto, me manda por texto.`,
-      intent: 'audio_received',
-      confidence: 1.0,
-    }
+    return await handleAudioMessage(params, firstName, userId)
   }
 
+  // ========================================
+  // WA-06: PROCESSAMENTO DE IMAGEM
+  // ========================================
   if (parsed.type === 'image') {
-    return {
-      text: `📸 Recebi sua imagem${parsed.text ? ` com legenda: "${parsed.text}"` : ''}! Em breve vou conseguir analisar imagens. Por enquanto, me manda por texto.`,
-      intent: 'image_received',
-      confidence: 1.0,
-    }
+    return await handleImageMessage(params, firstName, userId)
   }
 
   if (parsed.type === 'video') {
@@ -476,6 +476,399 @@ async function saveConversationContext(
     }
   } catch (error) {
     console.error('[WA] Error saving context:', error)
+  }
+}
+
+// ============================================
+// WA-06: HANDLER DE ÁUDIO
+// ============================================
+
+async function handleAudioMessage(
+  params: RouteMessageParams,
+  firstName: string,
+  userId: string,
+): Promise<MessageResponse> {
+  const { supabase, user, parsed, uazapiUrl, uazapiToken } = params
+  const authUserId = user.auth_user_id
+  const startTime = Date.now()
+
+  // Verificar se temos messageId para download
+  if (!parsed.messageId) {
+    console.error('[WA-06] No messageId for audio download')
+    return {
+      text: `🎤 Recebi seu áudio, ${firstName}, mas não consegui processá-lo. Tenta mandar de novo?`,
+      intent: 'audio_error',
+      confidence: 1.0,
+    }
+  }
+
+  // Extrair duração do payload (msg.content.seconds no webhook)
+  const durationSeconds = parsed.durationSeconds || null
+
+  // Transcrever via UAZAPI (a UAZAPI chama Whisper internamente, precisa da openai_apikey)
+  const openaiApiKey = Deno.env.get('OPENAI_API_KEY') || ''
+  const result = await transcribeAudio({
+    serverUrl: uazapiUrl,
+    token: uazapiToken,
+    messageId: parsed.messageId,
+    openaiApiKey,
+    durationSeconds,
+  })
+
+  const processingTimeMs = Date.now() - startTime
+
+  // Logar processamento
+  await logMediaProcessing(supabase, {
+    userId,
+    messageId: params.message.id,
+    mediaType: 'audio',
+    status: result.success ? 'completed' : 'failed',
+    transcription: result.transcription,
+    durationSeconds: result.duration_seconds,
+    mimeType: result.mime_type,
+    uazapiMessageId: parsed.messageId,
+    processingTimeMs,
+    errorMessage: result.error,
+  })
+
+  if (!result.success || !result.transcription) {
+    return {
+      text: `🎤 Recebi seu áudio, ${firstName}, mas não consegui transcrever. ${result.error ? 'Tenta mandar de novo?' : 'Pode me mandar por texto?'}`,
+      intent: 'audio_transcription_failed',
+      confidence: 1.0,
+    }
+  }
+
+  console.log(`[WA-06] Audio transcribed in ${processingTimeMs}ms: "${result.transcription.substring(0, 100)}"`)
+
+  // Salvar episódio de memória
+  saveEpisode(supabase, {
+    userId,
+    summary: `${firstName} enviou áudio (${result.duration_seconds || '?'}s). Transcrição: "${result.transcription.substring(0, 150)}"`,
+    entities: { media_type: 'audio', duration_seconds: result.duration_seconds, transcription_length: result.transcription.length },
+    outcome: 'media_processed',
+    importance: 0.3,
+  }).catch(e => console.error('[WA-06] Episode save error:', e))
+
+  // Agora processar o texto transcrito pelo NLP (mesmo fluxo de texto)
+  // Substituir parsed.text pelo texto transcrito e reprocessar como texto
+  const textParsed = { ...parsed, text: result.transcription, type: 'text' }
+  const textParams = { ...params, parsed: textParsed }
+
+  // Carregar memória
+  let memoryPrompt = ''
+  const memory = await loadMemoryContext(supabase, userId)
+  if (memory) {
+    memoryPrompt = formatMemoryForPrompt(memory)
+  }
+
+  // Classificar o texto transcrito
+  const classification = await classifyMessage(result.transcription, firstName, undefined, memoryPrompt)
+
+  // Rotear pela intenção classificada (reutilizar switch do routeMessage)
+  // A transcrição é interna — o usuário recebe apenas a resposta natural
+  const response = await routeClassifiedMessage(classification, textParams, firstName, userId, authUserId, memoryPrompt)
+
+  return {
+    text: response.text || '',
+    intent: `audio_${response.intent}`,
+    confidence: response.confidence,
+    metadata: { ...response.metadata, transcription: result.transcription, audio_duration: result.duration_seconds },
+  }
+}
+
+// ============================================
+// WA-06: HANDLER DE IMAGEM
+// ============================================
+
+async function handleImageMessage(
+  params: RouteMessageParams,
+  firstName: string,
+  userId: string,
+): Promise<MessageResponse> {
+  const { supabase, user, parsed, uazapiUrl, uazapiToken } = params
+  const startTime = Date.now()
+  const geminiKey = Deno.env.get('GEMINI_API_KEY') || ''
+
+  if (!parsed.messageId) {
+    console.error('[WA-06] No messageId for image download')
+    return {
+      text: `📸 Recebi sua imagem, ${firstName}, mas não consegui processá-la. Tenta mandar de novo?`,
+      intent: 'image_error',
+      confidence: 1.0,
+    }
+  }
+
+  if (!geminiKey) {
+    console.error('[WA-06] GEMINI_API_KEY not configured')
+    return {
+      text: `📸 Recebi sua imagem, ${firstName}! Mas a análise de imagens ainda não está configurada.`,
+      intent: 'image_not_configured',
+      confidence: 1.0,
+    }
+  }
+
+  // Analisar imagem via UAZAPI + Gemini 3 Flash Preview
+  const result = await analyzeImage({
+    serverUrl: uazapiUrl,
+    token: uazapiToken,
+    geminiKey,
+    messageId: parsed.messageId,
+    caption: parsed.text,
+    userName: firstName,
+  })
+
+  const processingTimeMs = Date.now() - startTime
+
+  // Logar processamento
+  await logMediaProcessing(supabase, {
+    userId,
+    messageId: params.message.id,
+    mediaType: 'image',
+    status: result.success ? 'completed' : 'failed',
+    imageAnalysis: result.success ? {
+      description: result.description,
+      suggested_action: result.suggested_action,
+      suggested_entities: result.suggested_entities,
+    } : null,
+    suggestedAction: result.suggested_action,
+    suggestedEntities: result.suggested_entities,
+    mimeType: result.mime_type,
+    uazapiMessageId: parsed.messageId,
+    processingTimeMs,
+    errorMessage: result.error,
+  })
+
+  if (!result.success) {
+    return {
+      text: `📸 Recebi sua imagem, ${firstName}, mas não consegui analisar. ${result.error ? 'Tenta mandar de novo?' : 'Pode descrever por texto?'}`,
+      intent: 'image_analysis_failed',
+      confidence: 1.0,
+    }
+  }
+
+  console.log(`[WA-06] Image analyzed in ${processingTimeMs}ms: action=${result.suggested_action}`)
+
+  // Salvar episódio de memória
+  saveEpisode(supabase, {
+    userId,
+    summary: `${firstName} enviou imagem${parsed.text ? ` com legenda "${parsed.text.substring(0, 80)}"` : ''}. Análise: ${result.description?.substring(0, 100)}`,
+    entities: { media_type: 'image', suggested_action: result.suggested_action, has_caption: !!parsed.text },
+    outcome: 'media_processed',
+    importance: 0.4,
+  }).catch(e => console.error('[WA-06] Episode save error:', e))
+
+  // Montar resposta baseada na ação sugerida
+  const ents = result.suggested_entities || {}
+
+  if (result.suggested_action === 'create_card' && ents.title) {
+    // Sugerir criação de card com base na análise
+    const parts: string[] = [
+      `📸 *Analisei sua imagem!*\n`,
+      `📝 ${result.description}\n`,
+      `Parece ser uma referência de conteúdo. Quer que eu crie um card?\n`,
+    ]
+    if (ents.title) parts.push(`📝 Título: *${ents.title}*`)
+    if (ents.content_type) parts.push(`🎬 Tipo: *${ents.content_type}*`)
+    if (ents.priority) parts.push(`⚡ Prioridade: *${ents.priority}*`)
+    if (ents.notes) parts.push(`💡 ${ents.notes}`)
+    parts.push('\n✅ Confirma? (sim/não)')
+
+    // Salvar contexto para confirmação
+    await saveConversationContextForMedia(supabase, userId, 'creating_card', {
+      step: 'awaiting_confirmation',
+      entities: {
+        title: ents.title,
+        content_type: ents.content_type || null,
+        priority: ents.priority || 'medium',
+        description: result.description,
+        source: 'image_analysis',
+      },
+      classified_at: new Date().toISOString(),
+    })
+
+    return {
+      text: parts.join('\n'),
+      intent: 'image_create_card_suggestion',
+      confidence: 0.8,
+      metadata: { image_analysis: result.description, suggested_entities: ents },
+    }
+  }
+
+  if (result.suggested_action === 'create_calendar' && ents.title) {
+    const parts: string[] = [
+      `📸 *Analisei sua imagem!*\n`,
+      `📝 ${result.description}\n`,
+      `Parece ser algo para agendar. Quer que eu crie um evento?\n`,
+    ]
+    if (ents.title) parts.push(`📝 Título: *${ents.title}*`)
+    if (ents.notes) parts.push(`💡 ${ents.notes}`)
+    parts.push('\n✅ Confirma? (sim/não)')
+
+    await saveConversationContextForMedia(supabase, userId, 'creating_calendar', {
+      step: 'awaiting_confirmation',
+      entities: {
+        title: ents.title,
+        description: result.description,
+        source: 'image_analysis',
+      },
+      classified_at: new Date().toISOString(),
+    })
+
+    return {
+      text: parts.join('\n'),
+      intent: 'image_create_calendar_suggestion',
+      confidence: 0.7,
+      metadata: { image_analysis: result.description, suggested_entities: ents },
+    }
+  }
+
+  // Ação geral ou nenhuma — apenas descrever
+  const caption = parsed.text ? `\n📝 Legenda: _"${parsed.text}"_` : ''
+  return {
+    text: `📸 *Analisei sua imagem!*\n\n${result.description}${caption}\n\nSe quiser que eu faça algo com isso, me diz! 😉`,
+    intent: 'image_analyzed',
+    confidence: 0.9,
+    metadata: { image_analysis: result.description },
+  }
+}
+
+// ============================================
+// WA-06: ROTEAMENTO PÓS-CLASSIFICAÇÃO (áudio transcrito)
+// ============================================
+
+async function routeClassifiedMessage(
+  classification: ClassificationResult,
+  params: RouteMessageParams,
+  firstName: string,
+  userId: string,
+  authUserId: string,
+  _memoryPrompt: string,
+): Promise<MessageResponse> {
+  const { supabase } = params
+
+  // Reutilizar a lógica de roteamento por intenção (mesma do routeMessage)
+  switch (classification.intent) {
+    case 'create_card':
+      return handleCreateCard(classification, firstName, supabase, userId)
+    case 'create_calendar':
+      return handleCreateCalendar(classification, firstName, supabase, userId)
+    case 'create_reminder':
+      return handleCreateReminder(classification, firstName, supabase, userId)
+    case 'query_calendar': {
+      const qCtx = { supabase, profileId: userId, authUserId, userName: firstName, entities: classification.entities }
+      const result = await handleQueryCalendar(qCtx)
+      return { text: result.text, intent: 'query_calendar', confidence: classification.confidence }
+    }
+    case 'query_cards': {
+      const qCtx = { supabase, profileId: userId, authUserId, userName: firstName, entities: classification.entities }
+      const result = await handleQueryCards(qCtx)
+      return { text: result.text, intent: 'query_cards', confidence: classification.confidence }
+    }
+    case 'query_projects': {
+      const qCtx = { supabase, profileId: userId, authUserId, userName: firstName, entities: classification.entities }
+      const result = await handleQueryProjects(qCtx)
+      return { text: result.text, intent: 'query_projects', confidence: classification.confidence }
+    }
+    case 'generate_report': {
+      const qCtx = { supabase, profileId: userId, authUserId, userName: firstName, entities: classification.entities }
+      const result = await handleGenerateReport(qCtx)
+      return { text: result.text, intent: 'generate_report', confidence: classification.confidence }
+    }
+    case 'help':
+      return { text: getHelpText(), intent: 'help', confidence: 1.0 }
+    case 'general_chat':
+      return { text: classification.response_text, intent: 'general_chat', confidence: classification.confidence }
+    default:
+      return {
+        text: classification.response_text || `Não entendi bem, ${firstName}. Pode reformular?`,
+        intent: classification.intent || 'unknown',
+        confidence: classification.confidence,
+      }
+  }
+}
+
+// ============================================
+// WA-06: LOG DE PROCESSAMENTO DE MÍDIA
+// ============================================
+
+// deno-lint-ignore no-explicit-any
+async function logMediaProcessing(supabase: any, data: {
+  userId: string
+  messageId: string
+  mediaType: string
+  status: string
+  transcription?: string | null
+  imageAnalysis?: Record<string, unknown> | null
+  suggestedAction?: string | null
+  suggestedEntities?: Record<string, unknown> | null
+  durationSeconds?: number | null
+  fileSizeBytes?: number | null
+  mimeType?: string | null
+  uazapiMessageId?: string | null
+  processingTimeMs?: number | null
+  errorMessage?: string | null
+}): Promise<void> {
+  try {
+    const { error } = await supabase
+      .from('wa_media_processing_log')
+      .insert({
+        user_id: data.userId,
+        message_id: data.messageId,
+        media_type: data.mediaType,
+        processing_status: data.status,
+        transcription: data.transcription || null,
+        image_analysis: data.imageAnalysis || null,
+        suggested_action: data.suggestedAction || null,
+        suggested_entities: data.suggestedEntities || null,
+        duration_seconds: data.durationSeconds || null,
+        file_size_bytes: data.fileSizeBytes || null,
+        mime_type: data.mimeType || null,
+        uazapi_message_id: data.uazapiMessageId || null,
+        processing_time_ms: data.processingTimeMs || null,
+        error_message: data.errorMessage || null,
+        completed_at: data.status === 'completed' ? new Date().toISOString() : null,
+      })
+
+    if (error) {
+      console.error('[WA-06] Media log insert error:', error)
+    }
+  } catch (err) {
+    console.error('[WA-06] Media log fatal error:', err)
+  }
+}
+
+// ============================================
+// WA-06: CONTEXTO DE CONVERSA PARA MÍDIA
+// ============================================
+
+// deno-lint-ignore no-explicit-any
+async function saveConversationContextForMedia(
+  supabase: any,
+  userId: string,
+  contextType: string,
+  contextData: Record<string, unknown>
+): Promise<void> {
+  try {
+    const { error } = await supabase
+      .from('whatsapp_conversation_context')
+      .upsert(
+        {
+          user_id: userId,
+          context_type: contextType,
+          context_data: contextData,
+          is_active: true,
+          expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'user_id,context_type' }
+      )
+
+    if (error) {
+      console.error('[WA-06] Context upsert error:', JSON.stringify(error))
+    }
+  } catch (error) {
+    console.error('[WA-06] Error saving media context:', error)
   }
 }
 
