@@ -2,44 +2,41 @@
 // Types — WhatsApp Agent
 // ============================================
 
+// Formato REAL do payload UAZAPI (flat, descoberto em produção)
 export interface WebhookPayload {
-  event?: string
-  instance?: string
-  data?: {
-    from?: string
-    message?: {
-      type?: string
-      text?: string
-      caption?: string
-      url?: string
-      conversation?: string
-      extendedTextMessage?: { text?: string }
-      imageMessage?: { caption?: string; url?: string }
-      audioMessage?: { url?: string }
-      documentMessage?: { caption?: string; fileName?: string; url?: string }
-      videoMessage?: { caption?: string; url?: string }
-      stickerMessage?: Record<string, unknown>
-    }
-    messageTimestamp?: number
-    key?: {
-      id?: string
-      remoteJid?: string
-      fromMe?: boolean
-      participant?: string
-    }
-    pushName?: string
-    mediaUrl?: string
-    sender?: string
+  BaseUrl?: string
+  EventType?: string
+  chatSource?: string
+  instanceName?: string
+  owner?: string
+  token?: string
+  chat?: {
+    id?: string
+    wa_chatid?: string
+    wa_name?: string
+    name?: string
+    phone?: string
+    wa_isGroup?: boolean
   }
-  // UAZAPI v2 format alternativo
-  type?: string
-  from?: string
-  body?: string
-  isGroup?: boolean
-  sender?: string
-  messageId?: string
-  mediaUrl?: string
-  chatid?: string
+  message?: {
+    id?: string
+    text?: string
+    content?: string
+    type?: string
+    chatid?: string
+    fromMe?: boolean
+    sender?: string
+    sender_pn?: string
+    senderName?: string
+    messageid?: string
+    messageType?: string
+    messageTimestamp?: number
+    isGroup?: boolean
+    mediaType?: string
+    mediaUrl?: string
+    wasSentByApi?: boolean
+    groupName?: string
+  }
 }
 
 export interface ParsedMessage {

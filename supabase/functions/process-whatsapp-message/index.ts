@@ -1,6 +1,6 @@
 // ============================================
 // LA Studio Manager — process-whatsapp-message
-// Edge Function v1.0 — Infraestrutura Base (WA-01)
+// Edge Function v2.0 — NLP + Intent Classification (WA-02)
 // ============================================
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
