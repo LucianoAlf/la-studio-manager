@@ -103,6 +103,7 @@ export default function CalendarioPage() {
   const [currentUser, setCurrentUser] = useState<{ userId: string; profile: { full_name: string; display_name: string | null; avatar_url: string | null } } | null>(null);
   const [retryKey, setRetryKey] = useState(0);
   const [realtimeNewIds, setRealtimeNewIds] = useState<Set<string>>(new Set());
+  const isDroppingRef = useRef(false);
 
   // === Estado do modal CRUD ===
   const [modalOpen, setModalOpen] = useState(false);
@@ -172,6 +173,7 @@ export default function CalendarioPage() {
   useRealtimeSubscription({
     table: 'calendar_items',
     onInsert: useCallback(async () => {
+      if (isDroppingRef.current) return;
       const { start, end } = getDateRange(currentDate, view);
       const data = await getCalendarItems(start, end, combinedFilters);
       const currentIds = new Set(items.map((i) => i.id));
@@ -183,11 +185,13 @@ export default function CalendarioPage() {
       }
     }, [currentDate, view, combinedFilters, items]),
     onUpdate: useCallback(async () => {
+      if (isDroppingRef.current) return;
       const { start, end } = getDateRange(currentDate, view);
       const data = await getCalendarItems(start, end, combinedFilters);
       setItems(data);
     }, [currentDate, view, combinedFilters]),
     onDelete: useCallback(async () => {
+      if (isDroppingRef.current) return;
       const { start, end } = getDateRange(currentDate, view);
       const data = await getCalendarItems(start, end, combinedFilters);
       setItems(data);
@@ -242,6 +246,9 @@ export default function CalendarioPage() {
       newEnd = new Date(newStart.getTime() + durationMs).toISOString();
     }
 
+    // Bloquear Realtime durante o drop para evitar duplicação
+    isDroppingRef.current = true;
+
     // Optimistic update
     setItems((prev) =>
       prev.map((item) =>
@@ -264,6 +271,9 @@ export default function CalendarioPage() {
         )
       );
       toast.error('Erro ao mover item', { description: 'Tente novamente.' });
+    } finally {
+      // Liberar Realtime após o drop (com delay para ignorar eventos em trânsito)
+      setTimeout(() => { isDroppingRef.current = false; }, 1000);
     }
   }, [items]);
 
@@ -402,66 +412,75 @@ export default function CalendarioPage() {
 
       {/* Painel de filtros avançados */}
       {showAdvancedFilters && (
-        <div className="flex flex-shrink-0 items-center gap-2 flex-wrap border-b border-slate-800 bg-slate-950/80 px-6 py-2">
+        <div className="flex flex-shrink-0 items-end gap-3 flex-wrap border-b border-slate-800 bg-slate-950/80 px-6 py-3">
           {/* Prioridade */}
-          <Select
-            value={advancedFilters.priorities?.[0] || "__all__"}
-            onValueChange={(val) => handleAdvancedFilterChange('priorities', val === "__all__" ? undefined : [val])}
-          >
-            <SelectTrigger className="w-[140px] h-8 text-xs bg-slate-900 border-slate-700">
-              <SelectValue placeholder="Prioridade" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__all__">Todas</SelectItem>
-              <SelectItem value="urgent">
-                <span className="flex items-center gap-2"><span className="text-[#EF4444]">●</span> Urgente</span>
-              </SelectItem>
-              <SelectItem value="high">
-                <span className="flex items-center gap-2"><span className="text-[#F97316]">●</span> Alta</span>
-              </SelectItem>
-              <SelectItem value="medium">
-                <span className="flex items-center gap-2"><span className="text-[#F59E0B]">●</span> Média</span>
-              </SelectItem>
-              <SelectItem value="low">
-                <span className="flex items-center gap-2"><span className="text-[#6B7280]">●</span> Baixa</span>
-              </SelectItem>
-            </SelectContent>
-          </Select>
+          <div className="flex flex-col gap-1">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Prioridade</span>
+            <Select
+              value={advancedFilters.priorities?.[0] || "__all__"}
+              onValueChange={(val) => handleAdvancedFilterChange('priorities', val === "__all__" ? undefined : [val])}
+            >
+              <SelectTrigger className="w-[140px] h-8 text-xs bg-slate-900 border-slate-700">
+                <SelectValue placeholder="Todas" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">Todas</SelectItem>
+                <SelectItem value="urgent">
+                  <span className="flex items-center gap-2"><span className="text-[#EF4444]">●</span> Urgente</span>
+                </SelectItem>
+                <SelectItem value="high">
+                  <span className="flex items-center gap-2"><span className="text-[#F97316]">●</span> Alta</span>
+                </SelectItem>
+                <SelectItem value="medium">
+                  <span className="flex items-center gap-2"><span className="text-[#F59E0B]">●</span> Média</span>
+                </SelectItem>
+                <SelectItem value="low">
+                  <span className="flex items-center gap-2"><span className="text-[#6B7280]">●</span> Baixa</span>
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
 
           {/* Responsável */}
-          <Select
-            value={advancedFilters.responsibleId || "__all__"}
-            onValueChange={(val) => handleAdvancedFilterChange('responsibleId', val === "__all__" ? undefined : val)}
-          >
-            <SelectTrigger className="w-[160px] h-8 text-xs bg-slate-900 border-slate-700">
-              <SelectValue placeholder="Responsável" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__all__">Todos</SelectItem>
-              {teamMembers.map((member) => (
-                <SelectItem key={member.user_id} value={member.user_id}>
-                  {member.full_name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <div className="flex flex-col gap-1">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Responsável</span>
+            <Select
+              value={advancedFilters.responsibleId || "__all__"}
+              onValueChange={(val) => handleAdvancedFilterChange('responsibleId', val === "__all__" ? undefined : val)}
+            >
+              <SelectTrigger className="w-[160px] h-8 text-xs bg-slate-900 border-slate-700">
+                <SelectValue placeholder="Todos" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">Todos</SelectItem>
+                {teamMembers.map((member) => (
+                  <SelectItem key={member.user_id} value={member.user_id}>
+                    {member.full_name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
 
           {/* Plataforma */}
-          <Select
-            value={advancedFilters.platforms?.[0] || "__all__"}
-            onValueChange={(val) => handleAdvancedFilterChange('platforms', val === "__all__" ? undefined : [val])}
-          >
-            <SelectTrigger className="w-[140px] h-8 text-xs bg-slate-900 border-slate-700">
-              <SelectValue placeholder="Plataforma" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__all__">Todas</SelectItem>
-              <SelectItem value="instagram">Instagram</SelectItem>
-              <SelectItem value="youtube">YouTube</SelectItem>
-              <SelectItem value="tiktok">TikTok</SelectItem>
-              <SelectItem value="facebook">Facebook</SelectItem>
-            </SelectContent>
-          </Select>
+          <div className="flex flex-col gap-1">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Plataforma</span>
+            <Select
+              value={advancedFilters.platforms?.[0] || "__all__"}
+              onValueChange={(val) => handleAdvancedFilterChange('platforms', val === "__all__" ? undefined : [val])}
+            >
+              <SelectTrigger className="w-[140px] h-8 text-xs bg-slate-900 border-slate-700">
+                <SelectValue placeholder="Todas" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">Todas</SelectItem>
+                <SelectItem value="instagram">Instagram</SelectItem>
+                <SelectItem value="youtube">YouTube</SelectItem>
+                <SelectItem value="tiktok">TikTok</SelectItem>
+                <SelectItem value="facebook">Facebook</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
 
           {/* Limpar filtros */}
           {activeFilterCount > 0 && (

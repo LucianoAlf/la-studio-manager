@@ -1,11 +1,14 @@
 // ============================================
-// Message Router — WA-03 (execução de ações)
+// Message Router — WA-04 (memória + consultas)
 // ============================================
 // WA-02: Classifica intenção via Gemini e responde com confirmação
 // WA-03: Executa ações reais após confirmação (INSERT no banco)
+// WA-04: Sistema de memória + consultas reais ao banco
 
 import { classifyMessage, getHelpText } from './gemini-classifier.ts'
 import { executeConfirmedAction } from './action-executor.ts'
+import { loadMemoryContext, formatMemoryForPrompt, saveEpisode, learnFact } from './memory-manager.ts'
+import { handleQueryCalendar, handleQueryCards, handleQueryProjects, handleGenerateReport } from './query-handler.ts'
 import type { ClassificationResult } from './gemini-classifier.ts'
 import type { RouteMessageParams, MessageResponse } from './types.ts'
 
@@ -121,6 +124,36 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
         })
         .eq('id', activeContext.id)
 
+      // WA-04: Salvar episódio + aprender fatos
+      if (result.success && supabase && userId) {
+        const ents = activeContext.context_data?.entities || {}
+
+        saveEpisode(supabase, {
+          userId,
+          summary: `${firstName} confirmou ${activeContext.context_type}: "${ents.title || 'sem título'}".`,
+          entities: {
+            action_type: activeContext.context_type, record_id: result.record_id,
+            title: ents.title, priority: ents.priority, brand: ents.brand, content_type: ents.content_type,
+          },
+          outcome: 'action_completed', importance: 0.6,
+        }).catch(e => console.error('[WA-04] Episode save error:', e))
+
+        if (ents.priority === 'urgent') {
+          learnFact(supabase, {
+            userId, category: 'preference',
+            fact: `${firstName} tende a usar prioridade "urgent" para ${ents.content_type || 'conteúdo'}.`,
+            metadata: { applies_to: activeContext.context_type, content_type: ents.content_type, default_priority: 'urgent' },
+          }).catch(e => console.error('[WA-04] Fact learn error:', e))
+        }
+        if (ents.brand) {
+          learnFact(supabase, {
+            userId, category: 'workflow',
+            fact: `${firstName} trabalha com a marca ${ents.brand}.`,
+            metadata: { applies_to: 'brand_usage', brand: ents.brand },
+          }).catch(e => console.error('[WA-04] Fact learn error:', e))
+        }
+      }
+
       return {
         text: result.message,
         intent: `${activeContext.context_type}_${result.success ? 'executed' : 'failed'}`,
@@ -148,6 +181,16 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
         })
         .eq('id', activeContext.id)
 
+      // WA-04: Registrar cancelamento
+      if (supabase && userId) {
+        saveEpisode(supabase, {
+          userId,
+          summary: `${firstName} cancelou ${activeContext.context_type}: "${activeContext.context_data?.entities?.title || ''}".`,
+          entities: { action_type: activeContext.context_type, cancelled: true },
+          outcome: 'cancelled', importance: 0.2,
+        }).catch(e => console.error('[WA-04] Episode save error:', e))
+      }
+
       return {
         text: `👍 Tudo bem, cancelei! Nenhuma alteração foi feita.\n\nQuando quiser, é só me mandar um novo comando. 😉`,
         intent: `${activeContext.context_type}_cancelled`,
@@ -162,9 +205,23 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
   }
 
   // ========================================
+  // WA-04: CARREGAR MEMÓRIA DO AGENTE
+  // ========================================
+  let memoryPrompt = ''
+  if (supabase && userId) {
+    const memory = await loadMemoryContext(supabase, userId)
+    if (memory) {
+      memoryPrompt = formatMemoryForPrompt(memory)
+      if (memoryPrompt) {
+        console.log(`[WA-04] Memory loaded: ${memory.user_facts.length} facts, ${memory.recent_episodes.length} episodes, ${memory.team_knowledge.length} team`)
+      }
+    }
+  }
+
+  // ========================================
   // CLASSIFICAR MENSAGEM COM GEMINI
   // ========================================
-  const classification = await classifyMessage(parsed.text, firstName, conversationContext)
+  const classification = await classifyMessage(parsed.text, firstName, conversationContext, memoryPrompt)
 
   // ========================================
   // ROTEAR POR INTENÇÃO
@@ -179,33 +236,73 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
     case 'create_reminder':
       return handleCreateReminder(classification, firstName, supabase, userId)
 
-    case 'query_calendar':
-      return {
-        text: classification.response_text || `📅 Vou consultar sua agenda, ${firstName}. (Em breve!)`,
-        intent: classification.intent,
-        confidence: classification.confidence,
+    case 'query_calendar': {
+      const qCtx = { supabase, profileId: userId, authUserId, userName: firstName, entities: classification.entities }
+      const result = await handleQueryCalendar(qCtx)
+
+      saveEpisode(supabase, {
+        userId,
+        summary: `${firstName} consultou agenda (${classification.entities.query_period || 'hoje'}). ${result.resultCount} itens.`,
+        entities: { query_type: 'calendar', period: classification.entities.query_period, result_count: result.resultCount },
+        outcome: 'query_answered',
+        importance: 0.3,
+      }).catch(e => console.error('[WA-04] Episode save error:', e))
+
+      return { text: result.text, intent: 'query_calendar', confidence: classification.confidence }
+    }
+
+    case 'query_cards': {
+      const qCtx = { supabase, profileId: userId, authUserId, userName: firstName, entities: classification.entities }
+      const result = await handleQueryCards(qCtx)
+
+      saveEpisode(supabase, {
+        userId,
+        summary: `${firstName} consultou cards${classification.entities.priority ? ` (${classification.entities.priority})` : ''}${classification.entities.column ? ` coluna ${classification.entities.column}` : ''}. ${result.resultCount} encontrados.`,
+        entities: { query_type: 'cards', priority: classification.entities.priority, column: classification.entities.column, result_count: result.resultCount },
+        outcome: 'query_answered',
+        importance: 0.3,
+      }).catch(e => console.error('[WA-04] Episode save error:', e))
+
+      if (classification.entities.priority) {
+        learnFact(supabase, {
+          userId, category: 'pattern',
+          fact: `${firstName} frequentemente consulta cards com prioridade "${classification.entities.priority}".`,
+          metadata: { applies_to: 'query_cards', priority: classification.entities.priority },
+        }).catch(e => console.error('[WA-04] Fact learn error:', e))
       }
 
-    case 'query_cards':
-      return {
-        text: classification.response_text || `📋 Vou verificar seus cards, ${firstName}. (Em breve!)`,
-        intent: classification.intent,
-        confidence: classification.confidence,
-      }
+      return { text: result.text, intent: 'query_cards', confidence: classification.confidence }
+    }
 
-    case 'query_projects':
-      return {
-        text: classification.response_text || `📊 Vou consultar o projeto, ${firstName}. (Em breve!)`,
-        intent: classification.intent,
-        confidence: classification.confidence,
-      }
+    case 'query_projects': {
+      const qCtx = { supabase, profileId: userId, authUserId, userName: firstName, entities: classification.entities }
+      const result = await handleQueryProjects(qCtx)
 
-    case 'generate_report':
-      return {
-        text: classification.response_text || `📈 Vou gerar o relatório, ${firstName}. (Em breve!)`,
-        intent: classification.intent,
-        confidence: classification.confidence,
-      }
+      saveEpisode(supabase, {
+        userId,
+        summary: `${firstName} consultou status do projeto. ${result.resultCount} cards total.`,
+        entities: { query_type: 'projects', result_count: result.resultCount },
+        outcome: 'query_answered',
+        importance: 0.4,
+      }).catch(e => console.error('[WA-04] Episode save error:', e))
+
+      return { text: result.text, intent: 'query_projects', confidence: classification.confidence }
+    }
+
+    case 'generate_report': {
+      const qCtx = { supabase, profileId: userId, authUserId, userName: firstName, entities: classification.entities }
+      const result = await handleGenerateReport(qCtx)
+
+      saveEpisode(supabase, {
+        userId,
+        summary: `${firstName} pediu relatório (${classification.entities.query_period || 'esta semana'}). ${result.resultCount} itens.`,
+        entities: { query_type: 'report', period: classification.entities.query_period, result_count: result.resultCount },
+        outcome: 'query_answered',
+        importance: 0.5,
+      }).catch(e => console.error('[WA-04] Episode save error:', e))
+
+      return { text: result.text, intent: 'generate_report', confidence: classification.confidence }
+    }
 
     case 'update_card':
       return {
@@ -221,12 +318,17 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
         confidence: 1.0,
       }
 
-    case 'general_chat':
-      return {
-        text: classification.response_text,
-        intent: 'general_chat',
-        confidence: classification.confidence,
+    case 'general_chat': {
+      const msgPreview = (parsed.text || '').substring(0, 80)
+      if (supabase && userId) {
+        saveEpisode(supabase, {
+          userId,
+          summary: `${firstName} conversa livre: "${msgPreview}"`,
+          outcome: 'conversation', importance: 0.1,
+        }).catch(e => console.error('[WA-04] Episode save error:', e))
       }
+      return { text: classification.response_text, intent: 'general_chat', confidence: classification.confidence }
+    }
 
     case 'unknown':
     default:

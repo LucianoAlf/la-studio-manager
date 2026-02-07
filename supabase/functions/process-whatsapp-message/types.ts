@@ -94,3 +94,23 @@ export interface MessageResponse {
   confidence: number | null
   metadata?: Record<string, unknown>
 }
+
+// ============================================
+// WA-04: Tipos de Memória (referência)
+// Os tipos canônicos estão em memory-manager.ts.
+// ============================================
+export interface MemoryContextRef {
+  recent_episodes: Array<{
+    summary: string; outcome: string; entities: Record<string, any>
+    importance: number; created_at: string
+  }>
+  user_facts: Array<{
+    category: string; fact: string; metadata: Record<string, any>
+    confidence: number; reinforcement_count: number; user_confirmed: boolean
+  }>
+  team_knowledge: Array<{
+    category: string; fact: string; scope: string | null
+    metadata: Record<string, any>; is_verified: boolean
+  }>
+  retrieved_at: string
+}

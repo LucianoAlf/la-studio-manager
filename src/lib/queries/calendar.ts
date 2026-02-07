@@ -24,7 +24,8 @@ export async function getCalendarItems(startDate: string, endDate: string, filte
     query = query.in("type", filters.types);
   }
   if (filters?.priorities && filters.priorities.length > 0) {
-    query = query.in("priority", filters.priorities);
+    const orClauses = filters.priorities.map((p) => `metadata->>priority.eq.${p}`).join(",");
+    query = query.or(orClauses);
   }
   if (filters?.responsibleId) {
     query = query.eq("responsible_user_id", filters.responsibleId);

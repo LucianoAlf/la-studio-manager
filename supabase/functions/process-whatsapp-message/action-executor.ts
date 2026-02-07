@@ -439,7 +439,18 @@ export function resolveRelativeDate(dateStr: string, timeStr?: string): Date | n
   }
   // --- YYYY-MM-DD (ISO) ---
   else if (/^\d{4}-\d{2}-\d{2}$/.test(normalizedDate)) {
-    result = new Date(normalizedDate + 'T12:00:00')
+    const parts = normalizedDate.split('-')
+    let isoYear = parseInt(parts[0])
+    const isoMonth = parseInt(parts[1]) - 1
+    const isoDay = parseInt(parts[2])
+    // Fix: Gemini às vezes retorna ano errado (2024/2025 em vez do ano atual)
+    // Se o ano for anterior ao atual, corrigir para o ano atual
+    const currentYear = spNow.getFullYear()
+    if (isoYear < currentYear) {
+      console.warn(`[WA-03] ISO date year ${isoYear} < current ${currentYear}, fixing to ${currentYear}`)
+      isoYear = currentYear
+    }
+    result = new Date(isoYear, isoMonth, isoDay, 12, 0, 0)
   }
   // --- "próxima semana", "semana que vem" ---
   else if (normalizedDate.includes('próxima semana') || normalizedDate.includes('proxima semana') || normalizedDate.includes('semana que vem')) {

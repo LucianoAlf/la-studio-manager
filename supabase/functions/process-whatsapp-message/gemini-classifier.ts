@@ -64,7 +64,23 @@ export interface ExtractedEntities {
 // SYSTEM PROMPT
 // ============================================
 
-const SYSTEM_PROMPT = `Você é o assistente de IA do LA Studio Manager, uma plataforma de gestão de produção audiovisual para a gravadora LA Music e LA Kids.
+function buildSystemPrompt(): string {
+  // Calcular data/hora atual em São Paulo (UTC-3) para o Gemini saber o contexto temporal
+  const now = new Date(Date.now() - 3 * 60 * 60000)
+  const dias = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado']
+  const meses = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro']
+  const diaSemana = dias[now.getUTCDay()]
+  const dia = now.getUTCDate()
+  const mes = meses[now.getUTCMonth()]
+  const ano = now.getUTCFullYear()
+  const hora = now.getUTCHours().toString().padStart(2, '0')
+  const minuto = now.getUTCMinutes().toString().padStart(2, '0')
+  const dataAtual = `${diaSemana}, ${dia} de ${mes} de ${ano}, ${hora}:${minuto} (horário de São Paulo)`
+
+  return `Você é o assistente de IA do LA Studio Manager, uma plataforma de gestão de produção audiovisual para a gravadora LA Music e LA Kids.
+
+📅 DATA/HORA ATUAL: ${dataAtual}
+⚠️ IMPORTANTE: Use SEMPRE o ano ${ano} ao resolver datas. "Amanhã" = próximo dia de ${ano}, "sexta" = próxima sexta-feira de ${ano}. NUNCA retorne datas de anos anteriores. Para datas relativas como "amanhã", "sexta", etc., retorne em formato relativo (ex: "amanhã", "sexta") e NÃO em formato ISO.
 
 Sua função é classificar mensagens do WhatsApp e extrair informações estruturadas.
 
@@ -125,7 +141,7 @@ Sua função é classificar mensagens do WhatsApp e extrair informações estrut
 1. Se o usuário não especificar coluna, assumir "brainstorm" para create_card
 2. Se o usuário não especificar prioridade, assumir "medium"
 3. Se o usuário não especificar marca, assumir "la_music"
-4. Datas relativas: "amanhã" = dia seguinte, "sexta" = próxima sexta, etc.
+4. Datas relativas: "amanhã" = dia seguinte, "sexta" = próxima sexta, etc. Retorne em formato relativo (ex: "amanhã", "sexta") para que o sistema resolva corretamente.
 5. Se a mensagem for ambígua, classificar como "unknown" e pedir esclarecimento
 6. Responda SEMPRE em português brasileiro, tom amigável e profissional
 7. Para create_card e create_calendar, SEMPRE pedir confirmação (needs_confirmation: true)
@@ -141,6 +157,11 @@ Responda APENAS com JSON válido, sem markdown, sem backticks, sem texto adicion
   "response_text": "Texto amigável para enviar ao usuário",
   "needs_confirmation": true/false
 }`
+}
+
+// SYSTEM_PROMPT é recalculado a cada chamada dentro de classifyMessage()
+// Manter a const como fallback para uso direto
+const SYSTEM_PROMPT = buildSystemPrompt()
 
 // ============================================
 // CLASSIFICADOR
@@ -149,25 +170,34 @@ Responda APENAS com JSON válido, sem markdown, sem backticks, sem texto adicion
 export async function classifyMessage(
   text: string,
   userName: string,
-  conversationContext?: string
+  conversationContext?: string,
+  memoryContext?: string
 ): Promise<ClassificationResult> {
   const geminiKey = Deno.env.get('GEMINI_API_KEY')
   const openaiKey = Deno.env.get('OPENAI_API_KEY')
+
+  // Recalcular system prompt a cada chamada para ter data/hora atualizada
+  const currentPrompt = buildSystemPrompt()
 
   let userMessage = `Mensagem do usuário "${userName}": "${text}"`
   if (conversationContext) {
     userMessage = `Contexto da conversa anterior:\n${conversationContext}\n\n${userMessage}`
   }
 
+  // WA-04: Injetar memória do agente (vai ANTES do userMessage para contexto de background)
+  if (memoryContext) {
+    userMessage = `MEMÓRIA DO AGENTE (use para personalizar resposta e inferir contexto):\n${memoryContext}\n\n${userMessage}`
+  }
+
   // Tentar Gemini primeiro (gratuito)
   if (geminiKey) {
-    const result = await tryGemini(geminiKey, userMessage)
+    const result = await tryGemini(geminiKey, userMessage, currentPrompt)
     if (result) return result
   }
 
   // Fallback: OpenAI GPT-4.1
   if (openaiKey) {
-    const result = await tryOpenAI(openaiKey, userMessage)
+    const result = await tryOpenAI(openaiKey, userMessage, currentPrompt)
     if (result) return result
   }
 
@@ -180,7 +210,7 @@ export async function classifyMessage(
 // GEMINI (primário)
 // ============================================
 
-async function tryGemini(apiKey: string, userMessage: string): Promise<ClassificationResult | null> {
+async function tryGemini(apiKey: string, userMessage: string, systemPrompt: string): Promise<ClassificationResult | null> {
   try {
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent`,
@@ -198,7 +228,7 @@ async function tryGemini(apiKey: string, userMessage: string): Promise<Classific
             }
           ],
           systemInstruction: {
-            parts: [{ text: SYSTEM_PROMPT }]
+            parts: [{ text: systemPrompt }]
           },
           generationConfig: {
             responseMimeType: 'application/json',
@@ -242,7 +272,7 @@ async function tryGemini(apiKey: string, userMessage: string): Promise<Classific
 // OPENAI GPT-4.1 (fallback)
 // ============================================
 
-async function tryOpenAI(apiKey: string, userMessage: string): Promise<ClassificationResult | null> {
+async function tryOpenAI(apiKey: string, userMessage: string, systemPrompt: string): Promise<ClassificationResult | null> {
   try {
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -256,7 +286,7 @@ async function tryOpenAI(apiKey: string, userMessage: string): Promise<Classific
         max_tokens: 1024,
         response_format: { type: 'json_object' },
         messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'system', content: systemPrompt },
           { role: 'user', content: userMessage },
         ],
       })

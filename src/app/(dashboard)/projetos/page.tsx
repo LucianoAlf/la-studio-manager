@@ -276,82 +276,97 @@ export default function ProjetosPage() {
 
       {/* Painel de filtros Kanban */}
       {showKanbanFilters && (activeTab === "kanban" || activeTab === "lista" || activeTab === "dashboard") && (
-        <div className="flex flex-shrink-0 items-center gap-2 flex-wrap border-b border-slate-800 bg-slate-950/80 px-6 py-2">
+        <div className="flex flex-shrink-0 items-end gap-3 flex-wrap border-b border-slate-800 bg-slate-950/80 px-6 py-3">
           {/* Busca */}
-          <div className="flex items-center gap-1.5 rounded-md border border-slate-700 bg-slate-900 px-2 h-8">
-            <MagnifyingGlass size={14} className="text-slate-500" />
-            <input
-              value={searchInput}
-              onChange={(e) => handleSearchChange(e.target.value)}
-              placeholder="Buscar por título..."
-              className="bg-transparent text-xs text-slate-200 outline-none placeholder:text-slate-600 w-[140px]"
-            />
+          <div className="flex flex-col gap-1">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Busca</span>
+            <div className="flex items-center gap-1.5 rounded-md border border-slate-700 bg-slate-900 px-2 h-8">
+              <MagnifyingGlass size={14} className="text-slate-500" />
+              <input
+                value={searchInput}
+                onChange={(e) => handleSearchChange(e.target.value)}
+                placeholder="Buscar por título..."
+                className="bg-transparent text-xs text-slate-200 outline-none placeholder:text-slate-600 w-[140px]"
+              />
+            </div>
           </div>
 
           {/* Prioridade */}
-          <Select
-            value={kanbanFilters.priorities?.[0] || "__all__"}
-            onValueChange={(val) => handleKanbanFilterChange('priorities', val === "__all__" ? undefined : [val])}
-          >
-            <SelectTrigger className="w-[130px] h-8 text-xs bg-slate-900 border-slate-700">
-              <SelectValue placeholder="Prioridade" />
-            </SelectTrigger>
-            <SelectContent>
-              <ShadSelectItem value="__all__">Todas</ShadSelectItem>
-              <ShadSelectItem value="urgent">Urgente</ShadSelectItem>
-              <ShadSelectItem value="high">Alta</ShadSelectItem>
-              <ShadSelectItem value="medium">Média</ShadSelectItem>
-              <ShadSelectItem value="low">Baixa</ShadSelectItem>
-            </SelectContent>
-          </Select>
+          <div className="flex flex-col gap-1">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Prioridade</span>
+            <Select
+              value={kanbanFilters.priorities?.[0] || "__all__"}
+              onValueChange={(val) => handleKanbanFilterChange('priorities', val === "__all__" ? undefined : [val])}
+            >
+              <SelectTrigger className="w-[130px] h-8 text-xs bg-slate-900 border-slate-700">
+                <SelectValue placeholder="Todas" />
+              </SelectTrigger>
+              <SelectContent>
+                <ShadSelectItem value="__all__">Todas</ShadSelectItem>
+                <ShadSelectItem value="urgent">Urgente</ShadSelectItem>
+                <ShadSelectItem value="high">Alta</ShadSelectItem>
+                <ShadSelectItem value="medium">Média</ShadSelectItem>
+                <ShadSelectItem value="low">Baixa</ShadSelectItem>
+              </SelectContent>
+            </Select>
+          </div>
 
           {/* Responsável */}
-          <Select
-            value={kanbanFilters.responsibleId || "__all__"}
-            onValueChange={(val) => handleKanbanFilterChange('responsibleId', val === "__all__" ? undefined : val)}
-          >
-            <SelectTrigger className="w-[150px] h-8 text-xs bg-slate-900 border-slate-700">
-              <SelectValue placeholder="Responsável" />
-            </SelectTrigger>
-            <SelectContent>
-              <ShadSelectItem value="__all__">Todos</ShadSelectItem>
-              {users.map((u) => (
-                <ShadSelectItem key={u.user_id} value={u.user_id}>{u.full_name}</ShadSelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <div className="flex flex-col gap-1">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Responsável</span>
+            <Select
+              value={kanbanFilters.responsibleId || "__all__"}
+              onValueChange={(val) => handleKanbanFilterChange('responsibleId', val === "__all__" ? undefined : val)}
+            >
+              <SelectTrigger className="w-[150px] h-8 text-xs bg-slate-900 border-slate-700">
+                <SelectValue placeholder="Todos" />
+              </SelectTrigger>
+              <SelectContent>
+                <ShadSelectItem value="__all__">Todos</ShadSelectItem>
+                {users.map((u) => (
+                  <ShadSelectItem key={u.user_id} value={u.user_id}>{u.full_name}</ShadSelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
 
           {/* Plataforma */}
-          <Select
-            value={kanbanFilters.platforms?.[0] || "__all__"}
-            onValueChange={(val) => handleKanbanFilterChange('platforms', val === "__all__" ? undefined : [val])}
-          >
-            <SelectTrigger className="w-[130px] h-8 text-xs bg-slate-900 border-slate-700">
-              <SelectValue placeholder="Plataforma" />
-            </SelectTrigger>
-            <SelectContent>
-              <ShadSelectItem value="__all__">Todas</ShadSelectItem>
-              <ShadSelectItem value="instagram">Instagram</ShadSelectItem>
-              <ShadSelectItem value="youtube">YouTube</ShadSelectItem>
-              <ShadSelectItem value="tiktok">TikTok</ShadSelectItem>
-              <ShadSelectItem value="facebook">Facebook</ShadSelectItem>
-            </SelectContent>
-          </Select>
+          <div className="flex flex-col gap-1">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Plataforma</span>
+            <Select
+              value={kanbanFilters.platforms?.[0] || "__all__"}
+              onValueChange={(val) => handleKanbanFilterChange('platforms', val === "__all__" ? undefined : [val])}
+            >
+              <SelectTrigger className="w-[130px] h-8 text-xs bg-slate-900 border-slate-700">
+                <SelectValue placeholder="Todas" />
+              </SelectTrigger>
+              <SelectContent>
+                <ShadSelectItem value="__all__">Todas</ShadSelectItem>
+                <ShadSelectItem value="instagram">Instagram</ShadSelectItem>
+                <ShadSelectItem value="youtube">YouTube</ShadSelectItem>
+                <ShadSelectItem value="tiktok">TikTok</ShadSelectItem>
+                <ShadSelectItem value="facebook">Facebook</ShadSelectItem>
+              </SelectContent>
+            </Select>
+          </div>
 
           {/* Marca */}
-          <Select
-            value={kanbanFilters.brand || "__all__"}
-            onValueChange={(val) => handleKanbanFilterChange('brand', val === "__all__" ? undefined : val)}
-          >
-            <SelectTrigger className="w-[130px] h-8 text-xs bg-slate-900 border-slate-700">
-              <SelectValue placeholder="Marca" />
-            </SelectTrigger>
-            <SelectContent>
-              <ShadSelectItem value="__all__">Todas</ShadSelectItem>
-              <ShadSelectItem value="la_music">LA Music</ShadSelectItem>
-              <ShadSelectItem value="la_kids">LA Kids</ShadSelectItem>
-            </SelectContent>
-          </Select>
+          <div className="flex flex-col gap-1">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Marca</span>
+            <Select
+              value={kanbanFilters.brand || "__all__"}
+              onValueChange={(val) => handleKanbanFilterChange('brand', val === "__all__" ? undefined : val)}
+            >
+              <SelectTrigger className="w-[130px] h-8 text-xs bg-slate-900 border-slate-700">
+                <SelectValue placeholder="Todas" />
+              </SelectTrigger>
+              <SelectContent>
+                <ShadSelectItem value="__all__">Todas</ShadSelectItem>
+                <ShadSelectItem value="la_music">LA Music</ShadSelectItem>
+                <ShadSelectItem value="la_kids">LA Kids</ShadSelectItem>
+              </SelectContent>
+            </Select>
+          </div>
 
           {/* Limpar */}
           {activeKanbanFilterCount > 0 && (
