@@ -20,23 +20,25 @@ export function getProgressFromColumn(
   return slugProgress[column.slug] ?? Math.round((column.position / totalColumns) * 100);
 }
 
-// Status display baseado no slug da coluna
+// Fallback de emojis por slug (usado quando coluna não tem emoji salvo)
+const SLUG_EMOJI_FALLBACK: Record<string, string> = {
+  brainstorming: "🔮", planning: "📋", todo: "📌", capturing: "🎬",
+  editing: "✂️", awaiting_approval: "✅", approved: "👍",
+  published: "🚀", archived: "📦",
+};
+
+// Status display baseado nos dados da coluna (banco > fallback)
 export function getStatusFromColumn(
   column: KanbanColumn | null | undefined
 ): { label: string; color: string; emoji: string; bgClass: string } {
   if (!column) return { label: "Sem status", color: "#6B7280", emoji: "❓", bgClass: "bg-slate-500/15 text-slate-400" };
-  const map: Record<string, { label: string; color: string; emoji: string; bgClass: string }> = {
-    brainstorming:     { label: "Brainstorm",  color: "#8B5CF6", emoji: "🔮", bgClass: "bg-[#8B5CF6]/15 text-[#A78BFA]" },
-    planning:          { label: "Planning",    color: "#3B82F6", emoji: "📋", bgClass: "bg-[#3B82F6]/15 text-[#60A5FA]" },
-    todo:              { label: "To Do",       color: "#10B981", emoji: "📌", bgClass: "bg-[#10B981]/15 text-[#34D399]" },
-    capturing:         { label: "Captando",    color: "#F59E0B", emoji: "🎬", bgClass: "bg-[#F59E0B]/15 text-[#FBBF24]" },
-    editing:           { label: "Editando",    color: "#F97316", emoji: "✂️", bgClass: "bg-[#F97316]/15 text-[#FB923C]" },
-    awaiting_approval: { label: "Aprovação",   color: "#22C55E", emoji: "✅", bgClass: "bg-[#22C55E]/15 text-[#4ADE80]" },
-    approved:          { label: "Aprovado",    color: "#38C8DB", emoji: "👍", bgClass: "bg-[#38C8DB]/15 text-[#38C8DB]" },
-    published:         { label: "Publicado",   color: "#6366F1", emoji: "🚀", bgClass: "bg-[#6366F1]/15 text-[#818CF8]" },
-    archived:          { label: "Arquivado",   color: "#5A7A82", emoji: "📦", bgClass: "bg-[#5A7A82]/15 text-[#5A7A82]" },
-  };
-  return map[column.slug] ?? { label: column.name, color: column.color ?? "#6B7280", emoji: "📄", bgClass: "bg-slate-500/15 text-slate-400" };
+
+  const color = column.color ?? "#6B7280";
+  const emoji = column.emoji ?? SLUG_EMOJI_FALLBACK[column.slug] ?? "📄";
+  const label = column.name;
+  const bgClass = `bg-[${color}]/15 text-[${color}]`;
+
+  return { label, color, emoji, bgClass };
 }
 
 // Prioridade para badge

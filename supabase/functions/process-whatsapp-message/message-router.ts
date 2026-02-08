@@ -7,15 +7,17 @@
 // WA-06: Processamento de áudio (transcrição) e imagem (Vision)
 
 import { classifyMessage, getHelpText } from './gemini-classifier.ts'
-import { executeConfirmedAction } from './action-executor.ts'
+import { executeConfirmedAction, checkCalendarConflicts } from './action-executor.ts'
 import { loadMemoryContext, formatMemoryForPrompt, saveEpisode, learnFact } from './memory-manager.ts'
 import { handleQueryCalendar, handleQueryCards, handleQueryProjects, handleGenerateReport } from './query-handler.ts'
 import { transcribeAudio } from './audio-handler.ts'
 import { analyzeImage } from './image-handler.ts'
-import { getPendingAction, clearPendingAction, savePendingAction, processFollowUpResponse } from './followup-handler.ts'
+import { getPendingAction, clearPendingAction, savePendingAction, processFollowUpResponse, smartProcessFollowUp } from './followup-handler.ts'
 import type { PendingAction } from './followup-handler.ts'
 import { generateFollowUp, getMissingFields, buildPartialSummary } from './mike-personality.ts'
-import { getEventConfirmation, processParticipantResponse, notifyParticipants, parseParticipantNames } from './participant-notifier.ts'
+import { getEventConfirmation, processParticipantResponse, notifyParticipants, parseParticipantNames, findParticipantByName, getPendingParticipantPhone, processPhoneResponse, savePendingParticipantPhone, getPendingSaveContact, processSaveContactResponse, saveContact, queryContacts } from './participant-notifier.ts'
+import type { PendingParticipantPhone } from './participant-notifier.ts'
+import { sendTextMessage } from './send-message.ts'
 import type { ClassificationResult } from './gemini-classifier.ts'
 import type { RouteMessageParams, MessageResponse } from './types.ts'
 
@@ -91,7 +93,7 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
   if (eventConfirmation) {
     console.log(`[NOTIFY] Resposta de confirmação de ${firstName} para evento "${eventConfirmation.eventTitle}"`)
 
-    const responseMessage = await processParticipantResponse(
+    const responseResult = await processParticipantResponse(
       supabase,
       params.uazapiUrl,
       params.uazapiToken,
@@ -99,21 +101,67 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
       parsed.text
     )
 
-    // Determinar intent baseado na resposta
-    const normalized = parsed.text.trim().toLowerCase().replace(/[.,!?;:]+$/g, '').trim()
-    const confirmWords = ['sim', 'yes', 's', 'ok', 'confirmo', 'beleza', 'bora', 'pode ser', 'claro', 'vou', 'vou sim', 'tamo junto', 'pode']
-    const declineWords = ['não', 'nao', 'no', 'n', 'não posso', 'nao posso', 'cancelar', 'não vou', 'nao vou', 'não dá', 'nao da', 'não vai dar', 'nao vai dar']
-    const isConfirm = confirmWords.includes(normalized)
-    const isDecline = declineWords.includes(normalized)
-
     let intent = 'event_confirmation_ambiguous'
-    if (isConfirm) intent = 'event_confirmed'
-    else if (isDecline) intent = 'event_declined'
+    if (responseResult.confirmed) intent = 'event_confirmed'
+    else if (responseResult.declined) intent = 'event_declined'
 
     return {
-      text: responseMessage,
+      text: responseResult.message,
       intent,
       confidence: 1.0,
+    }
+  }
+
+  // ========================================
+  // WA-06.8: VERIFICAR NÚMERO PENDENTE DE PARTICIPANTE NÃO CADASTRADO
+  // Se o Mike pediu o número de um participante, a próxima mensagem é o número.
+  // Prioridade: após event_confirmation, antes de follow-up e NLP.
+  // NOTA: Se existe contexto awaiting_participant_phone, o handler abaixo trata (cria evento depois)
+  // ========================================
+  const pendingPhone = await getPendingParticipantPhone(supabase, userId)
+  if (pendingPhone) {
+    // Verificar se NÃO estamos no fluxo de pré-criação (awaiting_participant_phone)
+    // Nesse caso, o handler de contexto abaixo vai processar e criar o evento
+    const { data: calCtx } = await supabase
+      .from('whatsapp_conversation_context')
+      .select('context_data')
+      .eq('user_id', userId)
+      .eq('is_active', true)
+      .eq('context_type', 'creating_calendar')
+      .maybeSingle()
+
+    const isPreCreationFlow = calCtx?.context_data?.step === 'awaiting_participant_phone'
+
+    if (!isPreCreationFlow) {
+      console.log(`[NOTIFY-PHONE] Resposta de número para ${pendingPhone.participantName} de ${firstName}`)
+      const phoneResult = await processPhoneResponse(
+        supabase, params.uazapiUrl, params.uazapiToken,
+        pendingPhone, parsed.text
+      )
+      if (phoneResult.handled) {
+        return {
+          text: phoneResult.message,
+          intent: 'pending_participant_phone_response',
+          confidence: 1.0,
+        }
+      }
+    }
+  }
+
+  // ========================================
+  // WA-06.8: VERIFICAR "QUER SALVAR NA AGENDA?"
+  // Se o Mike perguntou se quer salvar contato na agenda, processar resposta.
+  // ========================================
+  const pendingSave = await getPendingSaveContact(supabase, userId)
+  if (pendingSave) {
+    console.log(`[CONTACTS] Resposta de salvar contato: ${pendingSave.contactName} de ${firstName}`)
+    const saveResult = await processSaveContactResponse(supabase, pendingSave, parsed.text, authUserId)
+    if (saveResult.handled) {
+      return {
+        text: saveResult.message,
+        intent: 'pending_save_contact_response',
+        confidence: 1.0,
+      }
     }
   }
 
@@ -127,7 +175,15 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
   if (pending) {
     console.log(`[FOLLOWUP] Ação pendente: ${pending.action}, aguardando: ${pending.waitingForField}`)
 
-    const followUpResult = processFollowUpResponse(pending, parsed.text)
+    // WA-06.8: Buscar membros da equipe para resolver "eu", nomes, etc.
+    const { data: teamData } = await supabase
+      .from('user_profiles')
+      .select('full_name')
+      .eq('is_active', true)
+    const teamMembers = (teamData || []).map((u: { full_name: string }) => u.full_name)
+
+    // WA-06.8: Smart Follow-up — usa Gemini para respostas complexas
+    const followUpResult = await smartProcessFollowUp(pending, parsed.text, firstName, teamMembers)
 
     if (!followUpResult) {
       // Cancelou ou mudou de assunto — limpar e continuar fluxo normal
@@ -186,6 +242,7 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
 
   // ========================================
   // VERIFICAR CONTEXTO ATIVO (sim/não)
+  // Excluir group_session e pending_action (tratados separadamente)
   // ========================================
   let conversationContext: string | undefined
 
@@ -194,15 +251,452 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
     .select('*')
     .eq('user_id', userId)
     .eq('is_active', true)
+    .not('context_type', 'in', '("group_session","pending_action")')
     .order('updated_at', { ascending: false })
     .limit(1)
     .maybeSingle()
+
+  // ========================================
+  // WA-06.9: PARTICIPANTE RECUSOU — criador decide se mantém evento
+  // ========================================
+  if (activeContext?.context_type === 'awaiting_decline_decision') {
+    const lower = parsed.text.toLowerCase().trim().replace(/[.,!?;:]+$/g, '').trim()
+    const isYes = ['sim', 's', 'yes', 'y', 'pode', 'ok', 'bora', 'mantém', 'mantem', 'manter', 'quero', 'isso'].includes(lower)
+    const isNo = ['não', 'nao', 'n', 'no', 'cancela', 'deixa', 'esquece', 'remove', 'deleta', 'apaga'].includes(lower)
+
+    const declineData = activeContext.context_data || {}
+
+    if (isYes) {
+      await supabase
+        .from('whatsapp_conversation_context')
+        .update({ is_active: false, updated_at: new Date().toISOString() })
+        .eq('id', activeContext.id)
+      return {
+        text: `Ok, mantive o evento *${declineData.eventTitle}* na agenda. ${declineData.participantName} não vai participar, mas o evento segue! 👍`,
+        intent: 'decline_decision_keep',
+        confidence: 1.0,
+      }
+    }
+
+    if (isNo) {
+      // Deletar o evento do calendário
+      if (declineData.eventId) {
+        await supabase
+          .from('calendar_items')
+          .update({ deleted_at: new Date().toISOString() })
+          .eq('id', declineData.eventId)
+      }
+      await supabase
+        .from('whatsapp_conversation_context')
+        .update({ is_active: false, updated_at: new Date().toISOString() })
+        .eq('id', activeContext.id)
+      return {
+        text: `Ok, removi o evento *${declineData.eventTitle}* da agenda.`,
+        intent: 'decline_decision_remove',
+        confidence: 1.0,
+      }
+    }
+
+    // Resposta ambígua — re-perguntar
+    return {
+      text: `${declineData.participantName} recusou a *${declineData.eventTitle}*. Quer manter o evento mesmo assim? (sim/não)`,
+      intent: 'decline_decision_ambiguous',
+      confidence: 1.0,
+    }
+  }
+
+  // ========================================
+  // WA-06.8: CONFLITO DE HORÁRIO — aguardando "quer marcar mesmo assim?"
+  // ========================================
+  if (activeContext?.context_data?.step === 'awaiting_conflict_confirmation') {
+    const lower = parsed.text.toLowerCase().trim().replace(/[.,!?;:]+$/g, '').trim()
+    const isYes = ['sim', 's', 'yes', 'y', 'pode', 'ok', 'bora', 'marca', 'confirma', 'isso', 'quero', 'manda'].includes(lower)
+    const isNo = ['não', 'nao', 'n', 'no', 'cancela', 'deixa', 'esquece', 'desculpa', 'foi mal', 'não precisa', 'nao precisa'].includes(lower)
+
+    if (isNo) {
+      await supabase
+        .from('whatsapp_conversation_context')
+        .update({ is_active: false, context_data: { ...activeContext.context_data, step: 'cancelled_conflict' }, updated_at: new Date().toISOString() })
+        .eq('id', activeContext.id)
+      return { text: `Ok, cancelei. Se precisar de outra coisa, só avisar.`, intent: 'conflict_cancelled', confidence: 1.0 }
+    }
+
+    if (isYes) {
+      // Verificar TODOS os participantes de uma vez (suporte a múltiplos)
+      const ents = activeContext.context_data?.entities || {}
+      if (ents.participants) {
+        const participantNames = parseParticipantNames(ents.participants as string)
+        const notFoundNames: string[] = []
+        for (const pName of participantNames) {
+          const found = await findParticipantByName(supabase, pName)
+          if (!found) notFoundNames.push(pName)
+        }
+
+        if (notFoundNames.length > 0) {
+          const currentName = notFoundNames[0]
+          const remainingQueue = notFoundNames.slice(1)
+
+          const pendingPhoneData: PendingParticipantPhone = {
+            type: 'pending_participant_phone',
+            participantName: currentName,
+            eventId: '',
+            eventTitle: (ents.title as string) || 'Evento',
+            eventDate: (ents.date as string) || '',
+            eventTime: (ents.time as string) || null,
+            eventLocation: (ents.location as string) || null,
+            creatorUserId: userId,
+            creatorName: firstName,
+            creatorPhone: user.phone_number,
+            groupJid: params.groupJid || null,
+          }
+          await savePendingParticipantPhone(supabase, userId, pendingPhoneData)
+          await supabase
+            .from('whatsapp_conversation_context')
+            .update({
+              context_data: {
+                ...activeContext.context_data,
+                step: 'awaiting_participant_phone',
+                pending_participants_queue: remainingQueue,
+                resolved_participants: [],
+              },
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', activeContext.id)
+
+          const queueMsg = remainingQueue.length > 0
+            ? `\n\n_(Depois vou pedir o número de: ${remainingQueue.join(', ')})_`
+            : ''
+
+          return { text: `${currentName} não está cadastrado. Me passa o WhatsApp dele pra eu notificar? (manda o número com DDD ou "não" pra pular)${queueMsg}`, intent: 'pending_participant_phone', confidence: 1.0 }
+        }
+      }
+
+      // Sem problemas de participante — criar evento
+      await supabase
+        .from('whatsapp_conversation_context')
+        .update({ context_data: { ...activeContext.context_data, step: 'awaiting_confirmation' }, updated_at: new Date().toISOString() })
+        .eq('id', activeContext.id)
+      // Redirecionar para o fluxo normal de confirmação (recursão controlada)
+      const result = await executeConfirmedAction(activeContext.context_type, { supabase, profileId: userId, authUserId, userName: firstName, phone, entities: ents })
+      await supabase
+        .from('whatsapp_conversation_context')
+        .update({ is_active: false, context_data: { ...activeContext.context_data, step: result.success ? 'executed' : 'execution_failed', executed_at: new Date().toISOString(), record_id: result.record_id || null }, updated_at: new Date().toISOString() })
+        .eq('id', activeContext.id)
+
+      // Notificar participantes cadastrados após criar
+      if (result.success && ents.participants) {
+        const participantNames = parseParticipantNames(ents.participants as string)
+        if (participantNames.length > 0) {
+          const notifyResults = await notifyParticipants(supabase, params.uazapiUrl, params.uazapiToken, {
+            eventId: result.record_id || '', eventTitle: (ents.title as string) || 'Evento', eventDate: (ents.date as string) || '',
+            eventTime: (ents.time as string) || null, eventLocation: (ents.location as string) || null,
+            creatorUserId: userId, creatorName: firstName, creatorPhone: user.phone_number, participantNames, groupJid: params.groupJid || null,
+          })
+          const notified = notifyResults.filter(r => r.notified)
+          if (notified.length > 0) result.message += `\nNotifiquei ${notified.map(r => r.participantName).join(', ')} pelo WhatsApp.`
+        }
+      }
+
+      return { text: result.message, intent: result.success ? 'creating_calendar_executed' : 'creating_calendar_failed', confidence: 1.0 }
+    }
+
+    // Resposta ambígua
+    return { text: `Não entendi. Quer marcar a reunião mesmo assim? (sim/não)`, intent: 'conflict_warning', confidence: 1.0 }
+  }
+
+  // ========================================
+  // WA-06.8: PARTICIPANTE NÃO CADASTRADO — aguardando número (contexto creating_calendar ativo)
+  // Após receber número: envia convite → NÃO cria evento → espera confirmação do participante
+  // ========================================
+  if (activeContext?.context_data?.step === 'awaiting_participant_phone') {
+    const pendingPhone = await getPendingParticipantPhone(supabase, userId)
+    if (pendingPhone) {
+      const phoneResult = await processPhoneResponse(supabase, params.uazapiUrl, params.uazapiToken, pendingPhone, parsed.text)
+      if (phoneResult.handled) {
+        const lower = parsed.text.trim().toLowerCase()
+        const firstWord = lower.split(/[\s.,!?;:]+/)[0]
+        const isSkip = ['não', 'nao', 'n', 'no', 'deixa', 'esquece', 'cancela'].includes(lower) || ['não', 'nao', 'no', 'n'].includes(firstWord)
+        const ents = activeContext.context_data?.entities || {}
+        const pName = pendingPhone.participantName
+        const queue: string[] = activeContext.context_data?.pending_participants_queue || []
+        const resolved: string[] = activeContext.context_data?.resolved_participants || []
+
+        // Adicionar participante atual à lista de resolvidos (se não pulou)
+        if (!isSkip) {
+          resolved.push(pName)
+        }
+
+        // Verificar se há mais participantes na fila
+        if (queue.length > 0) {
+          const nextName = queue[0]
+          const remainingQueue = queue.slice(1)
+
+          // Salvar pending_participant_phone para o próximo
+          const nextPendingData: PendingParticipantPhone = {
+            type: 'pending_participant_phone',
+            participantName: nextName,
+            eventId: '',
+            eventTitle: (ents.title as string) || 'Evento',
+            eventDate: (ents.date as string) || '',
+            eventTime: (ents.time as string) || null,
+            eventLocation: (ents.location as string) || null,
+            creatorUserId: userId,
+            creatorName: firstName,
+            creatorPhone: user.phone_number,
+            groupJid: params.groupJid || null,
+          }
+          await savePendingParticipantPhone(supabase, userId, nextPendingData)
+
+          await supabase
+            .from('whatsapp_conversation_context')
+            .update({
+              context_data: {
+                ...activeContext.context_data,
+                step: 'awaiting_participant_phone',
+                pending_participants_queue: remainingQueue,
+                resolved_participants: resolved,
+              },
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', activeContext.id)
+
+          const queueMsg = remainingQueue.length > 0
+            ? `\n\n_(Depois vou pedir o número de: ${remainingQueue.join(', ')})_`
+            : ''
+
+          return {
+            text: `${phoneResult.message}\n\nAgora, ${nextName} também não está cadastrado. Me passa o WhatsApp dele? (número com DDD ou "não" pra pular)${queueMsg}`,
+            intent: 'pending_participant_phone',
+            confidence: 1.0,
+          }
+        }
+
+        // Fila vazia — todos os participantes resolvidos
+        if (isSkip && resolved.length === 0) {
+          // Pulou todos → criar evento direto sem esperar confirmação
+          const result = await executeConfirmedAction(activeContext.context_type, { supabase, profileId: userId, authUserId, userName: firstName, phone, entities: ents })
+          await supabase
+            .from('whatsapp_conversation_context')
+            .update({ is_active: false, context_data: { ...activeContext.context_data, step: result.success ? 'executed' : 'execution_failed', executed_at: new Date().toISOString(), record_id: result.record_id || null }, updated_at: new Date().toISOString() })
+            .eq('id', activeContext.id)
+
+          // Notificar participantes cadastrados
+          if (result.success && ents.participants) {
+            const allNames = parseParticipantNames(ents.participants as string)
+            const cadastrados = []
+            for (const n of allNames) {
+              const found = await findParticipantByName(supabase, n)
+              if (found && found.id !== userId) cadastrados.push(n)
+            }
+            if (cadastrados.length > 0) {
+              const notifyResults = await notifyParticipants(supabase, params.uazapiUrl, params.uazapiToken, {
+                eventId: result.record_id || '', eventTitle: (ents.title as string) || 'Evento', eventDate: (ents.date as string) || '',
+                eventTime: (ents.time as string) || null, eventLocation: (ents.location as string) || null,
+                creatorUserId: userId, creatorName: firstName, creatorPhone: user.phone_number, participantNames: cadastrados, groupJid: params.groupJid || null,
+              })
+              const notified = notifyResults.filter(r => r.notified)
+              if (notified.length > 0) result.message += `\nNotifiquei ${notified.map(r => r.participantName).join(', ')} pelo WhatsApp.`
+            }
+          }
+
+          return { text: `${phoneResult.message}\n\n${result.message}`, intent: 'creating_calendar_executed', confidence: 1.0 }
+        }
+
+        // Pelo menos um participante externo foi notificado → esperar confirmação
+        const notifiedNames = resolved.join(', ')
+        await supabase
+          .from('whatsapp_conversation_context')
+          .update({
+            context_data: {
+              ...activeContext.context_data,
+              step: 'awaiting_external_confirmation',
+              notified_participants: resolved,
+              notified_participant: resolved[resolved.length - 1], // último para compatibilidade
+            },
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', activeContext.id)
+
+        return {
+          text: `${phoneResult.message}\n\nEnviei convites para: ${notifiedNames}\nQuando confirmarem, me avisa aqui que eu agendo.\nÉ só dizer: *"confirmaram"* ou *"pode agendar"*`,
+          intent: 'awaiting_external_confirmation',
+          confidence: 1.0,
+        }
+      }
+    }
+  }
+
+  // ========================================
+  // WA-06.8: AGUARDANDO CONFIRMAÇÃO EXTERNA do participante não cadastrado
+  // Criador diz "ele confirmou" / "pode agendar" → criar evento
+  // ========================================
+  if (activeContext?.context_data?.step === 'awaiting_external_confirmation') {
+    const lower = parsed.text.toLowerCase().trim().replace(/[.,!?;:]+$/g, '').trim()
+    const ents = activeContext.context_data?.entities || {}
+    const pName = activeContext.context_data?.notified_participant || ''
+
+    // Verificar se é resposta de salvar na agenda (sim/não para pending_save_contact)
+    const pendingSave = await getPendingSaveContact(supabase, userId)
+    if (pendingSave) {
+      const saveResult = await processSaveContactResponse(supabase, pendingSave, parsed.text, authUserId)
+      if (saveResult.handled) {
+        return { text: saveResult.message, intent: 'pending_save_contact_response', confidence: 1.0 }
+      }
+    }
+
+    // Detectar confirmação do participante — patterns EXATOS para evitar falsos positivos
+    // "Marcou com os outros?" NÃO deve ser interpretado como confirmação
+    const confirmExact = ['sim', 's', 'ok', 'bora', 'manda', 'pode agendar', 'pode marcar', 'agenda', 'marca']
+    const confirmIncludes = ['confirmou', 'confirmaram', 'ele confirmou', 'ela confirmou', 'aceitou', 'topou', 'tá confirmado', 'ta confirmado']
+    const cancelPatterns = [
+      'não', 'nao', 'cancela', 'deixa', 'esquece', 'não vai', 'nao vai',
+      'recusou', 'não pode', 'nao pode', 'desistiu',
+    ]
+
+    const isConfirm = confirmExact.includes(lower) || confirmIncludes.some(p => lower.includes(p))
+    const isCancel = cancelPatterns.some(p => lower === p || lower.includes(p))
+
+    if (isCancel) {
+      await supabase
+        .from('whatsapp_conversation_context')
+        .update({ is_active: false, context_data: { ...activeContext.context_data, step: 'cancelled_no_confirmation' }, updated_at: new Date().toISOString() })
+        .eq('id', activeContext.id)
+      return { text: `Ok, cancelei o agendamento. Se mudar de ideia, é só pedir de novo.`, intent: 'external_confirmation_cancelled', confidence: 1.0 }
+    }
+
+    if (isConfirm) {
+      // Participante confirmou → criar evento agora
+      const result = await executeConfirmedAction(activeContext.context_type, { supabase, profileId: userId, authUserId, userName: firstName, phone, entities: ents })
+      await supabase
+        .from('whatsapp_conversation_context')
+        .update({ is_active: false, context_data: { ...activeContext.context_data, step: result.success ? 'executed' : 'execution_failed', executed_at: new Date().toISOString(), record_id: result.record_id || null }, updated_at: new Date().toISOString() })
+        .eq('id', activeContext.id)
+
+      // Notificar participantes cadastrados (outros além do externo)
+      if (result.success && ents.participants) {
+        const participantNames = parseParticipantNames(ents.participants as string)
+        const cadastrados = []
+        for (const n of participantNames) {
+          const found = await findParticipantByName(supabase, n)
+          if (found) cadastrados.push(n)
+        }
+        if (cadastrados.length > 0) {
+          const notifyResults = await notifyParticipants(supabase, params.uazapiUrl, params.uazapiToken, {
+            eventId: result.record_id || '', eventTitle: (ents.title as string) || 'Evento', eventDate: (ents.date as string) || '',
+            eventTime: (ents.time as string) || null, eventLocation: (ents.location as string) || null,
+            creatorUserId: userId, creatorName: firstName, creatorPhone: user.phone_number, participantNames: cadastrados, groupJid: params.groupJid || null,
+          })
+          const notified = notifyResults.filter(r => r.notified)
+          if (notified.length > 0) result.message += `\nNotifiquei ${notified.map(r => r.participantName).join(', ')} pelo WhatsApp.`
+        }
+      }
+
+      return { text: result.message, intent: 'creating_calendar_executed', confidence: 1.0 }
+    }
+
+    // Resposta não reconhecida — lembrar que está aguardando
+    const notifiedList: string[] = activeContext.context_data?.notified_participants || (pName ? [pName] : [])
+    const waitingMsg = notifiedList.length > 1
+      ? `Ainda aguardando confirmação de: ${notifiedList.join(', ')}. Quando confirmarem, me diz: *"confirmaram"* ou *"cancela"*.`
+      : `Ainda aguardando a confirmação do ${pName}. Quando ele responder, me diz: *"${pName} confirmou"* ou *"cancela"*.`
+    return {
+      text: waitingMsg,
+      intent: 'awaiting_external_confirmation',
+      confidence: 1.0,
+    }
+  }
 
   if (activeContext?.context_data?.step === 'awaiting_confirmation') {
     const lower = parsed.text.toLowerCase().trim().replace(/[.,!?;:]+$/g, '').trim()
 
     // --- CONFIRMOU: SIM → executar ação real (WA-03) ---
     if (['sim', 's', 'yes', 'y', 'confirma', 'confirmo', 'ok', 'pode', 'pode criar', 'manda', 'bora', 'isso'].includes(lower)) {
+
+      const ents = activeContext.context_data?.entities || {}
+
+      // ========================================
+      // WA-06.8: PRÉ-VERIFICAÇÕES para creating_calendar (ANTES de criar)
+      // 1. Verificar conflitos de horário
+      // 2. Verificar se participante está cadastrado
+      // ========================================
+      if (activeContext.context_type === 'creating_calendar') {
+        // 1. Verificar conflitos
+        const conflictCheck = await checkCalendarConflicts(supabase, authUserId, ents)
+        if (conflictCheck.hasConflict) {
+          // Salvar contexto de conflito pendente — NÃO criar evento ainda
+          await supabase
+            .from('whatsapp_conversation_context')
+            .update({
+              context_data: {
+                ...activeContext.context_data,
+                step: 'awaiting_conflict_confirmation',
+              },
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', activeContext.id)
+
+          return {
+            text: conflictCheck.conflictMessage,
+            intent: 'conflict_warning',
+            confidence: 1.0,
+          }
+        }
+
+        // 2. Verificar TODOS os participantes de uma vez (suporte a múltiplos)
+        if (ents.participants) {
+          const participantNames = parseParticipantNames(ents.participants as string)
+          const notFoundNames: string[] = []
+          for (const pName of participantNames) {
+            const found = await findParticipantByName(supabase, pName)
+            if (!found) notFoundNames.push(pName)
+          }
+
+          if (notFoundNames.length > 0) {
+            // Pedir número do PRIMEIRO não cadastrado, guardar fila dos demais
+            const currentName = notFoundNames[0]
+            const remainingQueue = notFoundNames.slice(1)
+
+            const pendingPhoneData: PendingParticipantPhone = {
+              type: 'pending_participant_phone',
+              participantName: currentName,
+              eventId: '',
+              eventTitle: (ents.title as string) || 'Evento',
+              eventDate: (ents.date as string) || '',
+              eventTime: (ents.time as string) || null,
+              eventLocation: (ents.location as string) || null,
+              creatorUserId: userId,
+              creatorName: firstName,
+              creatorPhone: user.phone_number,
+              groupJid: params.groupJid || null,
+            }
+            await savePendingParticipantPhone(supabase, userId, pendingPhoneData)
+
+            await supabase
+              .from('whatsapp_conversation_context')
+              .update({
+                context_data: {
+                  ...activeContext.context_data,
+                  step: 'awaiting_participant_phone',
+                  pending_participants_queue: remainingQueue,
+                  resolved_participants: [],
+                },
+                updated_at: new Date().toISOString(),
+              })
+              .eq('id', activeContext.id)
+
+            const queueMsg = remainingQueue.length > 0
+              ? `\n\n_(Depois vou pedir o número de: ${remainingQueue.join(', ')})_`
+              : ''
+
+            return {
+              text: `${currentName} não está cadastrado no sistema. Me passa o WhatsApp dele pra eu notificar? (manda o número com DDD ou "não" pra pular)${queueMsg}`,
+              intent: 'pending_participant_phone',
+              confidence: 1.0,
+            }
+          }
+        }
+      }
+
       // Executar ação real PRIMEIRO (se falhar, contexto fica rastreável)
       const result = await executeConfirmedAction(
         activeContext.context_type,
@@ -262,8 +756,8 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
         }
 
         // ========================================
-        // WA-06.6: NOTIFICAR PARTICIPANTES APÓS CRIAR EVENTO
-        // Se o evento tem participantes, buscar e notificar via WhatsApp
+        // WA-06.6: NOTIFICAR PARTICIPANTES CADASTRADOS APÓS CRIAR EVENTO
+        // Participantes não cadastrados já foram tratados ANTES de criar (pré-verificação)
         // ========================================
         if (result.success && activeContext.context_type === 'creating_calendar' && ents.participants) {
           const participantNames = parseParticipantNames(ents.participants as string)
@@ -281,24 +775,49 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
               creatorName: firstName,
               creatorPhone: user.phone_number,
               participantNames,
+              groupJid: params.groupJid || null,
             })
 
-            // Append status das notificações à mensagem de sucesso
             const notified = notifyResults.filter(r => r.notified)
-            const notFound = notifyResults.filter(r => !r.found)
-
-            let statusMsg = ''
             if (notified.length > 0) {
               const names = notified.map(r => r.participantName).join(', ')
-              statusMsg += `\nNotifiquei ${names} pelo WhatsApp.`
+              result.message += `\nNotifiquei ${names} pelo WhatsApp.`
             }
-            if (notFound.length > 0) {
-              const names = notFound.map(r => r.participantName).join(', ')
-              statusMsg += `\n${names} não está cadastrado no sistema — não consegui notificar.`
-            }
+          }
+        }
 
-            if (statusMsg) {
-              result.message += statusMsg
+        // ========================================
+        // WA-06.8: NOTIFICAR RESPONSÁVEL APÓS CRIAR CARD DELEGADO
+        // Se o card foi delegado a outra pessoa, notificar via WhatsApp
+        // ========================================
+        if (result.success && activeContext.context_type === 'creating_card' && ents.assigned_to) {
+          const assigneeName = String(ents.assigned_to)
+          // Só notificar se NÃO é o próprio criador
+          const isSelf = assigneeName.toLowerCase() === 'eu' ||
+            assigneeName.toLowerCase() === firstName.toLowerCase() ||
+            assigneeName.toLowerCase() === user.full_name.toLowerCase()
+
+          if (!isSelf) {
+            try {
+              const participant = await findParticipantByName(supabase, assigneeName)
+              if (participant && participant.id !== userId) {
+                const notifyMsg = `Fala ${participant.displayName}! ${firstName} criou uma tarefa pra você:\n\n` +
+                  `📝 *${ents.title || 'Tarefa'}*\n` +
+                  (ents.deadline ? `📅 Prazo: ${ents.deadline}\n` : '') +
+                  (ents.priority === 'urgent' ? `🔴 Urgente\n` : '') +
+                  `\nConfere lá em Projetos! 💪`
+
+                await sendTextMessage({
+                  serverUrl: params.uazapiUrl,
+                  token: params.uazapiToken,
+                  to: participant.phoneNumber,
+                  text: notifyMsg,
+                })
+                result.message += `\nNotifiquei ${participant.displayName} pelo WhatsApp.`
+                console.log(`[NOTIFY-CARD] ✅ Notificação enviada para ${participant.displayName}`)
+              }
+            } catch (notifyErr) {
+              console.error('[NOTIFY-CARD] Erro ao notificar responsável:', notifyErr)
             }
           }
         }
@@ -369,9 +888,43 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
   }
 
   // ========================================
+  // WA-06.9: MEMÓRIA DE CURTO PRAZO NA DM
+  // Carregar últimas mensagens da conversa para dar contexto ao NLP
+  // Similar ao group_memory, mas usando whatsapp_messages
+  // ========================================
+  let dmContext = ''
+  if (!params.groupContext && supabase && user.phone_number) {
+    try {
+      const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString()
+      const { data: recentMsgs } = await supabase
+        .from('whatsapp_messages')
+        .select('direction, content, created_at')
+        .eq('phone_number', user.phone_number)
+        .gte('created_at', twoHoursAgo)
+        .order('created_at', { ascending: true })
+        .limit(20)
+
+      if (recentMsgs && recentMsgs.length > 0) {
+        const lines = recentMsgs.map((m: { direction: string; content: string }) => {
+          const who = m.direction === 'inbound' ? firstName : 'Mike'
+          return `${who}: ${m.content}`
+        })
+        dmContext = `HISTÓRICO RECENTE DA CONVERSA (últimas ${recentMsgs.length} mensagens):\n${lines.join('\n')}`
+        console.log(`[WA-06.9] DM context loaded: ${recentMsgs.length} messages`)
+      }
+    } catch (e) {
+      console.error('[WA-06.9] Erro ao carregar DM context:', e)
+    }
+  }
+
+  // Combinar contextos: conversa ativa + DM history
+  let fullContext = conversationContext || ''
+  if (dmContext) fullContext = fullContext ? `${fullContext}\n\n${dmContext}` : dmContext
+
+  // ========================================
   // CLASSIFICAR MENSAGEM COM GEMINI
   // ========================================
-  const classification = await classifyMessage(parsed.text, firstName, conversationContext, memoryPrompt, params.groupContext)
+  const classification = await classifyMessage(parsed.text, firstName, fullContext || undefined, memoryPrompt, params.groupContext)
 
   // ========================================
   // ROTEAR POR INTENÇÃO
@@ -467,6 +1020,85 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
         intent: 'help',
         confidence: 1.0,
       }
+
+    // ========================================
+    // WA-06.8: SALVAR CONTATO NA AGENDA
+    // ========================================
+    case 'save_contact': {
+      const contactName = classification.entities.contact_name as string
+      const contactPhone = classification.entities.contact_phone as string
+      const contactType = (classification.entities.contact_type as string) || 'outro'
+      const contactNotes = classification.entities.notes as string | undefined
+
+      if (!contactName || !contactPhone) {
+        return {
+          text: `Preciso do nome e número pra salvar na agenda, ${firstName}. Ex: "Salva na agenda Jereh, 5521985525984, fornecedor"`,
+          intent: 'save_contact',
+          confidence: classification.confidence,
+        }
+      }
+
+      const result = await saveContact(supabase, {
+        name: contactName,
+        phone: contactPhone,
+        contactType,
+        notes: contactNotes,
+        createdBy: authUserId,
+      })
+
+      if (result.success) {
+        const typeLabel = contactType !== 'outro' ? ` como *${contactType}*` : ''
+        return {
+          text: `Salvei ${contactName}${typeLabel} na agenda! 📇\nQuando precisar, é só perguntar: "Mike, qual o número do ${contactName}?"`,
+          intent: 'save_contact',
+          confidence: 1.0,
+        }
+      }
+
+      return {
+        text: `Não consegui salvar: ${result.error}`,
+        intent: 'save_contact',
+        confidence: 1.0,
+      }
+    }
+
+    // ========================================
+    // WA-06.8: CONSULTAR CONTATO NA AGENDA
+    // ========================================
+    case 'query_contact': {
+      const searchName = (classification.entities.contact_name as string) || parsed.text
+      const contacts = await queryContacts(supabase, searchName)
+
+      if (contacts.length === 0) {
+        return {
+          text: `Não encontrei "${searchName}" na agenda, ${firstName}. Quer que eu salve um contato novo?`,
+          intent: 'query_contact',
+          confidence: 1.0,
+        }
+      }
+
+      if (contacts.length === 1) {
+        const c = contacts[0]
+        const typeLabel = c.contactType !== 'outro' ? ` (${c.contactType})` : ''
+        return {
+          text: `📇 *${c.name}*${typeLabel}\n📱 ${c.phone}${c.notes ? `\n📝 ${c.notes}` : ''}`,
+          intent: 'query_contact',
+          confidence: 1.0,
+        }
+      }
+
+      // Múltiplos resultados
+      const list = contacts.slice(0, 5).map(c => {
+        const typeLabel = c.contactType !== 'outro' ? ` (${c.contactType})` : ''
+        return `• *${c.name}*${typeLabel} — ${c.phone}`
+      }).join('\n')
+
+      return {
+        text: `Encontrei ${contacts.length} contatos:\n\n${list}`,
+        intent: 'query_contact',
+        confidence: 1.0,
+      }
+    }
 
     case 'general_chat': {
       const msgPreview = (parsed.text || '').substring(0, 80)
@@ -738,13 +1370,13 @@ async function handleAudioMessage(
   const audioEventConfirmation = await getEventConfirmation(supabase, userId)
   if (audioEventConfirmation) {
     console.log(`[NOTIFY-AUDIO] Resposta de confirmação de ${firstName} para evento "${audioEventConfirmation.eventTitle}"`)
-    const audioEventResponse = await processParticipantResponse(
+    const audioEventResult = await processParticipantResponse(
       supabase, uazapiUrl, uazapiToken,
       audioEventConfirmation, result.transcription
     )
     return {
-      text: audioEventResponse,
-      intent: 'audio_event_confirmation',
+      text: audioEventResult.message,
+      intent: audioEventResult.confirmed ? 'event_confirmed' : audioEventResult.declined ? 'event_declined' : 'audio_event_confirmation',
       confidence: 1.0,
       metadata: { transcription: result.transcription },
     }
@@ -1242,6 +1874,7 @@ function buildConfirmationMessage(action: string, entities: Record<string, unkno
     parts.push('📝 *' + (entities.title || 'Tarefa') + '*')
     if (entities.priority === 'urgent') parts.push('🔴 Urgente')
     else if (entities.priority === 'high') parts.push('🟠 Alta prioridade')
+    if (entities.assigned_to) parts.push(`👤 ${entities.assigned_to}`)
     if (entities.deadline || entities.date) parts.push(`📅 Prazo: ${entities.deadline || entities.date}`)
     if (entities.content_type) parts.push(`🎬 ${entities.content_type}`)
   }

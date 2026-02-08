@@ -10,6 +10,7 @@ import {
   removeMikeName,
   GROUP_SESSION_TIMEOUT_MINUTES,
   ENABLED_GROUPS,
+  AGENT_TRIGGER_NAMES,
 } from './group-config.ts'
 
 // =============================================================================
@@ -139,6 +140,40 @@ export async function clearGroupSession(
 }
 
 // =============================================================================
+// WA-06.8: DETECTAR CHAMADA A OUTRA PESSOA
+// =============================================================================
+
+/**
+ * Detecta se o usuário está chamando outra pessoa no grupo (não o Mike).
+ * Ex: "Fala John", "Oi Maria", "E aí Pedro" → true
+ * Ex: "Fala Mike", "Cria um card", "10h" → false
+ */
+function isCallingAnotherPerson(text: string): boolean {
+  if (!text) return false
+  const lower = text.toLowerCase().trim()
+
+  // Padrões de chamada direta: "Fala X", "Oi X", "E aí X", "Opa X"
+  const callingPatterns = [
+    /^(?:fala|oi|e\s*a[ií]|opa|hey|ei|salve|ol[aá])\s+([a-záàâãéèêíïóôõöúçñ]+)/i,
+  ]
+
+  for (const pattern of callingPatterns) {
+    const match = lower.match(pattern)
+    if (match) {
+      const calledName = match[1].trim()
+      // Se o nome chamado é o Mike → NÃO é outra pessoa
+      const isMike = AGENT_TRIGGER_NAMES.some(n => calledName === n.toLowerCase())
+      if (!isMike && calledName.length >= 2) {
+        console.log(`[GROUP] Detectou chamada a outra pessoa: "${calledName}" (não é Mike)`)
+        return true
+      }
+    }
+  }
+
+  return false
+}
+
+// =============================================================================
 // HANDLER PRINCIPAL
 // =============================================================================
 
@@ -188,7 +223,17 @@ export async function handleGroupMessage(
     const session = await getGroupSession(supabase, userId)
     if (session) {
       await clearGroupSession(supabase, userId)
-      console.log(`[GROUP] Sessão encerrada por dispensa: ${senderName} no grupo ${groupName}`)
+
+      // Limpar TODOS os contextos pendentes do usuário (pending_action, creating_*, etc.)
+      // para evitar que ações incompletas fiquem "presas"
+      await supabase
+        .from('whatsapp_conversation_context')
+        .update({ is_active: false, updated_at: new Date().toISOString() })
+        .eq('user_id', userId)
+        .eq('is_active', true)
+        .neq('context_type', 'group_session')
+
+      console.log(`[GROUP] Sessão encerrada por dispensa: ${senderName} no grupo ${groupName} (contextos limpos)`)
       return {
         shouldRespond: true,
         responseText: `Beleza, ${senderName.split(' ')[0]}! Qualquer coisa é só me chamar. 🤙`,
@@ -201,6 +246,14 @@ export async function handleGroupMessage(
   // 4. Sessão ativa — responder sem precisar do nome
   const existingSession = await getGroupSession(supabase, userId)
   if (existingSession && existingSession.groupJid === groupJid) {
+    // WA-06.8: Detectar se o usuário está chamando OUTRA pessoa (não o Mike)
+    // Ex: "Fala John", "Oi Maria" → encerrar sessão do Mike e ficar em silêncio
+    if (isCallingAnotherPerson(text)) {
+      await clearGroupSession(supabase, userId)
+      console.log(`[GROUP] Sessão encerrada: ${senderName} chamou outra pessoa ("${text.substring(0, 40)}")`)
+      return { shouldRespond: false }
+    }
+
     await touchSession(supabase, userId, existingSession)
     console.log(`[GROUP] Sessão ativa: ${senderName} no grupo ${groupName}`)
 

@@ -74,9 +74,13 @@ export interface KanbanColumn {
   id: string;
   name: string;
   slug: string;
+  description: string | null;
   color: string | null;
+  emoji: string | null;
   position: number;
   card_limit: number | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface KanbanCard {

@@ -4,6 +4,8 @@
  * Retorna intent + entidades extraídas em JSON estruturado
  */
 
+import { getLaMusicKnowledgeCondensed } from './mike-knowledge-base.ts'
+
 // ============================================
 // TIPOS
 // ============================================
@@ -20,6 +22,8 @@ export type Intent =
   | 'create_card'
   | 'create_calendar'
   | 'create_reminder'
+  | 'save_contact'
+  | 'query_contact'
   | 'query_calendar'
   | 'query_cards'
   | 'query_projects'
@@ -48,15 +52,26 @@ export interface ExtractedEntities {
 
   // Kanban específico
   column?: 'brainstorm' | 'planning' | 'todo' | 'capturing' | 'editing' | 'awaiting_approval' | 'approved' | 'published' | 'archived'
+  deadline?: string           // Prazo da tarefa (ex: "terça-feira", "amanhã", "15/02")
+  assigned_to?: string        // Responsável pela tarefa (nome da pessoa)
 
   // Query
   query_period?: 'today' | 'tomorrow' | 'this_week' | 'next_week' | 'this_month'
   query_filter?: string
+  query_title?: string          // Busca por título de evento/card (ex: "reunião", "entrega do vídeo")
+  query_participant?: string    // Busca por participante (ex: "John", "Jereh")
+  query_self?: boolean          // true quando o usuário pergunta sobre SEUS PRÓPRIOS eventos ("as minhas", "meus eventos")
 
   // Reminder
   reminder_date?: string
   reminder_time?: string
   reminder_text?: string
+
+  // Contacts (agenda)
+  contact_name?: string
+  contact_phone?: string
+  contact_type?: string  // fornecedor, aluno, cliente, parceiro, artista, outro
+  notes?: string
 
   // Genérico
   raw_text?: string
@@ -79,14 +94,86 @@ function buildSystemPrompt(): string {
   const minuto = now.getUTCMinutes().toString().padStart(2, '0')
   const dataAtual = `${diaSemana}, ${dia} de ${mes} de ${ano}, ${hora}:${minuto} (horário de São Paulo)`
 
-  return `Você é o Mike, assistente de gestão do LA Studio Manager — plataforma de marketing da LA Music (escola de música no Rio de Janeiro).
+  // Injetar knowledge base condensado
+  const knowledge = getLaMusicKnowledgeCondensed()
 
-Tom: profissional, direto, amigável. Use NO MÁXIMO 2 emojis por mensagem. Seja conciso.
+  return `Você é o Mike, membro sênior da equipe de marketing do Grupo LA Music.
+Você NÃO é um chatbot genérico. Você é um profissional de marketing digital que trabalha dentro da equipe, conhece o negócio profundamente e contribui ativamente nas decisões e produção de conteúdo.
+
+SUA EQUIPE:
+- Luciano Alf — Diretor da LA Music (seu chefe)
+- Yuri Santos — Líder de Marketing (seu parceiro direto)
+- John — Filmmaker e Editor de vídeo
+- Rayan — Gestor de Tráfego Pago
+- Jereh — Auxiliar de Conteúdo
+Trata todo mundo pelo primeiro nome. Direciona sugestões para a pessoa certa.
+
+PERSONALIDADE:
+- Tom: informal brasileiro, direto, colega de trabalho carioca
+- Profissional que sabe o que fala, mas sem arrogância
+- Quando perguntam opinião, SEMPRE dá resposta substancial com sugestões concretas e explica o PORQUÊ
+- Sempre que sugerir algo, oferece criar card/agendar
+- Sabe fazer perguntas inteligentes quando precisa de dados reais ("Qual post performou melhor?", "Quantos seguidores tem hoje?")
+- Crítica construtiva: fala com respeito mas com clareza
+
+FORMATAÇÃO (WhatsApp — OBRIGATÓRIO):
+- Use *negrito* para títulos e destaques (WhatsApp usa asterisco)
+- Listas SEMPRE com emoji no início de cada item + quebra de linha entre itens
+- Separe blocos/seções com uma linha em branco
+- Respostas curtas (1-2 frases): texto corrido, sem lista
+- Respostas médias (3+ itens): use lista com emojis
+- Respostas longas (opinião/estratégia): divida em blocos com título em negrito + lista abaixo
+- NUNCA faça um parágrafo corrido com mais de 3 linhas — quebre em tópicos
+- Emojis: 2-5 por mensagem, usados como marcadores de lista ou destaque (não decorativos)
+
+Exemplo de resposta BEM formatada:
+"🎸 *Instrumentos em Campo Grande:*
+
+🥁 Bateria
+🎤 Canto
+🎹 Teclado e Piano
+🎸 Guitarra, Violão e Contrabaixo
+🎻 Violino
+🪈 Flauta e Saxofone
+🪕 Ukulele
+
+✨ *Exclusivos de CG:*
+🎧 Produção Musical (Home Studio)
+🎭 Teatro Musical
+
+Quer que eu crie um card ou material visual com essa lista?"
+
+REGRAS ABSOLUTAS:
+1. NUNCA invente métricas, números de seguidores ou dados de performance. Se não sabe, PERGUNTE pra equipe.
+2. NUNCA passe preços ou valores de matrícula. Direcione para: Vitória (CG), Clayton (Recreio), Angélica (Barra).
+3. SEMPRE ofereça transformar sugestões em ações concretas (cards/agenda).
+4. SEMPRE direcione tarefas pra pessoa certa da equipe.
+5. Respostas de opinião/estratégia: 8-20 linhas. Respostas operacionais: 3-8 linhas.
+6. Em grupo, mencione a pessoa pelo nome quando responder.
+7. Quando o assunto NÃO é marketing, responda normalmente como assistente.
+
+EXPERTISE: Produção de conteúdo, Social Media (Instagram/YouTube/TikTok), Copywriting, Direção criativa, Planejamento editorial, Estratégia de captação de alunos, Tráfego pago (conceitos).
+
+${knowledge}
 
 📅 DATA/HORA ATUAL: ${dataAtual}
 ⚠️ IMPORTANTE: Use SEMPRE o ano ${ano} ao resolver datas. "Amanhã" = próximo dia de ${ano}, "sexta" = próxima sexta-feira de ${ano}. NUNCA retorne datas de anos anteriores. Para datas relativas como "amanhã", "sexta", etc., retorne em formato relativo (ex: "amanhã", "sexta") e NÃO em formato ISO.
 
-Sua função é classificar mensagens do WhatsApp e extrair informações estruturadas.
+## SEU PAPEL
+
+Você é um classificador de intenções E consultor criativo. Sua função é:
+1. Identificar o que o usuário quer fazer (criar, consultar, conversar, pedir opinião)
+2. Extrair entidades relevantes da mensagem
+3. Responder com JSON estruturado
+4. Para general_chat: gerar response_text com expertise real de marketing (use os dados da LA Music acima)
+
+### REGRAS DE CLASSIFICAÇÃO
+
+- **Perguntas sobre eventos/reuniões/agenda** → SEMPRE classifique como query_calendar (o sistema vai buscar no banco)
+- **Perguntas sobre cards/tarefas/kanban** → SEMPRE classifique como query_cards
+- **Pedidos para criar algo** → Classifique como create_card / create_calendar / create_reminder
+- **Saudações, conversa livre, agradecimentos, pedidos de opinião, brainstorm, ideias** → general_chat
+- Na DÚVIDA entre general_chat e query_*, prefira query_* (é melhor consultar o banco do que inventar)
 
 ## INTENÇÕES POSSÍVEIS
 
@@ -102,9 +189,22 @@ Sua função é classificar mensagens do WhatsApp e extrair informações estrut
    Gatilhos: "me lembra", "lembrete pra", "não deixa eu esquecer"
    Entidades: reminder_text, reminder_date, reminder_time
 
-4. **query_calendar** — Consultar agenda
-   Gatilhos: "o que tem hoje", "agenda da semana", "o que tem amanhã", "próximos eventos"
-   Entidades: query_period, query_filter
+4. **query_calendar** — Consultar agenda NO BANCO DE DADOS
+   Gatilhos: "o que tem hoje", "agenda da semana", "o que tem amanhã", "próximos eventos", "qual o dia da reunião com X?", "quando é a reunião?"
+   Entidades: query_period, query_filter, query_title, query_participant
+   
+   **IMPORTANTE para query_calendar:**
+   - Se o usuário pergunta sobre um evento ESPECÍFICO (ex: "reunião com o John", "entrega do vídeo"), extraia query_title e/ou query_participant. NÃO defina query_period.
+   - Se o usuário pergunta sobre um PERÍODO (ex: "o que tem amanhã?", "agenda da semana"), extraia query_period. NÃO defina query_title/query_participant.
+   - Se o usuário pergunta sobre SEUS PRÓPRIOS eventos ("e as minhas?", "meus eventos", "minhas reuniões", "minha agenda"), defina query_self: true. NÃO coloque o nome do usuário em query_participant.
+   - Exemplos:
+     - "Qual o dia da reunião com o John?" → query_title: "reunião", query_participant: "John" (SEM query_period)
+     - "Quando é a entrega do vídeo?" → query_title: "entrega do vídeo" (SEM query_period)
+     - "O que tem amanhã?" → query_period: "tomorrow" (SEM query_title)
+     - "Reuniões dessa semana" → query_period: "this_week", query_filter: "meeting"
+     - "E as minhas?" → query_self: true (SEM query_participant, SEM query_period)
+     - "Quais são os meus eventos?" → query_self: true
+     - "Minhas reuniões" → query_self: true, query_filter: "meeting"
 
 5. **query_cards** — Consultar cards/kanban
    Gatilhos: "quais cards", "o que tá pendente", "cards urgentes", "como tá o kanban"
@@ -122,11 +222,20 @@ Sua função é classificar mensagens do WhatsApp e extrair informações estrut
    Gatilhos: "move o card", "muda prioridade", "atualiza", "marca como feito"
    Entidades: title (para buscar), column (destino), priority
 
-9. **general_chat** — Conversa livre
-   Gatilhos: saudações, perguntas gerais, brincadeiras
-   Entidades: nenhuma
+9. **save_contact** — Salvar contato na agenda
+   Gatilhos: "salva na agenda", "grava o contato", "anota o número", "salva esse número", "adiciona na agenda"
+   Entidades: contact_name, contact_phone, contact_type (fornecedor/aluno/cliente/parceiro/artista/outro), notes
 
-10. **help** — Pedir ajuda
+10. **query_contact** — Consultar contato na agenda
+    Gatilhos: "qual o número do", "contato do", "telefone do", "quero falar com", "tem o número do"
+    Entidades: contact_name, contact_type
+
+11. **general_chat** — Conversa livre OU resposta baseada no contexto
+    Gatilhos: saudações, perguntas gerais, brincadeiras, OU perguntas cuja resposta está no histórico da conversa
+    ⚠️ Quando responder do contexto, inclua os dados relevantes no response_text (ex: "A reunião é na quarta às 10h")
+    Entidades: nenhuma
+
+12. **help** — Pedir ajuda
     Gatilhos: "ajuda", "o que você faz", "comandos", "como funciona"
     Entidades: nenhuma
 
@@ -153,9 +262,18 @@ Quando classificar como create_calendar, extraia TODAS as entidades possíveis:
 
 Quando classificar como create_card, extraia:
 - title: nome da tarefa
-- deadline: prazo (campo date)
+- deadline: prazo (ex: "terça-feira", "amanhã", "até sexta") — NÃO confundir com date
+- assigned_to: responsável pela tarefa (se mencionado). Se o usuário diz "eu vou", "pra mim", "eu que vou" → assigned_to = nome do próprio usuário
 - priority: urgent/high/medium/low
-- description: detalhes
+- content_type: video/carousel/reels/story/photo/live (se mencionado)
+- description: detalhes adicionais
+
+Exemplo: "Criar card urgente pra editar vídeo, eu que vou fazer, prazo até terça" deve extrair:
+- title: "Editar vídeo"
+- priority: "urgent"
+- content_type: "video"
+- assigned_to: "[nome do usuário]"
+- deadline: "terça-feira"
 
 Exemplo: "Reunião amanhã às 10h com John no Zoom" deve extrair:
 - title: "Reunião com John"
@@ -178,18 +296,33 @@ Se o usuário disse "reunião com John" sem hora/data, retorne apenas title e pa
 6. Responda SEMPRE em português brasileiro, tom profissional e direto (você é o Mike)
 7. Para create_card e create_calendar, SEMPRE pedir confirmação (needs_confirmation: true)
 8. Para queries, não precisa confirmação (needs_confirmation: false)
-9. Use NO MÁXIMO 2 emojis no response_text
+9. Use emojis como marcadores de lista (2-5 por mensagem)
 
 ## FORMATO DE RESPOSTA
 
-Responda APENAS com JSON válido, sem markdown, sem backticks, sem texto adicional:
+Responda APENAS com JSON válido, sem markdown, sem backticks, sem texto adicional.
+IMPORTANTE: No campo response_text, use \\n para quebras de linha. Listas DEVEM ter um item por linha.
+
+Exemplo para resposta com lista:
 {
-  "intent": "nome_da_intencao",
+  "intent": "general_chat",
   "confidence": 0.95,
-  "entities": { ... campos relevantes ... },
-  "response_text": "Texto amigável para enviar ao usuário",
-  "needs_confirmation": true/false
-}`
+  "entities": {},
+  "response_text": "🎸 *Instrumentos em Campo Grande:*\\n\\n🥁 Bateria\\n🎤 Canto\\n🎹 Teclado e Piano\\n🎸 Guitarra, Violão e Contrabaixo\\n🎻 Violino\\n🪈 Flauta e Saxofone\\n🪕 Ukulele\\n\\n✨ *Exclusivos de CG:*\\n🎧 Produção Musical\\n🎭 Teatro Musical\\n\\nQuer que eu crie um card com essa lista?",
+  "needs_confirmation": false
+}
+
+Exemplo para resposta curta:
+{
+  "intent": "general_chat",
+  "confidence": 0.95,
+  "entities": {},
+  "response_text": "Fala, Yuri! Tô por aqui. No que posso ajudar? 💪",
+  "needs_confirmation": false
+}
+
+REGRA: Se a resposta tem 3+ itens, OBRIGATORIAMENTE use \\n para separar cada item em uma linha.
+Use *asteriscos* para negrito (formato WhatsApp).`
 }
 
 // SYSTEM_PROMPT é recalculado a cada chamada dentro de classifyMessage()
@@ -215,7 +348,7 @@ export async function classifyMessage(
 
   let userMessage = `Mensagem do usuário "${userName}": "${text}"`
   if (conversationContext) {
-    userMessage = `Contexto da conversa anterior:\n${conversationContext}\n\n${userMessage}`
+    userMessage = `CONTEXTO DA CONVERSA (use para responder perguntas contextuais — se a resposta está aqui, responda como general_chat):\n${conversationContext}\n\n${userMessage}`
   }
 
   // WA-04: Injetar memória do agente (vai ANTES do userMessage para contexto de background)
@@ -246,6 +379,64 @@ export async function classifyMessage(
 }
 
 // ============================================
+// RECUPERAÇÃO DE JSON TRUNCADO
+// ============================================
+
+/**
+ * Tenta recuperar o response_text de um JSON truncado por MAX_TOKENS.
+ * Estratégia: extrair o valor de "response_text" via regex, mesmo que o JSON esteja incompleto.
+ */
+function tryRecoverTruncatedJson(rawText: string): string | null {
+  try {
+    // Tentar extrair response_text via regex — funciona mesmo com JSON cortado
+    const match = rawText.match(/"response_text"\s*:\s*"((?:[^"\\]|\\.)*)/)
+    if (match && match[1]) {
+      let recovered = match[1]
+      // Converter \\n em \n real
+      recovered = recovered.replace(/\\n/g, '\n')
+      // Remover possível truncamento no final (palavra cortada)
+      const lastNewline = recovered.lastIndexOf('\n')
+      if (lastNewline > recovered.length * 0.7) {
+        // Se o último \n está perto do final, cortar ali para não ter frase incompleta
+        recovered = recovered.substring(0, lastNewline)
+      }
+      recovered = recovered.trim()
+      if (recovered.length > 20) {
+        console.log(`[WA] Recuperado ${recovered.length} chars de JSON truncado`)
+        return recovered + '\n\n_(resposta longa, pode ter sido cortada)_'
+      }
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+// ============================================
+// PÓS-PROCESSAMENTO DE FORMATAÇÃO
+// ============================================
+
+/**
+ * Garante que o response_text tenha quebras de linha reais.
+ * O Gemini em modo JSON tende a gerar \\n literal em vez de \n real.
+ * Também normaliza formatação para WhatsApp.
+ */
+function formatResponseText(text: string): string {
+  if (!text) return text
+
+  // 1. Converter \\n literal (string escapada) em \n real
+  let formatted = text.replace(/\\n/g, '\n')
+
+  // 2. Remover espaços antes de \n (trailing whitespace)
+  formatted = formatted.replace(/ +\n/g, '\n')
+
+  // 3. Limitar a no máximo 2 quebras de linha consecutivas
+  formatted = formatted.replace(/\n{3,}/g, '\n\n')
+
+  return formatted.trim()
+}
+
+// ============================================
 // GEMINI (primário)
 // ============================================
 
@@ -271,8 +462,8 @@ async function tryGemini(apiKey: string, userMessage: string, systemPrompt: stri
           },
           generationConfig: {
             responseMimeType: 'application/json',
-            temperature: 0.1,
-            maxOutputTokens: 1024,
+            temperature: 0.3,
+            maxOutputTokens: 4096,
           }
         })
       }
@@ -286,17 +477,44 @@ async function tryGemini(apiKey: string, userMessage: string, systemPrompt: stri
 
     const data = await response.json()
     const responseText = data?.candidates?.[0]?.content?.parts?.[0]?.text
+    const finishReason = data?.candidates?.[0]?.finishReason
     if (!responseText) {
       console.error('[WA] Gemini returned empty response')
       return null
     }
 
-    const classification = JSON.parse(responseText) as ClassificationResult
+    // Se truncou por MAX_TOKENS, tentar recuperar o JSON parcial
+    if (finishReason === 'MAX_TOKENS') {
+      console.warn('[WA] Gemini response truncated (MAX_TOKENS). Tentando recuperar JSON parcial...')
+    }
+
+    let classification: ClassificationResult
+    try {
+      classification = JSON.parse(responseText) as ClassificationResult
+    } catch (_parseError) {
+      // JSON truncado — tentar extrair response_text parcial
+      console.warn('[WA] Gemini JSON parse failed, tentando recuperação parcial')
+      const partialText = tryRecoverTruncatedJson(responseText)
+      if (partialText) {
+        classification = {
+          intent: 'general_chat' as Intent,
+          confidence: 0.8,
+          entities: {},
+          response_text: partialText,
+          needs_confirmation: false,
+        }
+      } else {
+        console.error('[WA] Gemini: não foi possível recuperar JSON truncado')
+        return null
+      }
+    }
     if (!classification.intent || !classification.response_text) {
       console.error('[WA] Gemini returned invalid classification')
       return null
     }
 
+    // Pós-processar response_text: garantir que \n literal vire quebra de linha real
+    classification.response_text = formatResponseText(classification.response_text)
     classification.confidence = Number(classification.confidence) || 0.5
     console.log(`[WA] Gemini classified: intent=${classification.intent}, confidence=${classification.confidence}`)
     return classification
@@ -322,7 +540,7 @@ async function tryOpenAI(apiKey: string, userMessage: string, systemPrompt: stri
       body: JSON.stringify({
         model: 'gpt-4.1',
         temperature: 0.1,
-        max_tokens: 1024,
+        max_tokens: 4096,
         response_format: { type: 'json_object' },
         messages: [
           { role: 'system', content: systemPrompt },
@@ -344,12 +562,32 @@ async function tryOpenAI(apiKey: string, userMessage: string, systemPrompt: stri
       return null
     }
 
-    const classification = JSON.parse(responseText) as ClassificationResult
+    let classification: ClassificationResult
+    try {
+      classification = JSON.parse(responseText) as ClassificationResult
+    } catch (_parseError) {
+      console.warn('[WA] OpenAI JSON parse failed, tentando recuperação parcial')
+      const partialText = tryRecoverTruncatedJson(responseText)
+      if (partialText) {
+        classification = {
+          intent: 'general_chat' as Intent,
+          confidence: 0.8,
+          entities: {},
+          response_text: partialText,
+          needs_confirmation: false,
+        }
+      } else {
+        console.error('[WA] OpenAI: não foi possível recuperar JSON truncado')
+        return null
+      }
+    }
     if (!classification.intent || !classification.response_text) {
       console.error('[WA] OpenAI returned invalid classification')
       return null
     }
 
+    // Pós-processar response_text: garantir que \n literal vire quebra de linha real
+    classification.response_text = formatResponseText(classification.response_text)
     classification.confidence = Number(classification.confidence) || 0.5
     console.log(`[WA] OpenAI classified: intent=${classification.intent}, confidence=${classification.confidence}`)
     return classification

@@ -21,6 +21,10 @@ import {
   CaretLeft,
   CaretRight,
   DotsThreeVertical,
+  PencilSimple,
+  Trash,
+  Check,
+  DotsSixVertical,
 } from "@phosphor-icons/react";
 import { cn } from "@/lib/utils";
 import { Button, Badge, Avatar, Card, IconButton, Dot, ProgressBar } from "@/components/ui";
@@ -31,6 +35,7 @@ import {
   PointerSensor,
   useSensor,
   useSensors,
+  useDroppable,
   type DragStartEvent,
   type DragEndEvent,
 } from "@dnd-kit/core";
@@ -40,8 +45,7 @@ import {
   useSortable,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { getKanbanColumns, getKanbanCards, moveKanbanCard } from "@/lib/queries/kanban";
-import { getCalendarItems } from "@/lib/queries/calendar";
+import { getKanbanColumns, getKanbanCards, moveKanbanCard, createKanbanColumn, updateKanbanColumn, deleteKanbanColumn, reorderKanbanColumns } from "@/lib/queries/kanban";
 import { getAllUsers } from "@/lib/queries/users";
 import { getUserDisplay } from "@/lib/utils/calendar-helpers";
 import {
@@ -55,7 +59,7 @@ import {
   formatDateShort as formatDateHelper,
   isOverdue as isOverdueHelper,
 } from "@/lib/utils/kanban-helpers";
-import type { KanbanColumn as KanbanColumnType, KanbanCard as KanbanCardType, CalendarItem, UserProfile } from "@/lib/types/database";
+import type { KanbanColumn as KanbanColumnType, KanbanCard as KanbanCardType, UserProfile } from "@/lib/types/database";
 import type { KanbanFilters } from "@/types/filters";
 import { KanbanCardModal } from "@/components/kanban/KanbanCardModal";
 import { useRealtimeSubscription } from "@/hooks/useRealtimeSubscription";
@@ -87,7 +91,6 @@ export default function ProjetosPage() {
   const [columns, setColumns] = useState<KanbanColumnType[]>([]);
   const [cards, setCards] = useState<KanbanCardType[]>([]);
   const [users, setUsers] = useState<UserProfile[]>([]);
-  const [calendarItems, setCalendarItems] = useState<CalendarItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -126,21 +129,10 @@ export default function ProjetosPage() {
   useEffect(() => { loadData(); }, [loadData]);
 
   // === Realtime Subscriptions ===
-  useRealtimeSubscription({
-    table: 'kanban_cards',
-    onInsert: useCallback(async () => {
-      const data = await getKanbanCards();
-      setCards(data);
-    }, []),
-    onUpdate: useCallback(async () => {
-      const data = await getKanbanCards();
-      setCards(data);
-    }, []),
-    onDelete: useCallback(async () => {
-      const data = await getKanbanCards();
-      setCards(data);
-    }, []),
-  });
+  // Nota: Realtime para kanban_cards foi removido intencionalmente.
+  // Ele causava race condition com o optimistic update do drag & drop,
+  // revertendo o card para a coluna anterior. O re-fetch dos cards
+  // acontece via loadData() ao salvar/criar/deletar pelo modal.
 
   useRealtimeSubscription({
     table: 'kanban_columns',
@@ -201,18 +193,10 @@ export default function ProjetosPage() {
     return result;
   }, [cards, kanbanFilters]);
 
-  // Carregar calendar items quando tab Calendário é selecionada
-  useEffect(() => {
-    if (activeTab === "calendario") {
-      const now = new Date();
-      const start = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
-      const end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59).toISOString();
-      getCalendarItems(start, end).then(setCalendarItems).catch(console.error);
-    }
-  }, [activeTab]);
 
-  // Handler para mover card (optimistic update)
+  // Handler para mover card (optimistic update + persistência no banco)
   const handleMoveCard = useCallback(async (cardId: string, newColumnId: string, newPosition: number) => {
+    // Optimistic update — atualiza UI imediatamente
     setCards((prev) =>
       prev.map((c) =>
         c.id === cardId
@@ -224,6 +208,7 @@ export default function ProjetosPage() {
       await moveKanbanCard(cardId, newColumnId, newPosition);
     } catch (err) {
       console.error("Erro ao mover card:", err);
+      // Rollback: re-fetch do banco em caso de erro
       const freshCards = await getKanbanCards();
       setCards(freshCards);
     }
@@ -404,10 +389,10 @@ export default function ProjetosPage() {
             {activeTab === "dashboard" && <DashboardTab cards={filteredCards} columns={columns} users={users} />}
             {activeTab === "lista" && <ListaTab cards={filteredCards} columns={columns} onEditCard={(card) => { setEditingCard(card); setCardModalOpen(true); }} />}
             {activeTab === "kanban" && <KanbanTab cards={filteredCards} columns={columns} setCards={setCards} onMoveCard={handleMoveCard} onEditCard={(card) => { setEditingCard(card); setCardModalOpen(true); }} onAddCard={(colId) => { setEditingCard(null); setCreateDefaultColumnId(colId); setCardModalOpen(true); }} />}
-            {activeTab === "calendario" && <CalendarioTab calendarItems={calendarItems} />}
+            {activeTab === "calendario" && <CalendarioTab cards={filteredCards} columns={columns} onEditCard={(card) => { setEditingCard(card); setCardModalOpen(true); }} />}
             {activeTab === "timeline" && <TimelineTab cards={filteredCards} columns={columns} />}
             {activeTab === "por-pessoa" && <PorPessoaTab cards={filteredCards} columns={columns} />}
-            {activeTab === "configuracoes" && <ConfiguracoesTab columns={columns} users={users} />}
+            {activeTab === "configuracoes" && <ConfiguracoesTab columns={columns} setColumns={setColumns} cards={cards} users={users} />}
           </>
         )}
       </div>
@@ -803,19 +788,40 @@ function KanbanTab({ cards, columns, setCards, onMoveCard, onEditCard, onAddCard
   const handleDragEnd = useCallback((event: DragEndEvent) => {
     const { active, over } = event;
     setActiveId(null);
-    if (!over) return;
+    if (!over || active.id === over.id) return;
 
+    const activeCardId = String(active.id);
     const overId = String(over.id);
-    // Se soltou sobre uma coluna
-    const targetColumn = columns.find((c) => c.id === overId);
-    // Se soltou sobre um card, pegar a coluna do card
-    const targetCard = cards.find((c) => c.id === overId);
-    const newColumnId = targetColumn?.id || targetCard?.column_id;
 
-    const currentCard = cards.find((c) => c.id === active.id);
-    if (newColumnId && currentCard && newColumnId !== currentCard.column_id) {
+    const currentCard = cards.find((c) => c.id === activeCardId);
+    if (!currentCard) return;
+
+    // Determinar coluna destino: pode ser uma coluna (droppable com prefixo) ou um card (sortable)
+    const columnPrefix = 'column-';
+    const isOverColumn = overId.startsWith(columnPrefix);
+    const overCard = !isOverColumn ? cards.find((c) => c.id === overId) : null;
+
+    let newColumnId: string;
+    let newPosition: number;
+
+    if (isOverColumn) {
+      // Soltou sobre a área vazia da coluna (ID com prefixo column-)
+      newColumnId = overId.replace(columnPrefix, '');
       const targetCards = grouped.get(newColumnId) ?? [];
-      onMoveCard(currentCard.id, newColumnId, targetCards.length);
+      newPosition = targetCards.length;
+    } else if (overCard) {
+      // Soltou sobre outro card — mover para a coluna desse card
+      newColumnId = overCard.column_id;
+      const targetCards = grouped.get(newColumnId) ?? [];
+      const overIndex = targetCards.findIndex((c) => c.id === overId);
+      newPosition = overIndex >= 0 ? overIndex : targetCards.length;
+    } else {
+      return;
+    }
+
+    // Só chamar onMoveCard se realmente mudou algo
+    if (newColumnId !== currentCard.column_id || newPosition !== currentCard.position_in_column) {
+      onMoveCard(currentCard.id, newColumnId, newPosition);
     }
   }, [cards, columns, grouped, onMoveCard]);
 
@@ -831,14 +837,12 @@ function KanbanTab({ cards, columns, setCards, onMoveCard, onEditCard, onAddCard
           const status = getStatusFromColumn(col);
           const colCards = grouped.get(col.id) ?? [];
           return (
-            <div
-              key={col.id}
-              className="w-[280px] flex-shrink-0 rounded-[14px] border border-slate-800 bg-slate-950/50 p-3"
-            >
+            <DroppableColumn key={col.id} columnId={col.id}>
               {/* Column Header */}
               <div className="mb-3 flex items-center gap-2">
                 <Dot color={status.color} size="lg" />
                 <span className="text-sm font-semibold text-slate-200">{status.label}</span>
+                <span className="text-sm">{status.emoji}</span>
                 <Badge variant="neutral" size="md" className="ml-auto">
                   {colCards.length}
                 </Badge>
@@ -850,7 +854,7 @@ function KanbanTab({ cards, columns, setCards, onMoveCard, onEditCard, onAddCard
                 items={colCards.map((c) => c.id)}
                 strategy={verticalListSortingStrategy}
               >
-                <div className="space-y-2">
+                <div className="space-y-2 min-h-[40px]">
                   {colCards.map((card) => (
                     <KanbanCardItem
                       key={card.id}
@@ -870,7 +874,7 @@ function KanbanTab({ cards, columns, setCards, onMoveCard, onEditCard, onAddCard
               >
                 <Plus size={14} /> Adicionar
               </button>
-            </div>
+            </DroppableColumn>
           );
         })}
       </div>
@@ -886,6 +890,22 @@ function KanbanTab({ cards, columns, setCards, onMoveCard, onEditCard, onAddCard
         ) : null}
       </DragOverlay>
     </DndContext>
+  );
+}
+
+// Coluna droppable — registra como drop target para o DndContext
+function DroppableColumn({ columnId, children }: { columnId: string; children: React.ReactNode }) {
+  const { setNodeRef, isOver } = useDroppable({ id: `column-${columnId}` });
+  return (
+    <div
+      ref={setNodeRef}
+      className={cn(
+        "w-[280px] flex-shrink-0 rounded-[14px] border bg-slate-950/50 p-3 transition-colors",
+        isOver ? "border-accent-cyan/50 bg-accent-cyan/[0.03]" : "border-slate-800"
+      )}
+    >
+      {children}
+    </div>
   );
 }
 
@@ -921,8 +941,14 @@ function KanbanCardItem({
       style={style}
       {...attributes}
       {...listeners}
-      className="cursor-grab rounded-[12px] border border-slate-800 bg-slate-900/80 p-4 transition-colors hover:bg-slate-800/60"
-      onDoubleClick={onClick}
+      className={cn(
+        "rounded-[12px] border border-slate-800 bg-slate-900/80 p-4 transition-colors hover:bg-slate-800/60",
+        isDragging ? "cursor-grabbing" : "cursor-grab"
+      )}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        if (onClick) onClick();
+      }}
     >
       <p className="text-sm font-medium text-slate-100">{card.title}</p>
 
@@ -958,168 +984,409 @@ function KanbanCardItem({
 }
 
 // ============================================================
-// TAB: CALENDÁRIO
+// TAB: CALENDÁRIO (Prazos dos Projetos — kanban_cards.due_date)
 // ============================================================
 
-const HORAS = Array.from({ length: 11 }, (_, i) => i + 8); // 8:00 a 18:00
-const DIAS_SEMANA = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
-const MESES_NOME = [
+const CAL_DIAS_SEMANA = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+const CAL_DIAS_SEMANA_FULL = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
+const CAL_MESES = [
   "janeiro", "fevereiro", "março", "abril", "maio", "junho",
   "julho", "agosto", "setembro", "outubro", "novembro", "dezembro",
 ];
 
-function CalendarioTab({ calendarItems }: { calendarItems: CalendarItem[] }) {
-  const [weekOffset, setWeekOffset] = useState(0);
+function isSameDayUtil(d1: Date, d2: Date) {
+  return d1.getFullYear() === d2.getFullYear() && d1.getMonth() === d2.getMonth() && d1.getDate() === d2.getDate();
+}
+
+interface CalendarioTabProps {
+  cards: KanbanCardType[];
+  columns: KanbanColumnType[];
+  onEditCard: (card: KanbanCardType) => void;
+}
+
+function CalendarioTab({ cards, columns, onEditCard }: CalendarioTabProps) {
+  const [offset, setOffset] = useState(0);
   const [view, setView] = useState<"dia" | "semana" | "mes">("semana");
 
-  const now = new Date();
-  const baseStart = new Date(now.getFullYear(), now.getMonth(), 1);
-  // Ajustar para domingo da semana
-  baseStart.setDate(baseStart.getDate() - baseStart.getDay());
-  const weekStart = new Date(baseStart);
-  weekStart.setDate(weekStart.getDate() + weekOffset * 7);
+  const now = useMemo(() => new Date(), []);
 
-  const weekDays = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(weekStart);
-    d.setDate(d.getDate() + i);
+  // Cards com due_date (únicos que fazem sentido no calendário de prazos)
+  const cardsWithDue = useMemo(() => cards.filter((c) => c.due_date), [cards]);
+
+  // Navegação
+  const currentDate = useMemo(() => {
+    const d = new Date(now);
+    if (view === "dia") d.setDate(d.getDate() + offset);
+    else if (view === "semana") d.setDate(d.getDate() + offset * 7);
+    else d.setMonth(d.getMonth() + offset);
     return d;
-  });
+  }, [now, offset, view]);
 
-  const mesNome = MESES_NOME[weekStart.getMonth()];
-  const ano = weekStart.getFullYear();
+  // Reset offset ao trocar view
+  const handleViewChange = useCallback((v: "dia" | "semana" | "mes") => {
+    setView(v);
+    setOffset(0);
+  }, []);
 
-  const hoje = now.getDate();
-  const hojeMes = now.getMonth();
-  const hojeAno = now.getFullYear();
+  // Título do header
+  const headerTitle = useMemo(() => {
+    if (view === "dia") {
+      return `${CAL_DIAS_SEMANA_FULL[currentDate.getDay()]}, ${currentDate.getDate()} de ${CAL_MESES[currentDate.getMonth()]}`;
+    }
+    if (view === "semana") {
+      const weekStart = new Date(currentDate);
+      const day = weekStart.getDay();
+      weekStart.setDate(weekStart.getDate() - day);
+      const weekEnd = new Date(weekStart);
+      weekEnd.setDate(weekEnd.getDate() + 6);
+      if (weekStart.getMonth() === weekEnd.getMonth()) {
+        return `${weekStart.getDate()} — ${weekEnd.getDate()} de ${CAL_MESES[weekStart.getMonth()]} ${weekStart.getFullYear()}`;
+      }
+      return `${weekStart.getDate()} ${CAL_MESES[weekStart.getMonth()].slice(0, 3)} — ${weekEnd.getDate()} ${CAL_MESES[weekEnd.getMonth()].slice(0, 3)} ${weekEnd.getFullYear()}`;
+    }
+    return `${CAL_MESES[currentDate.getMonth()]} de ${currentDate.getFullYear()}`;
+  }, [currentDate, view]);
 
-  // Filtrar eventos da semana atual
-  const weekEvents = useMemo(() => {
-    const wStart = weekDays[0];
-    const wEnd = weekDays[6];
-    if (!wStart || !wEnd) return [];
-    return calendarItems.filter((item) => {
-      const d = new Date(item.start_time);
-      return d >= wStart && d <= new Date(wEnd.getTime() + 86400000);
-    });
-  }, [calendarItems, weekDays]);
-
-  if (view !== "semana") {
-    return (
-      <div className="flex h-64 flex-col items-center justify-center rounded-[14px] border border-dashed border-slate-800 bg-slate-900/50">
-        <h2 className="text-h3 font-bold text-slate-50">
-          Visualização {view === "dia" ? "Diária" : "Mensal"}
-        </h2>
-        <p className="mt-2 text-body text-slate-400">Em breve</p>
-      </div>
-    );
-  }
+  // Contagem de cards sem prazo
+  const noDueCount = cards.length - cardsWithDue.length;
 
   return (
     <div className="space-y-4">
-      {/* Header: navegação + toggle view */}
+      {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <IconButton size="sm" variant="outline" onClick={() => setWeekOffset((w) => w - 1)}>
+          <IconButton size="sm" variant="outline" onClick={() => setOffset((o) => o - 1)}>
             <CaretLeft size={16} weight="bold" />
           </IconButton>
-          <h3 className="text-lg font-bold text-slate-50">
-            {mesNome} de {ano}
-          </h3>
-          <IconButton size="sm" variant="outline" onClick={() => setWeekOffset((w) => w + 1)}>
+          <h3 className="text-lg font-bold text-slate-50">{headerTitle}</h3>
+          <IconButton size="sm" variant="outline" onClick={() => setOffset((o) => o + 1)}>
             <CaretRight size={16} weight="bold" />
           </IconButton>
+          {offset !== 0 && (
+            <button onClick={() => setOffset(0)} className="ml-1 rounded-md bg-slate-800 px-2.5 py-1 text-xs font-medium text-slate-300 hover:bg-slate-700 transition-colors">
+              Hoje
+            </button>
+          )}
         </div>
 
-        <div className="flex rounded-lg border border-slate-700 overflow-hidden">
-          {(["dia", "semana", "mes"] as const).map((v) => (
-            <button
-              key={v}
-              onClick={() => setView(v)}
-              className={cn(
-                "px-3 py-1.5 text-xs font-medium transition-colors",
-                view === v
-                  ? "bg-accent-cyan text-slate-950"
-                  : "text-slate-400 hover:bg-slate-800 hover:text-slate-200"
-              )}
-            >
-              {v === "dia" ? "Dia" : v === "semana" ? "Semana" : "Mês"}
-            </button>
-          ))}
+        <div className="flex items-center gap-3">
+          {noDueCount > 0 && (
+            <span className="text-xs text-slate-500">{noDueCount} sem prazo</span>
+          )}
+          <div className="flex rounded-lg border border-slate-700 overflow-hidden">
+            {(["dia", "semana", "mes"] as const).map((v) => (
+              <button
+                key={v}
+                onClick={() => handleViewChange(v)}
+                className={cn(
+                  "px-3 py-1.5 text-xs font-medium transition-colors",
+                  view === v
+                    ? "bg-accent-cyan text-slate-950"
+                    : "text-slate-400 hover:bg-slate-800 hover:text-slate-200"
+                )}
+              >
+                {v === "dia" ? "Dia" : v === "semana" ? "Semana" : "Mês"}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
-      {/* Calendar Grid */}
-      <Card variant="default" className="overflow-hidden !p-0">
-        {/* Day headers */}
-        <div className="grid grid-cols-[60px_repeat(7,1fr)] border-b border-slate-800">
-          <div /> {/* spacer para coluna de horas */}
-          {weekDays.map((d, i) => {
-            const dayNum = d.getDate();
-            const isToday =
-              dayNum === hoje && d.getMonth() === hojeMes && d.getFullYear() === hojeAno;
+      {/* Views */}
+      {view === "dia" && (
+        <CalDiaView date={currentDate} cards={cardsWithDue} columns={columns} onEditCard={onEditCard} now={now} />
+      )}
+      {view === "semana" && (
+        <CalSemanaView date={currentDate} cards={cardsWithDue} columns={columns} onEditCard={onEditCard} now={now} />
+      )}
+      {view === "mes" && (
+        <CalMesView date={currentDate} cards={cardsWithDue} columns={columns} onEditCard={onEditCard} now={now} />
+      )}
+    </div>
+  );
+}
+
+// --- Card chip reutilizável ---
+function CalCardChip({ card, columns, onClick }: { card: KanbanCardType; columns: KanbanColumnType[]; onClick: () => void }) {
+  const status = getStatusFromColumn(card.column ?? columns.find((c) => c.id === card.column_id));
+  const priority = getPriorityDisplay(card.priority);
+  const overdue = card.due_date ? isOverdueHelper(card.due_date) : false;
+
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        "group w-full text-left rounded-lg p-2.5 transition-all hover:brightness-125 cursor-pointer",
+        overdue ? "bg-red-500/10 border border-red-500/20" : "bg-slate-800/60 border border-slate-700/40 hover:border-slate-600/60"
+      )}
+    >
+      <div className="flex items-start gap-2">
+        <div className="mt-0.5 h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: status.color }} />
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-medium text-slate-200 truncate">{card.title}</p>
+          <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+            <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full", status.bgClass)}>{status.label}</span>
+            {priority && (
+              <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full", priority.bgClass)}>{priority.label}</span>
+            )}
+            {card.platforms?.slice(0, 2).map((p) => (
+              <Dot key={p} size="xs" color={PLATFORM_COLORS[p] ?? "#6B7280"} />
+            ))}
+          </div>
+        </div>
+        {overdue && <span className="text-[10px] font-semibold text-red-400 shrink-0">Atrasado</span>}
+      </div>
+    </button>
+  );
+}
+
+// --- VIEW: DIA ---
+function CalDiaView({ date, cards, columns, onEditCard, now }: { date: Date; cards: KanbanCardType[]; columns: KanbanColumnType[]; onEditCard: (c: KanbanCardType) => void; now: Date }) {
+  const dayCards = useMemo(() =>
+    cards.filter((c) => {
+      const d = new Date(c.due_date!);
+      return isSameDayUtil(d, date);
+    }).sort((a, b) => {
+      const pa = { urgent: 0, high: 1, medium: 2, low: 3 }[a.priority ?? "low"] ?? 3;
+      const pb = { urgent: 0, high: 1, medium: 2, low: 3 }[b.priority ?? "low"] ?? 3;
+      return pa - pb;
+    }),
+  [cards, date]);
+
+  const isToday = isSameDayUtil(date, now);
+
+  return (
+    <Card variant="default" className="!p-0 overflow-hidden">
+      <div className={cn("px-5 py-3 border-b", isToday ? "border-accent-cyan/30 bg-accent-cyan/5" : "border-slate-800")}>
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-semibold text-slate-200">
+            {isToday && <span className="text-accent-cyan mr-2">●</span>}
+            Prazos do dia
+          </span>
+          <Badge variant="neutral" size="sm">{dayCards.length} {dayCards.length === 1 ? "projeto" : "projetos"}</Badge>
+        </div>
+      </div>
+      <div className="p-4">
+        {dayCards.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-12 text-center">
+            <CalendarDots size={32} weight="duotone" className="text-slate-600 mb-2" />
+            <p className="text-sm text-slate-500">Nenhum prazo neste dia</p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {dayCards.map((card) => (
+              <CalCardChip key={card.id} card={card} columns={columns} onClick={() => onEditCard(card)} />
+            ))}
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+// --- VIEW: SEMANA ---
+function CalSemanaView({ date, cards, columns, onEditCard, now }: { date: Date; cards: KanbanCardType[]; columns: KanbanColumnType[]; onEditCard: (c: KanbanCardType) => void; now: Date }) {
+  const weekStart = useMemo(() => {
+    const d = new Date(date);
+    d.setDate(d.getDate() - d.getDay());
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }, [date]);
+
+  const weekDays = useMemo(() =>
+    Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(weekStart);
+      d.setDate(d.getDate() + i);
+      return d;
+    }),
+  [weekStart]);
+
+  // Agrupar cards por dia da semana
+  const cardsByDay = useMemo(() => {
+    const map = new Map<number, KanbanCardType[]>();
+    weekDays.forEach((_, i) => map.set(i, []));
+    cards.forEach((card) => {
+      const d = new Date(card.due_date!);
+      const idx = weekDays.findIndex((wd) => isSameDayUtil(wd, d));
+      if (idx >= 0) map.get(idx)!.push(card);
+    });
+    // Ordenar por prioridade dentro de cada dia
+    map.forEach((dayCards) => {
+      dayCards.sort((a, b) => {
+        const pa = { urgent: 0, high: 1, medium: 2, low: 3 }[a.priority ?? "low"] ?? 3;
+        const pb = { urgent: 0, high: 1, medium: 2, low: 3 }[b.priority ?? "low"] ?? 3;
+        return pa - pb;
+      });
+    });
+    return map;
+  }, [cards, weekDays]);
+
+  return (
+    <Card variant="default" className="overflow-hidden !p-0">
+      {/* Day headers */}
+      <div className="grid grid-cols-7 border-b border-slate-800">
+        {weekDays.map((d, i) => {
+          const isToday = isSameDayUtil(d, now);
+          const count = cardsByDay.get(i)?.length ?? 0;
+          return (
+            <div key={i} className={cn("flex flex-col items-center py-3", i > 0 && "border-l border-slate-800/50")}>
+              <span className="text-[10px] font-medium text-slate-500 uppercase">{CAL_DIAS_SEMANA[i]}</span>
+              <span
+                className={cn(
+                  "mt-1 flex h-8 w-8 items-center justify-center rounded-full text-sm font-bold",
+                  isToday ? "bg-accent-cyan text-slate-950" : "text-slate-200"
+                )}
+              >
+                {d.getDate()}
+              </span>
+              {count > 0 && (
+                <span className="mt-1 text-[10px] font-medium text-slate-400">{count} {count === 1 ? "prazo" : "prazos"}</span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Cards grid */}
+      <div className="grid grid-cols-7 min-h-[320px]">
+        {weekDays.map((wd, i) => {
+          const dayCards = cardsByDay.get(i) ?? [];
+          const isToday = isSameDayUtil(wd, now);
+          return (
+            <div
+              key={i}
+              className={cn(
+                "p-2 space-y-1.5",
+                i > 0 && "border-l border-slate-800/30",
+                isToday && "bg-accent-cyan/[0.03]"
+              )}
+            >
+              {dayCards.map((card) => (
+                <CalCardChip key={card.id} card={card} columns={columns} onClick={() => onEditCard(card)} />
+              ))}
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
+
+// --- VIEW: MÊS ---
+function CalMesView({ date, cards, columns, onEditCard, now }: { date: Date; cards: KanbanCardType[]; columns: KanbanColumnType[]; onEditCard: (c: KanbanCardType) => void; now: Date }) {
+  const { weeks, monthStart } = useMemo(() => {
+    const ms = new Date(date.getFullYear(), date.getMonth(), 1);
+    const me = new Date(date.getFullYear(), date.getMonth() + 1, 0);
+    // Começar no domingo da semana do dia 1
+    const calStart = new Date(ms);
+    calStart.setDate(calStart.getDate() - calStart.getDay());
+    // Terminar no sábado da semana do último dia
+    const calEnd = new Date(me);
+    calEnd.setDate(calEnd.getDate() + (6 - calEnd.getDay()));
+
+    const wks: Date[][] = [];
+    const cursor = new Date(calStart);
+    while (cursor <= calEnd) {
+      const week: Date[] = [];
+      for (let i = 0; i < 7; i++) {
+        week.push(new Date(cursor));
+        cursor.setDate(cursor.getDate() + 1);
+      }
+      wks.push(week);
+    }
+    return { weeks: wks, monthStart: ms };
+  }, [date]);
+
+  // Agrupar cards por dia (chave: YYYY-MM-DD)
+  const cardsByDate = useMemo(() => {
+    const map = new Map<string, KanbanCardType[]>();
+    cards.forEach((card) => {
+      const d = new Date(card.due_date!);
+      const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(card);
+    });
+    return map;
+  }, [cards]);
+
+  return (
+    <Card variant="default" className="overflow-hidden !p-0">
+      {/* Day-of-week headers */}
+      <div className="grid grid-cols-7 border-b border-slate-800">
+        {CAL_DIAS_SEMANA.map((d, i) => (
+          <div key={i} className={cn("py-2 text-center text-[10px] font-semibold uppercase text-slate-500", i > 0 && "border-l border-slate-800/50")}>
+            {d}
+          </div>
+        ))}
+      </div>
+
+      {/* Weeks */}
+      {weeks.map((week, wi) => (
+        <div key={wi} className={cn("grid grid-cols-7", wi > 0 && "border-t border-slate-800/40")}>
+          {week.map((day, di) => {
+            const isCurrentMonth = day.getMonth() === monthStart.getMonth();
+            const isToday = isSameDayUtil(day, now);
+            const key = `${day.getFullYear()}-${day.getMonth()}-${day.getDate()}`;
+            const dayCards = cardsByDate.get(key) ?? [];
+            const overdue = dayCards.some((c) => c.due_date && isOverdueHelper(c.due_date));
+
             return (
-              <div key={i} className="flex flex-col items-center py-3 border-l border-slate-800/50">
-                <span className="text-xs text-slate-500">{DIAS_SEMANA[i]}</span>
-                <span
-                  className={cn(
-                    "mt-1 flex h-8 w-8 items-center justify-center rounded-full text-lg font-bold",
-                    isToday
-                      ? "bg-accent-cyan text-slate-950"
-                      : "text-slate-200"
+              <div
+                key={di}
+                className={cn(
+                  "min-h-[90px] p-1.5",
+                  di > 0 && "border-l border-slate-800/30",
+                  !isCurrentMonth && "opacity-40",
+                  isToday && "bg-accent-cyan/[0.04]"
+                )}
+              >
+                {/* Day number */}
+                <div className="flex items-center justify-between mb-1">
+                  <span
+                    className={cn(
+                      "flex h-6 w-6 items-center justify-center rounded-full text-xs font-semibold",
+                      isToday ? "bg-accent-cyan text-slate-950" : "text-slate-400"
+                    )}
+                  >
+                    {day.getDate()}
+                  </span>
+                  {dayCards.length > 0 && (
+                    <span className={cn("text-[9px] font-bold px-1.5 py-0.5 rounded-full", overdue ? "bg-red-500/15 text-red-400" : "bg-slate-700/50 text-slate-400")}>
+                      {dayCards.length}
+                    </span>
                   )}
-                >
-                  {dayNum}
-                </span>
+                </div>
+
+                {/* Card chips (max 3, then "+N") */}
+                <div className="space-y-0.5">
+                  {dayCards.slice(0, 3).map((card) => {
+                    const status = getStatusFromColumn(card.column ?? columns.find((c) => c.id === card.column_id));
+                    const cardOverdue = card.due_date ? isOverdueHelper(card.due_date) : false;
+                    return (
+                      <button
+                        key={card.id}
+                        onClick={() => onEditCard(card)}
+                        className={cn(
+                          "w-full text-left rounded px-1.5 py-0.5 text-[10px] font-medium truncate transition-colors hover:brightness-125 cursor-pointer",
+                          cardOverdue ? "bg-red-500/15 text-red-300" : "text-slate-300"
+                        )}
+                        style={{ backgroundColor: cardOverdue ? undefined : `${status.color}20`, borderLeft: `2px solid ${status.color}` }}
+                        title={card.title}
+                      >
+                        {card.title}
+                      </button>
+                    );
+                  })}
+                  {dayCards.length > 3 && (
+                    <span className="block text-[9px] text-slate-500 pl-1">+{dayCards.length - 3} mais</span>
+                  )}
+                </div>
               </div>
             );
           })}
         </div>
-
-        {/* Time grid */}
-        <div className="relative">
-          {HORAS.map((hora) => (
-            <div key={hora} className="grid grid-cols-[60px_repeat(7,1fr)] h-[50px] border-b border-slate-800/30">
-              <div className="flex items-start justify-end pr-2 pt-1 text-xs text-slate-600">
-                {hora.toString().padStart(2, "0")}:00
-              </div>
-              {weekDays.map((wd, di) => (
-                <div key={di} className="border-l border-slate-800/30 relative">
-                  {/* Render events */}
-                  {weekEvents
-                    .filter((item) => {
-                      const d = new Date(item.start_time);
-                      return d.getDate() === wd.getDate() && d.getMonth() === wd.getMonth() && d.getHours() === hora;
-                    })
-                    .map((item) => {
-                      const d = new Date(item.start_time);
-                      const topOffset = (d.getMinutes() / 60) * 50;
-                      const typeColors: Record<string, string> = {
-                        event: "#F97316", delivery: "#EF4444", creation: "#1AA8BF", task: "#10B981", meeting: "#8B5CF6",
-                      };
-                      const cor = typeColors[item.type] ?? "#6B7280";
-                      return (
-                        <div
-                          key={item.id}
-                          className="absolute inset-x-1 rounded-[8px] p-2 text-xs font-medium text-slate-100 transition-colors cursor-pointer z-10"
-                          style={{
-                            top: `${topOffset}px`,
-                            height: "24px",
-                            backgroundColor: `${cor}30`,
-                            borderLeft: `3px solid ${cor}`,
-                          }}
-                          title={item.title}
-                        >
-                          <span className="block truncate leading-none">{item.title}</span>
-                        </div>
-                      );
-                    })}
-                </div>
-              ))}
-            </div>
-          ))}
-        </div>
-      </Card>
-    </div>
+      ))}
+    </Card>
   );
 }
 
@@ -1419,7 +1686,26 @@ const ROLE_BADGE: Record<string, string> = {
   developer: "bg-violet-500/20 text-violet-400",
 };
 
-function ConfiguracoesTab({ columns, users }: { columns: KanbanColumnType[]; users: UserProfile[] }) {
+// Paleta de cores disponíveis para colunas
+const COLUMN_COLOR_OPTIONS = [
+  "#8B5CF6", "#3B82F6", "#10B981", "#22C55E", "#F59E0B",
+  "#F97316", "#EF4444", "#EC4899", "#6366F1", "#38C8DB",
+  "#14B8A6", "#A78BFA", "#5A7A82", "#1AA8BF",
+];
+
+// Emojis sugeridos para colunas
+const COLUMN_EMOJI_OPTIONS = [
+  "🔮", "📋", "📌", "🎬", "✂️", "✅", "👍", "🚀", "📦",
+  "💡", "🎯", "🔥", "⭐", "🎨", "📸", "🎵", "📱", "💬",
+  "🏷️", "📊", "⏳", "🔄", "🎉", "🛠️",
+];
+
+function ConfiguracoesTab({ columns, setColumns, cards, users }: {
+  columns: KanbanColumnType[];
+  setColumns: React.Dispatch<React.SetStateAction<KanbanColumnType[]>>;
+  cards: KanbanCardType[];
+  users: UserProfile[];
+}) {
   const [notifs, setNotifs] = useState({
     novasTarefas: true,
     lembretePrazo: true,
@@ -1427,9 +1713,149 @@ function ConfiguracoesTab({ columns, users }: { columns: KanbanColumnType[]; use
     tarefaAtrasada: false,
   });
 
+  // Estado de edição de coluna
+  const [editingColumnId, setEditingColumnId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState({ name: "", slug: "", color: "", emoji: "" });
+  const [savingColumnId, setSavingColumnId] = useState<string | null>(null);
+  const [columnError, setColumnError] = useState<string | null>(null);
+
+  // Estado de criação de nova coluna
+  const [showNewColumn, setShowNewColumn] = useState(false);
+  const [newColumnForm, setNewColumnForm] = useState({ name: "", slug: "", color: "#3B82F6", emoji: "📄" });
+  const [creatingColumn, setCreatingColumn] = useState(false);
+
+  // Estado de confirmação de exclusão
+  const [deletingColumnId, setDeletingColumnId] = useState<string | null>(null);
+
   function toggleNotif(key: keyof typeof notifs) {
     setNotifs((prev) => ({ ...prev, [key]: !prev[key] }));
   }
+
+  // Gerar slug a partir do nome
+  function generateSlug(name: string): string {
+    return name
+      .toLowerCase()
+      .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_|_$/g, "");
+  }
+
+  // Iniciar edição de coluna
+  function startEdit(col: KanbanColumnType) {
+    setEditingColumnId(col.id);
+    setEditForm({
+      name: col.name,
+      slug: col.slug,
+      color: col.color ?? "#6B7280",
+      emoji: col.emoji ?? getStatusFromColumn(col).emoji,
+    });
+    setColumnError(null);
+  }
+
+  // Cancelar edição
+  function cancelEdit() {
+    setEditingColumnId(null);
+    setColumnError(null);
+  }
+
+  // Salvar edição
+  async function saveEdit(colId: string) {
+    if (!editForm.name.trim()) {
+      setColumnError("Nome é obrigatório");
+      return;
+    }
+    setSavingColumnId(colId);
+    setColumnError(null);
+    try {
+      const updated = await updateKanbanColumn(colId, {
+        name: editForm.name.trim(),
+        slug: editForm.slug.trim() || generateSlug(editForm.name),
+        color: editForm.color,
+        emoji: editForm.emoji,
+      });
+      setColumns((prev) => prev.map((c) => (c.id === colId ? updated : c)));
+      setEditingColumnId(null);
+    } catch (err) {
+      setColumnError(err instanceof Error ? err.message : "Erro ao salvar");
+    } finally {
+      setSavingColumnId(null);
+    }
+  }
+
+  // Criar nova coluna
+  async function handleCreateColumn() {
+    if (!newColumnForm.name.trim()) {
+      setColumnError("Nome é obrigatório");
+      return;
+    }
+    setCreatingColumn(true);
+    setColumnError(null);
+    try {
+      const slug = newColumnForm.slug.trim() || generateSlug(newColumnForm.name);
+      const created = await createKanbanColumn({
+        name: newColumnForm.name.trim(),
+        slug,
+        color: newColumnForm.color,
+        emoji: newColumnForm.emoji,
+        position: columns.length + 1,
+      });
+      setColumns((prev) => [...prev, created]);
+      setShowNewColumn(false);
+      setNewColumnForm({ name: "", slug: "", color: "#3B82F6", emoji: "📄" });
+    } catch (err) {
+      setColumnError(err instanceof Error ? err.message : "Erro ao criar coluna");
+    } finally {
+      setCreatingColumn(false);
+    }
+  }
+
+  // Excluir coluna
+  async function handleDeleteColumn(colId: string) {
+    const cardsInColumn = cards.filter((c) => c.column_id === colId);
+    if (cardsInColumn.length > 0) {
+      setColumnError(`Não é possível excluir: existem ${cardsInColumn.length} card(s) nesta coluna. Mova-os antes.`);
+      setDeletingColumnId(null);
+      return;
+    }
+    setSavingColumnId(colId);
+    setColumnError(null);
+    try {
+      await deleteKanbanColumn(colId);
+      setColumns((prev) => prev.filter((c) => c.id !== colId));
+      setDeletingColumnId(null);
+    } catch (err) {
+      setColumnError(err instanceof Error ? err.message : "Erro ao excluir");
+    } finally {
+      setSavingColumnId(null);
+    }
+  }
+
+  // Drag & drop para reordenar colunas
+  const columnSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
+  );
+
+  const handleColumnDragEnd = useCallback(async (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+
+    const oldIdx = columns.findIndex((c) => c.id === active.id);
+    const newIdx = columns.findIndex((c) => c.id === over.id);
+    if (oldIdx < 0 || newIdx < 0) return;
+
+    // Optimistic update
+    const reordered = [...columns];
+    const [moved] = reordered.splice(oldIdx, 1);
+    reordered.splice(newIdx, 0, moved);
+    setColumns(reordered);
+
+    try {
+      await reorderKanbanColumns(reordered.map((c) => c.id));
+    } catch {
+      setColumns(columns);
+      setColumnError("Erro ao reordenar");
+    }
+  }, [columns, setColumns]);
 
   return (
     <div className="mx-auto max-w-[800px] space-y-6">
@@ -1490,24 +1916,145 @@ function ConfiguracoesTab({ columns, users }: { columns: KanbanColumnType[]; use
         </div>
       </Card>
 
-      {/* Seção 3 — Colunas Kanban */}
+      {/* Seção 3 — Colunas Kanban (CRUD completo) */}
       <Card variant="default">
-        <h3 className="mb-4 text-lg font-semibold text-slate-50">Colunas Kanban</h3>
-        <div className="divide-y divide-slate-800/30">
-          {columns.map((col) => {
-            const status = getStatusFromColumn(col);
-            return (
-              <div key={col.id} className="flex items-center justify-between py-3">
-                <div className="flex items-center gap-3">
-                  <Dot color={status.color} size="lg" />
-                  <span className="text-sm text-slate-300">{status.label}</span>
-                  <span className="text-xs text-slate-600">({col.slug})</span>
-                </div>
-                <span className="text-base">{status.emoji}</span>
-              </div>
-            );
-          })}
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-lg font-semibold text-slate-50">Colunas Kanban</h3>
+          <span className="text-xs text-slate-500">{columns.length} colunas</span>
         </div>
+
+        {/* Mensagem de erro */}
+        {columnError && (
+          <div className="mb-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+            {columnError}
+            <button onClick={() => setColumnError(null)} className="ml-2 text-red-300 hover:text-red-200">✕</button>
+          </div>
+        )}
+
+        <DndContext
+          sensors={columnSensors}
+          collisionDetection={closestCorners}
+          onDragEnd={handleColumnDragEnd}
+        >
+          <SortableContext
+            items={columns.map((c) => c.id)}
+            strategy={verticalListSortingStrategy}
+          >
+            <div className="divide-y divide-slate-800/30">
+              {columns.map((col) => (
+                <SortableColumnRow
+                  key={col.id}
+                  col={col}
+                  cards={cards}
+                  editingColumnId={editingColumnId}
+                  deletingColumnId={deletingColumnId}
+                  savingColumnId={savingColumnId}
+                  editForm={editForm}
+                  setEditForm={setEditForm}
+                  onStartEdit={startEdit}
+                  onCancelEdit={cancelEdit}
+                  onSaveEdit={saveEdit}
+                  onStartDelete={(id) => { setDeletingColumnId(id); setColumnError(null); }}
+                  onCancelDelete={() => setDeletingColumnId(null)}
+                  onConfirmDelete={handleDeleteColumn}
+                />
+              ))}
+            </div>
+          </SortableContext>
+        </DndContext>
+
+        {/* Formulário de nova coluna */}
+        {showNewColumn ? (
+          <div className="mt-3 space-y-3 rounded-xl border border-dashed border-accent-cyan/30 bg-accent-cyan/[0.03] p-4">
+            <div className="flex gap-3">
+              <div className="flex-1">
+                <label className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-slate-500">Nome</label>
+                <input
+                  type="text"
+                  value={newColumnForm.name}
+                  onChange={(e) => {
+                    setNewColumnForm((prev) => ({
+                      ...prev,
+                      name: e.target.value,
+                      slug: generateSlug(e.target.value),
+                    }));
+                  }}
+                  placeholder="Ex: Revisão Final"
+                  className="w-full rounded-lg border border-slate-700 bg-slate-800/60 px-3 py-2 text-sm text-slate-200 outline-none placeholder:text-slate-600 focus:border-accent-cyan/50"
+                  autoFocus
+                />
+              </div>
+              <div className="w-[160px]">
+                <label className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-slate-500">Slug</label>
+                <input
+                  type="text"
+                  value={newColumnForm.slug}
+                  onChange={(e) => setNewColumnForm((prev) => ({ ...prev, slug: e.target.value }))}
+                  placeholder="revisao_final"
+                  className="w-full rounded-lg border border-slate-700 bg-slate-800/60 px-3 py-2 text-sm text-slate-400 outline-none placeholder:text-slate-600 focus:border-accent-cyan/50"
+                />
+              </div>
+            </div>
+
+            {/* Cor */}
+            <div>
+              <label className="mb-1.5 block text-[11px] font-medium uppercase tracking-wider text-slate-500">Cor</label>
+              <div className="flex flex-wrap gap-2">
+                {COLUMN_COLOR_OPTIONS.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => setNewColumnForm((prev) => ({ ...prev, color: c }))}
+                    className={cn(
+                      "h-7 w-7 rounded-full border-2 transition-all",
+                      newColumnForm.color === c ? "border-white scale-110" : "border-transparent hover:border-slate-500"
+                    )}
+                    style={{ backgroundColor: c }}
+                  />
+                ))}
+              </div>
+            </div>
+
+            {/* Emoji */}
+            <div>
+              <label className="mb-1.5 block text-[11px] font-medium uppercase tracking-wider text-slate-500">Emoji</label>
+              <div className="flex flex-wrap gap-1.5">
+                {COLUMN_EMOJI_OPTIONS.map((e) => (
+                  <button
+                    key={e}
+                    type="button"
+                    onClick={() => setNewColumnForm((prev) => ({ ...prev, emoji: e }))}
+                    className={cn(
+                      "flex h-8 w-8 items-center justify-center rounded-lg text-base transition-all",
+                      newColumnForm.emoji === e
+                        ? "bg-accent-cyan/20 ring-1 ring-accent-cyan scale-110"
+                        : "bg-slate-800/60 hover:bg-slate-700/60"
+                    )}
+                  >
+                    {e}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex gap-2 pt-1">
+              <Button variant="primary" size="sm" onClick={handleCreateColumn} disabled={creatingColumn}>
+                <Check size={14} weight="bold" />
+                {creatingColumn ? "Criando..." : "Criar Coluna"}
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => { setShowNewColumn(false); setColumnError(null); }}>
+                Cancelar
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <button
+            onClick={() => { setShowNewColumn(true); setColumnError(null); }}
+            className="mt-3 flex w-full items-center justify-center gap-2 rounded-[10px] border border-dashed border-slate-700/50 py-2.5 text-sm text-slate-400 transition-colors hover:border-accent-cyan/30 hover:bg-slate-800/30 hover:text-slate-300"
+          >
+            <Plus size={14} /> Adicionar Coluna
+          </button>
+        )}
       </Card>
 
       {/* Seção 4 — Membros do Time */}
@@ -1535,6 +2082,229 @@ function ConfiguracoesTab({ columns, users }: { columns: KanbanColumnType[]; use
           <Plus size={14} /> Convidar Membro
         </button>
       </Card>
+    </div>
+  );
+}
+
+// Linha sortable de coluna Kanban (usada na aba Configurações)
+function SortableColumnRow({
+  col,
+  cards,
+  editingColumnId,
+  deletingColumnId,
+  savingColumnId,
+  editForm,
+  setEditForm,
+  onStartEdit,
+  onCancelEdit,
+  onSaveEdit,
+  onStartDelete,
+  onCancelDelete,
+  onConfirmDelete,
+}: {
+  col: KanbanColumnType;
+  cards: KanbanCardType[];
+  editingColumnId: string | null;
+  deletingColumnId: string | null;
+  savingColumnId: string | null;
+  editForm: { name: string; slug: string; color: string; emoji: string };
+  setEditForm: React.Dispatch<React.SetStateAction<{ name: string; slug: string; color: string; emoji: string }>>;
+  onStartEdit: (col: KanbanColumnType) => void;
+  onCancelEdit: () => void;
+  onSaveEdit: (colId: string) => void;
+  onStartDelete: (colId: string) => void;
+  onCancelDelete: () => void;
+  onConfirmDelete: (colId: string) => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+    useSortable({ id: col.id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.4 : 1,
+    zIndex: isDragging ? 10 : undefined,
+  };
+
+  const status = getStatusFromColumn(col);
+  const isEditing = editingColumnId === col.id;
+  const isDeleting = deletingColumnId === col.id;
+  const isSaving = savingColumnId === col.id;
+  const cardCount = cards.filter((c) => c.column_id === col.id).length;
+
+  function generateSlug(name: string): string {
+    return name
+      .toLowerCase()
+      .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_|_$/g, "");
+  }
+
+  // Modo de edição
+  if (isEditing) {
+    return (
+      <div ref={setNodeRef} style={style} className="space-y-3 py-4">
+        <div className="flex gap-3">
+          <div className="flex-1">
+            <label className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-slate-500">Nome</label>
+            <input
+              type="text"
+              value={editForm.name}
+              onChange={(e) => {
+                setEditForm((prev) => ({
+                  ...prev,
+                  name: e.target.value,
+                  slug: generateSlug(e.target.value),
+                }));
+              }}
+              className="w-full rounded-lg border border-slate-700 bg-slate-800/60 px-3 py-2 text-sm text-slate-200 outline-none focus:border-accent-cyan/50"
+              autoFocus
+            />
+          </div>
+          <div className="w-[160px]">
+            <label className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-slate-500">Slug</label>
+            <input
+              type="text"
+              value={editForm.slug}
+              onChange={(e) => setEditForm((prev) => ({ ...prev, slug: e.target.value }))}
+              className="w-full rounded-lg border border-slate-700 bg-slate-800/60 px-3 py-2 text-sm text-slate-400 outline-none focus:border-accent-cyan/50"
+            />
+          </div>
+        </div>
+
+        <div>
+          <label className="mb-1.5 block text-[11px] font-medium uppercase tracking-wider text-slate-500">Cor</label>
+          <div className="flex flex-wrap gap-2">
+            {COLUMN_COLOR_OPTIONS.map((c) => (
+              <button
+                key={c}
+                type="button"
+                onClick={() => setEditForm((prev) => ({ ...prev, color: c }))}
+                className={cn(
+                  "h-7 w-7 rounded-full border-2 transition-all",
+                  editForm.color === c ? "border-white scale-110" : "border-transparent hover:border-slate-500"
+                )}
+                style={{ backgroundColor: c }}
+              />
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <label className="mb-1.5 block text-[11px] font-medium uppercase tracking-wider text-slate-500">Emoji</label>
+          <div className="flex flex-wrap gap-1.5">
+            {COLUMN_EMOJI_OPTIONS.map((e) => (
+              <button
+                key={e}
+                type="button"
+                onClick={() => setEditForm((prev) => ({ ...prev, emoji: e }))}
+                className={cn(
+                  "flex h-8 w-8 items-center justify-center rounded-lg text-base transition-all",
+                  editForm.emoji === e
+                    ? "bg-accent-cyan/20 ring-1 ring-accent-cyan scale-110"
+                    : "bg-slate-800/60 hover:bg-slate-700/60"
+                )}
+              >
+                {e}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex gap-2 pt-1">
+          <Button variant="primary" size="sm" onClick={() => onSaveEdit(col.id)} disabled={isSaving}>
+            <Check size={14} weight="bold" />
+            {isSaving ? "Salvando..." : "Salvar"}
+          </Button>
+          <Button variant="ghost" size="sm" onClick={onCancelEdit}>
+            Cancelar
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  // Modo de confirmação de exclusão
+  if (isDeleting) {
+    return (
+      <div ref={setNodeRef} style={style} className="flex items-center justify-between py-3">
+        <div className="flex items-center gap-3">
+          <Dot color={status.color} size="lg" />
+          <span className="text-sm text-red-400">
+            Excluir &quot;{col.name}&quot;?
+            {cardCount > 0 && (
+              <span className="ml-1 text-xs text-red-300">({cardCount} cards — mova-os antes)</span>
+            )}
+          </span>
+        </div>
+        <div className="flex gap-1.5">
+          <Button
+            variant="danger"
+            size="sm"
+            onClick={() => onConfirmDelete(col.id)}
+            disabled={isSaving || cardCount > 0}
+          >
+            {isSaving ? "Excluindo..." : "Confirmar"}
+          </Button>
+          <Button variant="ghost" size="sm" onClick={onCancelDelete}>
+            Cancelar
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  // Modo de visualização — drag handle à esquerda, lápis + lixeira à direita
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className="group flex items-center gap-3 py-3"
+    >
+      {/* Drag handle (pontinhos) */}
+      <button
+        {...attributes}
+        {...listeners}
+        className={cn(
+          "cursor-grab rounded p-0.5 text-slate-600 transition-colors hover:text-slate-400 active:cursor-grabbing",
+          isDragging && "cursor-grabbing"
+        )}
+        title="Arrastar para reordenar"
+      >
+        <DotsSixVertical size={18} weight="bold" />
+      </button>
+
+      {/* Conteúdo da coluna */}
+      <Dot color={status.color} size="lg" />
+      <span className="text-sm font-medium text-slate-200">{status.label}</span>
+      <span className="text-xs text-slate-600">({col.slug})</span>
+      {cardCount > 0 && (
+        <Badge variant="neutral" size="sm">{cardCount}</Badge>
+      )}
+
+      {/* Spacer */}
+      <div className="flex-1" />
+
+      {/* Emoji */}
+      <span className="text-base">{status.emoji}</span>
+
+      {/* Editar */}
+      <button
+        onClick={() => onStartEdit(col)}
+        className="rounded p-1 text-slate-500 opacity-0 transition-colors hover:bg-slate-800 hover:text-accent-cyan group-hover:opacity-100"
+        title="Editar coluna"
+      >
+        <PencilSimple size={14} />
+      </button>
+
+      {/* Excluir */}
+      <button
+        onClick={() => onStartDelete(col.id)}
+        className="rounded p-1 text-slate-500 opacity-0 transition-colors hover:bg-slate-800 hover:text-red-400 group-hover:opacity-100"
+        title="Excluir coluna"
+      >
+        <Trash size={14} />
+      </button>
     </div>
   );
 }

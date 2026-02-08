@@ -174,6 +174,105 @@ function getCalendarTypeEmoji(t: string): string {
 
 export async function handleQueryCalendar(ctx: QueryContext): Promise<QueryResult> {
   const { supabase, userName, entities } = ctx
+
+  // ========================================
+  // WA-06.10: BUSCA ESPECÍFICA (título, participante ou "meus eventos")
+  // ========================================
+  const queryTitle = entities.query_title as string | undefined
+  const queryParticipant = entities.query_participant as string | undefined
+  const querySelf = !!entities.query_self
+  const isSpecificQuery = !!(queryTitle || queryParticipant || querySelf)
+
+  if (isSpecificQuery) {
+    console.log(`[WA-04] Query calendar ESPECÍFICA: title="${queryTitle}", participant="${queryParticipant}", self=${querySelf}`)
+
+    let query = supabase
+      .from('calendar_items')
+      .select('id, title, type, status, start_time, end_time, all_day, content_type, platforms, responsible_user_id, location, metadata')
+      .is('deleted_at', null)
+      .neq('status', 'cancelled')
+      .order('start_time', { ascending: false })
+      .limit(10)
+
+    // "E as minhas?" / "meus eventos" → filtrar por responsible_user_id
+    if (querySelf) {
+      query = query.eq('responsible_user_id', ctx.authUserId)
+    }
+
+    // Filtros por título/participante (ILIKE no title)
+    if (queryTitle && queryParticipant) {
+      query = query.ilike('title', `%${queryTitle}%`).ilike('title', `%${queryParticipant}%`)
+    } else if (queryTitle) {
+      query = query.ilike('title', `%${queryTitle}%`)
+    } else if (queryParticipant) {
+      query = query.ilike('title', `%${queryParticipant}%`)
+    }
+
+    const { data: items, error } = await query
+
+    if (error) {
+      console.error('[WA-04] Calendar specific query error:', error)
+      return { text: `❌ Erro ao consultar agenda, ${userName}. Tente novamente.`, resultCount: 0, queryType: 'query_calendar' }
+    }
+
+    if (!items || items.length === 0) {
+      const searchDesc = querySelf
+        ? 'seus'
+        : queryParticipant
+          ? `com ${queryParticipant}`
+          : `"${queryTitle}"`
+      return {
+        text: `📅 Não encontrei nenhum evento ${searchDesc} na agenda, ${userName}.`,
+        resultCount: 0, queryType: 'query_calendar',
+      }
+    }
+
+    // Resolver nomes via lookup manual
+    // deno-lint-ignore no-explicit-any
+    const responsibleIds = items.map((i: any) => i.responsible_user_id).filter(Boolean)
+    const nameMap = await resolveUserNames(supabase, responsibleIds)
+
+    const searchDesc = querySelf
+      ? 'seus'
+      : queryParticipant
+        ? `com ${queryParticipant}`
+        : `"${queryTitle}"`
+
+    // Se só 1 resultado, responder direto com detalhes completos
+    if (items.length === 1) {
+      // deno-lint-ignore no-explicit-any
+      const item = items[0] as any
+      const emoji = getCalendarTypeEmoji(item.type)
+      const time = item.all_day ? 'Dia inteiro' : formatDateTimeBR(item.start_time)
+      const responsible = item.responsible_user_id ? nameMap[item.responsible_user_id] : null
+      const responsibleText = responsible ? `\n👤 Responsável: ${responsible}` : ''
+      const locationText = item.location ? `\n📍 Local: ${item.location}` : ''
+      const brandText = item.metadata?.brand ? `\n🏷️ Marca: ${item.metadata.brand}` : ''
+      return {
+        text: `${emoji} *${item.title}*\n📅 ${time}${locationText}${brandText}${responsibleText}`,
+        resultCount: 1, queryType: 'query_calendar',
+      }
+    }
+
+    // Múltiplos resultados — listar todos
+    const header = `📅 Encontrei ${items.length} eventos ${searchDesc}:\n`
+
+    // deno-lint-ignore no-explicit-any
+    const lines = items.map((item: any, i: number) => {
+      const emoji = getCalendarTypeEmoji(item.type)
+      const time = item.all_day ? '🕐 Dia inteiro' : formatDateTimeBR(item.start_time)
+      const responsible = item.responsible_user_id ? nameMap[item.responsible_user_id] : null
+      const responsibleText = responsible ? ` → ${responsible}` : ''
+      const locationText = item.location ? `\n   📍 ${item.location}` : ''
+      return `${i + 1}. ${emoji} *${item.title}*\n   ${time}${responsibleText}${locationText}`
+    })
+
+    return { text: header + lines.join('\n\n'), resultCount: items.length, queryType: 'query_calendar' }
+  }
+
+  // ========================================
+  // BUSCA POR PERÍODO (comportamento original)
+  // ========================================
   const period = entities.query_period || 'today'
   const { start, end } = getDateRange(period)
 

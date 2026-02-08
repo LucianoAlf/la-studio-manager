@@ -122,7 +122,30 @@ async function executeCreateCard(ctx: ExecutionContext): Promise<ExecutionResult
 
   const nextPosition = (maxPosResult?.position_in_column ?? 0) + 1
 
-  // 3. Preparar dados do card
+  // 3. WA-06.8: Resolver responsável (assigned_to) por nome
+  let responsibleUserId = authUserId // Default: criador é responsável
+  let responsibleName = ctx.userName
+  if (entities.assigned_to) {
+    const assigneeName = String(entities.assigned_to).trim()
+    // Buscar usuário pelo nome (case-insensitive, parcial)
+    const { data: assignee } = await supabase
+      .from('user_profiles')
+      .select('user_id, full_name')
+      .eq('is_active', true)
+      .ilike('full_name', `%${assigneeName}%`)
+      .limit(1)
+      .maybeSingle()
+
+    if (assignee) {
+      responsibleUserId = assignee.user_id
+      responsibleName = assignee.full_name
+      console.log(`[WA-03] Responsável resolvido: "${assigneeName}" → ${assignee.full_name} (${assignee.user_id})`)
+    } else {
+      console.log(`[WA-03] Responsável "${assigneeName}" não encontrado, usando criador`)
+    }
+  }
+
+  // 4. Preparar dados do card
   // deno-lint-ignore no-explicit-any
   const cardData: Record<string, any> = {
     title: entities.title || 'Card sem título',
@@ -130,8 +153,8 @@ async function executeCreateCard(ctx: ExecutionContext): Promise<ExecutionResult
     card_type: 'single_post',
     column_id: column.id,
     position_in_column: nextPosition,
-    created_by: authUserId,          // ← auth.users.id (FK de kanban_cards)
-    responsible_user_id: authUserId, // Criador é também responsável
+    created_by: authUserId,              // ← auth.users.id (FK de kanban_cards)
+    responsible_user_id: responsibleUserId, // WA-06.8: Responsável resolvido por nome
     priority: entities.priority || 'medium',
     content_type: entities.content_type || null,
     platforms: entities.platforms || [],
@@ -141,12 +164,14 @@ async function executeCreateCard(ctx: ExecutionContext): Promise<ExecutionResult
       created_via: 'whatsapp',
       brand: entities.brand || 'la_music',
       original_message: entities.raw_text || null,
+      assigned_to_name: entities.assigned_to || null,
     },
   }
 
-  // 4. Resolver due_date se houver data nas entidades
-  if (entities.date) {
-    const resolvedDate = resolveRelativeDate(entities.date, entities.time)
+  // 5. Resolver due_date: usar deadline (WA-06.8) ou date como fallback
+  const deadlineText = entities.deadline || entities.date
+  if (deadlineText) {
+    const resolvedDate = resolveRelativeDate(String(deadlineText), entities.time as string | undefined)
     if (resolvedDate) {
       cardData.due_date = resolvedDate.toISOString()
     }
@@ -171,14 +196,20 @@ async function executeCreateCard(ctx: ExecutionContext): Promise<ExecutionResult
   console.log(`[WA-03] Card created: ${card.id} - "${card.title}"`)
 
   // 6. Montar resposta de sucesso (tom Mike)
+  const successParts = [
+    `Pronto, criei a tarefa!\n`,
+    `📝 *${card.title}*`,
+    `📋 ${column.name}`,
+  ]
+  if (entities.priority && entities.priority !== 'medium') successParts.push(formatPriority(entities.priority as string))
+  if (responsibleName) successParts.push(`👤 ${responsibleName}`)
+  if (deadlineText) successParts.push(`📅 Prazo: ${deadlineText}`)
+  if (entities.content_type) successParts.push(`🎬 ${entities.content_type}`)
+
   return {
     success: true,
     record_id: card.id,
-    message: `Pronto, criei a tarefa!\n\n` +
-      `📝 *${card.title}*\n` +
-      `📋 ${column.name}` +
-      (entities.priority && entities.priority !== 'medium' ? ` · ${formatPriority(entities.priority)}` : '') +
-      (entities.content_type ? `\n🎬 ${entities.content_type}` : ''),
+    message: successParts.join('\n'),
   }
 }
 
@@ -266,7 +297,7 @@ async function executeCreateCalendar(ctx: ExecutionContext): Promise<ExecutionRe
     record_id: item.id,
     message: `Pronto, agendei!\n\n` +
       `📝 *${item.title}*\n` +
-      `� ${dateStr}${timeStr}` +
+      `◆ ${dateStr}${timeStr}` +
       (durationMinutes && !allDay ? `\n⏱️ ${durationMinutes} min` : '') +
       (entities.location ? `\n📍 ${entities.location}` : ''),
   }
@@ -347,6 +378,104 @@ async function executeCreateReminder(ctx: ExecutionContext): Promise<ExecutionRe
     message: `Pronto, lembrete criado!\n\n` +
       `📝 *${entities.reminder_text || entities.title || 'Lembrete'}*\n` +
       `� ${dateStr} às ${timeStr}`,
+  }
+}
+
+// ============================================
+// WA-06.8: VERIFICAÇÃO DE CONFLITOS (chamada pelo router ANTES de criar)
+// ============================================
+
+export interface ConflictCheckResult {
+  hasConflict: boolean
+  conflictMessage: string  // Mensagem para o usuário
+}
+
+/**
+ * Verifica conflitos de horário no mesmo dia ANTES de criar o evento.
+ * Chamada pelo router quando o usuário confirma "sim" para creating_calendar.
+ */
+export async function checkCalendarConflicts(
+  // deno-lint-ignore no-explicit-any
+  supabase: any,
+  authUserId: string,
+  entities: ExtractedEntities
+): Promise<ConflictCheckResult> {
+  try {
+    const startTime = resolveRelativeDate(entities.date || 'hoje', entities.time)
+    if (!startTime) return { hasConflict: false, conflictMessage: '' }
+
+    const dayStart = new Date(startTime)
+    dayStart.setUTCHours(0, 0, 0, 0)
+    const dayEnd = new Date(startTime)
+    dayEnd.setUTCHours(23, 59, 59, 999)
+
+    const { data: existingEvents } = await supabase
+      .from('calendar_items')
+      .select('id, title, start_time, end_time')
+      .eq('created_by', authUserId)
+      .gte('start_time', dayStart.toISOString())
+      .lte('start_time', dayEnd.toISOString())
+      .is('deleted_at', null)
+
+    if (!existingEvents || existingEvents.length === 0) {
+      return { hasConflict: false, conflictMessage: '' }
+    }
+
+    const participantName = entities.participants
+      ? String(entities.participants).split(/[,&]|\be\b/)[0].trim()
+      : null
+
+    // Verificar conflito com mesmo participante
+    if (participantName) {
+      const conflicts = existingEvents.filter((ev: { title: string }) =>
+        ev.title.toLowerCase().includes(participantName.toLowerCase())
+      )
+
+      if (conflicts.length > 0) {
+        const conflictList = conflicts.map((ev: { title: string; start_time: string }) => {
+          const t = new Date(ev.start_time)
+          const spHour = t.getUTCHours() - 3 < 0 ? t.getUTCHours() + 21 : t.getUTCHours() - 3
+          return `• *${ev.title}* às ${spHour}:${String(t.getUTCMinutes()).padStart(2, '0')}`
+        }).join('\n')
+
+        return {
+          hasConflict: true,
+          conflictMessage: `⚠️ *Conflito de agenda*\n\nVocê já tem ${conflicts.length > 1 ? 'compromissos' : 'compromisso'} com *${participantName}* nesse dia:\n\n${conflictList}\n\nQuer marcar mesmo assim? (sim/não)`,
+        }
+      }
+    }
+
+    // Verificar sobreposição de horário
+    if (entities.time) {
+      const calendarType = entities.calendar_type || 'task'
+      const durationMinutes = entities.duration_minutes || getDefaultDuration(calendarType)
+      const newStart = startTime.getTime()
+      const newEnd = newStart + (durationMinutes || 60) * 60 * 1000
+
+      const overlaps = existingEvents.filter((ev: { start_time: string; end_time: string | null }) => {
+        const evStart = new Date(ev.start_time).getTime()
+        const evEnd = ev.end_time ? new Date(ev.end_time).getTime() : evStart + 60 * 60 * 1000
+        return newStart < evEnd && newEnd > evStart
+      })
+
+      if (overlaps.length > 0) {
+        const overlapList = overlaps.map((ev: { title: string; start_time: string }) => {
+          const t = new Date(ev.start_time)
+          const spHour = t.getUTCHours() - 3 < 0 ? t.getUTCHours() + 21 : t.getUTCHours() - 3
+          return `• *${ev.title}* às ${spHour}:${String(t.getUTCMinutes()).padStart(2, '0')}`
+        }).join('\n')
+
+        return {
+          hasConflict: true,
+          conflictMessage: `⚠️ *Conflito de horário*\n\nEsse horário bate com:\n\n${overlapList}\n\nQuer marcar mesmo assim? (sim/não)`,
+        }
+      }
+    }
+
+    return { hasConflict: false, conflictMessage: '' }
+  } catch (err) {
+    console.error('[WA-03] Conflict check error:', err)
+    return { hasConflict: false, conflictMessage: '' }
   }
 }
 

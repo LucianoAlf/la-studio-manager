@@ -5,6 +5,8 @@
 
 import { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { CANCEL_WORDS, FOLLOWUP_QUESTIONS, isSubjectChange } from './mike-personality.ts'
+import { isComplexResponse, parseFollowUpWithGemini } from './gemini-followup-parser.ts'
+import type { SmartFollowUpResult } from './gemini-followup-parser.ts'
 
 // =============================================================================
 // TIPOS
@@ -152,14 +154,19 @@ export function processFollowUpResponse(
       updatedEntities.date = userResponse.trim()
       break
 
-    case 'deadline':
+    case 'deadline': {
       if (['sem prazo', 'não tem', 'nao tem', 'sem', 'nenhum', 'nao', 'não'].includes(response)) {
         updatedEntities.deadline = null // Sem prazo, pode criar
         updatedEntities._skipDeadline = true // Flag para não perguntar de novo
       } else {
-        updatedEntities.deadline = userResponse.trim()
+        // WA-06.8: Tentar separar "responsável X" e "prazo Y" da mesma resposta
+        const parsed = parseDeadlineAndAssignee(userResponse.trim())
+        if (parsed.deadline) updatedEntities.deadline = parsed.deadline
+        else updatedEntities.deadline = userResponse.trim()
+        if (parsed.assigned_to) updatedEntities.assigned_to = parsed.assigned_to
       }
       break
+    }
 
     case 'location':
       updatedEntities.location = parseLocationResponse(response)
@@ -199,6 +206,63 @@ export function processFollowUpResponse(
 }
 
 // =============================================================================
+// SMART FOLLOW-UP (WA-06.8) — Usa Gemini para respostas complexas
+// =============================================================================
+
+/**
+ * Processa resposta de follow-up de forma inteligente.
+ * - Respostas curtas/simples → parser manual (rápido, sem custo)
+ * - Respostas complexas (>4 palavras, "eu", múltiplas info) → Gemini
+ */
+export async function smartProcessFollowUp(
+  pending: PendingAction,
+  userResponse: string,
+  currentUserName: string,
+  teamMembers: string[],
+): Promise<FollowUpResult | null> {
+  const response = userResponse.trim().toLowerCase()
+
+  // 1. Detectar cancelamento (sempre manual — rápido)
+  if (CANCEL_WORDS.some(w => response === w || response.startsWith(w))) {
+    return null
+  }
+
+  // 2. Detectar mudança de assunto (sempre manual)
+  if (isSubjectChange(userResponse)) {
+    return null
+  }
+
+  // 3. Decidir: parser manual ou Gemini?
+  if (isComplexResponse(userResponse)) {
+    console.log(`[SMART-FOLLOWUP] Resposta complexa detectada, usando Gemini: "${userResponse.substring(0, 80)}"`);
+
+    const geminiResult = await parseFollowUpWithGemini(userResponse, {
+      action: pending.action,
+      existingEntities: pending.entities,
+      missingFields: pending.missingFields,
+      waitingForField: pending.waitingForField,
+      teamMembers,
+      currentUserName,
+    })
+
+    if (geminiResult) {
+      return {
+        complete: geminiResult.complete,
+        entities: geminiResult.entities,
+        nextQuestion: geminiResult.nextQuestion,
+        nextField: geminiResult.nextField,
+      }
+    }
+
+    // Fallback: se Gemini falhou, usar parser manual
+    console.log('[SMART-FOLLOWUP] Gemini falhou, usando parser manual como fallback')
+  }
+
+  // 4. Parser manual (respostas curtas ou fallback)
+  return processFollowUpResponse(pending, userResponse)
+}
+
+// =============================================================================
 // PARSERS DE RESPOSTA
 // =============================================================================
 
@@ -234,6 +298,49 @@ function parseTimeResponse(response: string): string {
 
   // Fallback: retornar como está
   return cleaned
+}
+
+/**
+ * WA-06.8: Separa "prazo X, responsável Y" ou "responsável Y, prazo X" de uma resposta.
+ * Exemplos:
+ *   "Prazo terça-feira, responsável John" → { deadline: "terça-feira", assigned_to: "John" }
+ *   "Eu que vou fazer, prazo até sexta" → { deadline: "até sexta", assigned_to: "eu" }
+ *   "Quarta-feira" → { deadline: "Quarta-feira", assigned_to: null }
+ */
+function parseDeadlineAndAssignee(text: string): { deadline: string | null; assigned_to: string | null } {
+  let deadline: string | null = null
+  let assigned_to: string | null = null
+
+  // Tentar extrair responsável
+  const selfMatch = text.match(/\b(eu|eu mesmo|eu que vou|pra mim|comigo)\b/i)
+  if (selfMatch) {
+    assigned_to = 'eu'
+  } else {
+    const respMatch = text.match(/(?:respons[aá]vel)\s+(?:o\s+|a\s+)?(\w+)/i)
+    if (respMatch) {
+      assigned_to = respMatch[1].trim()
+    }
+  }
+
+  // Tentar extrair prazo
+  const prazoMatch = text.match(/(?:prazo|at[eé])\s+(.+?)(?:\s*[,;.]\s*|$)/i)
+  if (prazoMatch) {
+    // Limpar "responsável X" do prazo se ficou junto
+    deadline = prazoMatch[1].replace(/[,;.]\s*respons[aá]vel.*/i, '').trim()
+  } else {
+    // Se não tem "prazo" explícito, tentar extrair data/dia da semana
+    const dayMatch = text.match(/\b(segunda|ter[çc]a|quarta|quinta|sexta|s[aá]bado|domingo|amanh[aã]|hoje|semana que vem|pr[oó]xim[ao]?\s+\w+)\b/i)
+    if (dayMatch) {
+      deadline = dayMatch[0].trim()
+    }
+  }
+
+  // Se não extraiu nada específico e não tem responsável, retornar texto original como deadline
+  if (!deadline && !assigned_to) {
+    deadline = text
+  }
+
+  return { deadline, assigned_to }
 }
 
 /**

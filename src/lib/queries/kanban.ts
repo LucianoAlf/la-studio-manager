@@ -150,3 +150,83 @@ export async function deleteKanbanCard(id: string) {
     .eq("id", id);
   if (error) throw error;
 }
+
+// ============================================================
+// CRUD — KANBAN COLUMNS
+// ============================================================
+
+// Criar nova coluna
+export async function createKanbanColumn(column: {
+  name: string;
+  slug: string;
+  color?: string;
+  emoji?: string;
+  description?: string;
+  position: number;
+  card_limit?: number;
+}): Promise<KanbanColumn> {
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from("kanban_columns")
+    .insert(column as never)
+    .select()
+    .single();
+  if (error) throw error;
+  return data as unknown as KanbanColumn;
+}
+
+// Atualizar coluna
+export async function updateKanbanColumn(
+  id: string,
+  updates: Partial<Pick<KanbanColumn, "name" | "slug" | "color" | "emoji" | "description" | "card_limit">>
+): Promise<KanbanColumn> {
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from("kanban_columns")
+    .update(updates as never)
+    .eq("id", id)
+    .select()
+    .single();
+  if (error) throw error;
+  return data as unknown as KanbanColumn;
+}
+
+// Excluir coluna (só se não tiver cards)
+export async function deleteKanbanColumn(id: string): Promise<void> {
+  const supabase = getSupabase();
+
+  // Verificar se há cards na coluna
+  const { count, error: countError } = await supabase
+    .from("kanban_cards")
+    .select("id", { count: "exact", head: true })
+    .eq("column_id", id)
+    .is("deleted_at", null);
+
+  if (countError) throw countError;
+  if (count && count > 0) {
+    throw new Error(`Não é possível excluir: existem ${count} card(s) nesta coluna. Mova-os antes de excluir.`);
+  }
+
+  const { error } = await supabase
+    .from("kanban_columns")
+    .delete()
+    .eq("id", id);
+  if (error) throw error;
+}
+
+// Reordenar colunas (atualiza position de todas)
+export async function reorderKanbanColumns(
+  orderedIds: string[]
+): Promise<void> {
+  const supabase = getSupabase();
+  // Atualizar position de cada coluna em sequência
+  const updates = orderedIds.map((id, index) =>
+    supabase
+      .from("kanban_columns")
+      .update({ position: index + 1 } as never)
+      .eq("id", id)
+  );
+  const results = await Promise.all(updates);
+  const failed = results.find((r) => r.error);
+  if (failed?.error) throw failed.error;
+}

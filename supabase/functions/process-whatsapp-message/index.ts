@@ -12,6 +12,8 @@ import { isGroupEnabled, containsMikeName, BOT_PHONE_NUMBER } from './group-conf
 import { handleGroupMessage } from './group-handler.ts'
 import { saveGroupMessage, saveMikeResponse, getGroupContextSummary } from './group-memory.ts'
 import { transcribeAudio } from './audio-handler.ts'
+import { getEventConfirmation, processParticipantResponse, clearEventConfirmation } from './participant-notifier.ts'
+import { executeConfirmedAction } from './action-executor.ts'
 import type { UserInfo } from './types.ts'
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
@@ -76,7 +78,24 @@ serve(async (req: Request) => {
         })
       }
 
-      console.log(`[GROUP] Mensagem de ${senderName} (${senderPhone}) no grupo ${groupJid}`)
+      console.log(`[GROUP] Mensagem de ${senderName} (${senderPhone}) no grupo ${groupJid} | msgId: ${parsed.messageId}`)
+
+      // --- DEDUPLICAÇÃO: ignorar webhook duplicado ---
+      if (parsed.messageId) {
+        const { data: alreadyProcessed } = await supabase
+          .from('whatsapp_messages')
+          .select('id')
+          .eq('uazapi_message_id', parsed.messageId)
+          .eq('is_group_message', true)
+          .maybeSingle()
+
+        if (alreadyProcessed) {
+          console.log(`[GROUP] Mensagem ${parsed.messageId} já processada, ignorando duplicata`)
+          return new Response(JSON.stringify({ success: true, status: 'group_deduplicated' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          })
+        }
+      }
 
       // --- PASSO 1: Processar mídia para memória ---
       let groupText = parsed.text || ''
@@ -235,6 +254,7 @@ serve(async (req: Request) => {
             uazapiUrl: UAZAPI_SERVER_URL,
             uazapiToken: UAZAPI_TOKEN,
             groupContext,
+            groupJid,  // WA-06.8: Passar JID do grupo para notificações
           })
 
           // Enviar resposta pro grupo
@@ -304,8 +324,125 @@ serve(async (req: Request) => {
     const user: UserInfo | null = userResult?.[0] || null
     
     if (!user) {
-      console.log(`[WA] Unknown phone: ${phone}`)
-      // Número não cadastrado — salvar e ignorar (não responde)
+      console.log(`[WA] Unknown phone: ${phone} — verificando se é contato externo com confirmação pendente...`)
+
+      // WA-06.9: Fallback — verificar se é contato externo com event_confirmation pendente
+      // Buscar contato na tabela contacts pelo telefone
+      const { data: contactMatch } = await supabase
+        .from('contacts')
+        .select('id, name, phone')
+        .eq('phone', phone)
+        .is('deleted_at', null)
+        .limit(1)
+        .maybeSingle()
+
+      if (contactMatch && parsed.text) {
+        // Verificar se tem event_confirmation pendente para este contato
+        const confirmation = await getEventConfirmation(supabase, contactMatch.id)
+        if (confirmation) {
+          console.log(`[WA] Contato externo ${contactMatch.name} respondendo confirmação de evento`)
+
+          // Salvar mensagem inbound (sem user_id — contato externo)
+          await supabase.from('whatsapp_messages').insert({
+            phone_number: phone,
+            direction: 'inbound',
+            message_type: parsed.type,
+            content: parsed.text,
+            processing_status: 'processing',
+            is_group_message: false,
+            uazapi_message_id: parsed.messageId,
+            raw_webhook: body,
+          })
+
+          // Processar resposta do participante (sim/não)
+          const result = await processParticipantResponse(
+            supabase, UAZAPI_SERVER_URL, UAZAPI_TOKEN,
+            confirmation, parsed.text
+          )
+
+          // Se confirmou → criar evento automaticamente
+          if (result.confirmed) {
+            // Buscar contexto awaiting_external_confirmation do criador
+            const { data: creatorCtx } = await supabase
+              .from('whatsapp_conversation_context')
+              .select('id, context_type, context_data')
+              .eq('user_id', confirmation.creatorUserId)
+              .eq('is_active', true)
+              .eq('context_type', 'creating_calendar')
+              .maybeSingle()
+
+            if (creatorCtx?.context_data?.step === 'awaiting_external_confirmation') {
+              const ents = creatorCtx.context_data.entities || {}
+              // Buscar auth_user_id do criador
+              const { data: creatorProfile } = await supabase
+                .from('user_profiles')
+                .select('user_id')
+                .eq('id', confirmation.creatorUserId)
+                .single()
+
+              const authUserId = creatorProfile?.user_id || confirmation.creatorUserId
+              const execResult = await executeConfirmedAction('creating_calendar', {
+                supabase,
+                profileId: confirmation.creatorUserId,
+                authUserId,
+                userName: confirmation.creatorName,
+                phone: confirmation.creatorPhone,
+                entities: ents,
+              })
+
+              // Desativar contexto do criador
+              await supabase
+                .from('whatsapp_conversation_context')
+                .update({
+                  is_active: false,
+                  context_data: { ...creatorCtx.context_data, step: execResult.success ? 'executed' : 'execution_failed', executed_at: new Date().toISOString(), record_id: execResult.record_id || null },
+                  updated_at: new Date().toISOString(),
+                })
+                .eq('id', creatorCtx.id)
+
+              // Avisar criador que evento foi criado
+              if (execResult.success) {
+                const notifyTo = confirmation.groupJid || confirmation.creatorPhone
+                await sendTextMessage({
+                  serverUrl: UAZAPI_SERVER_URL,
+                  token: UAZAPI_TOKEN,
+                  to: notifyTo,
+                  text: execResult.message,
+                })
+              }
+
+              console.log(`[WA] ✅ Evento criado automaticamente após confirmação de ${contactMatch.name}`)
+            }
+          }
+
+          // Enviar resposta pro contato externo
+          if (result.message) {
+            await sendTextMessage({
+              serverUrl: UAZAPI_SERVER_URL,
+              token: UAZAPI_TOKEN,
+              to: phone,
+              text: result.message,
+            })
+
+            // Salvar outbound
+            await supabase.from('whatsapp_messages').insert({
+              phone_number: phone,
+              direction: 'outbound',
+              message_type: 'text',
+              content: result.message,
+              processing_status: 'completed',
+              is_group_message: false,
+              response_sent_at: new Date().toISOString(),
+            })
+          }
+
+          return new Response(JSON.stringify({ success: true, status: 'external_contact_confirmation' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          })
+        }
+      }
+
+      // Número realmente desconhecido — salvar e ignorar
       await supabase.from('whatsapp_messages').insert({
         phone_number: phone,
         direction: 'inbound',

@@ -88,6 +88,7 @@ export interface RouteMessageParams {
   uazapiUrl: string
   uazapiToken: string
   groupContext?: string  // WA-06.7: Contexto da conversa recente do grupo (injetado no NLP)
+  groupJid?: string      // WA-06.8: JID do grupo de origem (para notificações no grupo)
 }
 
 export interface MessageResponse {
