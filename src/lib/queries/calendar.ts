@@ -150,11 +150,34 @@ export async function updateCalendarItem(id: string, updates: Partial<CalendarIt
 
 export async function deleteCalendarItem(id: string) {
   const supabase = getSupabase();
-  const { error } = await supabase
+
+  // Tentar hard delete primeiro
+  const { data, error } = await supabase
     .from("calendar_items")
     .delete()
-    .eq("id", id);
-  if (error) throw error;
+    .eq("id", id)
+    .select("id");
+
+  if (error) {
+    console.error("[Calendar] Hard delete error:", error);
+    // Fallback: soft delete (update deleted_at)
+    const { error: softError } = await supabase
+      .from("calendar_items")
+      .update({ deleted_at: new Date().toISOString() } as never)
+      .eq("id", id);
+    if (softError) throw softError;
+    return;
+  }
+
+  // Se hard delete retornou 0 rows, tentar soft delete
+  if (!data || data.length === 0) {
+    console.warn("[Calendar] Hard delete returned 0 rows, trying soft delete");
+    const { error: softError } = await supabase
+      .from("calendar_items")
+      .update({ deleted_at: new Date().toISOString() } as never)
+      .eq("id", id);
+    if (softError) throw softError;
+  }
 }
 
 // Mover item (drag & drop persistence)

@@ -2,11 +2,11 @@
 
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { Header } from "@/components/layout/header";
-import { CaretLeft, CaretRight, Plus, X, Funnel } from "@phosphor-icons/react";
+import { CaretLeft, CaretRight, Plus, X, Funnel, Trash } from "@phosphor-icons/react";
 import { cn } from "@/lib/utils";
 import { Button, Badge, Avatar, IconButton, Chip, Dot } from "@/components/ui";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/shadcn/select";
-import { getCalendarItems, getCalendarItemConnections, getCalendarItemComments, addCalendarComment, moveCalendarItem } from "@/lib/queries/calendar";
+import { getCalendarItems, getCalendarItemConnections, getCalendarItemComments, addCalendarComment, moveCalendarItem, deleteCalendarItem } from "@/lib/queries/calendar";
 import { getCurrentUserProfile, getAllUsers } from "@/lib/queries/users";
 import { TYPE_COLORS, TYPE_EMOJIS, getDateRange, getUserDisplay, PLATFORM_COLORS } from "@/lib/utils/calendar-helpers";
 import type { CalendarItem, CalendarItemType, CalendarItemConnection, CalendarItemComment, UserProfile } from "@/lib/types/database";
@@ -546,6 +546,16 @@ export default function CalendarioPage() {
             setEditingItem(item);
             setModalOpen(true);
           }}
+          onDeleteItem={async (item) => {
+            try {
+              await deleteCalendarItem(item.id);
+              setSelectedItem(null);
+              reloadItems();
+              toast.success(`"${item.title}" excluído`);
+            } catch {
+              toast.error("Erro ao excluir item");
+            }
+          }}
           connections={connections}
           comments={comments}
           currentUser={currentUser}
@@ -598,6 +608,45 @@ function WeekView({ currentDate, today, items, onSelectItem, onDrop, realtimeNew
         })}
       </div>
 
+      {/* Faixa de eventos all_day */}
+      {(() => {
+        const hasAllDay = weekDays.some((d) =>
+          items.some((item) => item.all_day && isSameDay(new Date(item.start_time), d))
+        );
+        if (!hasAllDay) return null;
+        return (
+          <div className="flex flex-shrink-0 border-b border-slate-800">
+            <div className="w-[60px] flex-shrink-0 flex items-center justify-end pr-2">
+              <span className="text-[10px] text-slate-600 uppercase">dia todo</span>
+            </div>
+            {weekDays.map((d, dayIdx) => {
+              const allDayItems = items.filter((item) => item.all_day && isSameDay(new Date(item.start_time), d));
+              return (
+                <div key={dayIdx} className="flex-1 border-l border-slate-800/30 px-1 py-1 flex flex-col gap-1 min-h-[32px]">
+                  {allDayItems.map((item) => {
+                    const cfg = TYPE_CONFIG[item.type];
+                    const isNew = realtimeNewIds.has(item.id);
+                    return (
+                      <div
+                        key={item.id}
+                        onClick={() => onSelectItem(item)}
+                        className={cn(
+                          "rounded px-2 py-0.5 text-[10px] font-semibold text-slate-100 truncate cursor-pointer hover:brightness-125 transition-all",
+                          isNew && "realtime-new-item"
+                        )}
+                        style={{ borderLeft: `3px solid ${cfg.color}`, backgroundColor: `${cfg.color}1F` }}
+                      >
+                        {item.title}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
+
       {/* Time grid */}
       <div className="flex-1 overflow-y-auto relative">
         <div className="flex pt-3" style={{ minHeight: HOURS.length * HOUR_H + 12 }}>
@@ -615,7 +664,7 @@ function WeekView({ currentDate, today, items, onSelectItem, onDrop, realtimeNew
             const isToday = isSameDay(d, today);
             const dayItems = items.filter((item) => {
               const s = new Date(item.start_time);
-              return isSameDay(s, d);
+              return isSameDay(s, d) && !item.all_day;
             });
 
             return (
@@ -644,11 +693,11 @@ function WeekView({ currentDate, today, items, onSelectItem, onDrop, realtimeNew
                   );
                 })}
 
-                {/* Event blocks */}
+                {/* Event blocks (somente eventos com horário) */}
                 {dayItems.map((item) => {
                   const s = parseTime(item.start_time);
                   const e = item.end_time ? parseTime(item.end_time) : null;
-                  const startMin = (s.hour - START_HOUR) * 60 + s.minute;
+                  const startMin = Math.max((s.hour - START_HOUR) * 60 + s.minute, 0);
                   const duration = e ? ((e.hour - s.hour) * 60 + (e.minute - s.minute)) : 45;
                   const top = (startMin / 60) * HOUR_H + 12;
                   const height = Math.max((duration / 60) * HOUR_H, 28);
@@ -727,8 +776,10 @@ function WeekView({ currentDate, today, items, onSelectItem, onDrop, realtimeNew
 
 function DayView({ currentDate, today, items, onSelectItem, onDrop, realtimeNewIds }: { currentDate: Date; today: Date; items: CalendarItem[]; onSelectItem: (i: CalendarItem) => void; onDrop: (itemId: string, targetDate: Date, targetHour?: number) => void; realtimeNewIds: Set<string> }) {
   const isToday = isSameDay(currentDate, today);
-  const dayItems = items.filter((item) => isSameDay(new Date(item.start_time), currentDate));
-  const urgentCount = dayItems.filter((i) => (i.metadata as Record<string, unknown>)?.priority === "urgent").length;
+  const allItems = items.filter((item) => isSameDay(new Date(item.start_time), currentDate));
+  const allDayItems = allItems.filter((item) => item.all_day);
+  const dayItems = allItems.filter((item) => !item.all_day);
+  const urgentCount = allItems.filter((i) => (i.metadata as Record<string, unknown>)?.priority === "urgent").length;
   const [dragOverHour, setDragOverHour] = useState<number | null>(null);
 
   return (
@@ -749,7 +800,7 @@ function DayView({ currentDate, today, items, onSelectItem, onDrop, realtimeNewI
         </div>
         <div className="flex items-center gap-4">
           <div className="text-right">
-            <p className="text-lg font-bold text-slate-200">{dayItems.length}</p>
+            <p className="text-lg font-bold text-slate-200">{allItems.length}</p>
             <p className="text-[11px] text-slate-500">Eventos</p>
           </div>
           {urgentCount > 0 && (
@@ -760,6 +811,30 @@ function DayView({ currentDate, today, items, onSelectItem, onDrop, realtimeNewI
           )}
         </div>
       </div>
+
+      {/* Faixa de eventos all_day */}
+      {allDayItems.length > 0 && (
+        <div className="flex flex-shrink-0 border-b border-slate-800 px-5 py-2 gap-2 flex-wrap">
+          <span className="text-[10px] text-slate-600 uppercase self-center mr-2">dia todo</span>
+          {allDayItems.map((item) => {
+            const cfg = TYPE_CONFIG[item.type];
+            const isNew = realtimeNewIds.has(item.id);
+            return (
+              <div
+                key={item.id}
+                onClick={() => onSelectItem(item)}
+                className={cn(
+                  "rounded px-3 py-1 text-xs font-semibold text-slate-100 cursor-pointer hover:brightness-125 transition-all",
+                  isNew && "realtime-new-item"
+                )}
+                style={{ borderLeft: `3px solid ${cfg.color}`, backgroundColor: `${cfg.color}1F` }}
+              >
+                {item.title}
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* Time grid */}
       <div className="flex-1 overflow-y-auto relative">
@@ -798,7 +873,7 @@ function DayView({ currentDate, today, items, onSelectItem, onDrop, realtimeNewI
             {dayItems.map((item) => {
               const s = parseTime(item.start_time);
               const e = item.end_time ? parseTime(item.end_time) : null;
-              const startMin = (s.hour - START_HOUR) * 60 + s.minute;
+              const startMin = Math.max((s.hour - START_HOUR) * 60 + s.minute, 0);
               const duration = e ? ((e.hour - s.hour) * 60 + (e.minute - s.minute)) : 45;
               const top = (startMin / 60) * HOUR_H + 12;
               const height = Math.max((duration / 60) * HOUR_H, 36);
@@ -990,7 +1065,7 @@ function MonthView({ currentDate, today, items, onSelectItem, onDrop, realtimeNe
 // PAINEL LATERAL
 // ============================================================
 
-function SidePanel({ today, currentDate, setCurrentDate, items, allItems, selectedItem, onSelectItem, onEditItem, connections, comments, currentUser, onSendComment }: {
+function SidePanel({ today, currentDate, setCurrentDate, items, allItems, selectedItem, onSelectItem, onEditItem, onDeleteItem, connections, comments, currentUser, onSendComment }: {
   today: Date;
   currentDate: Date;
   setCurrentDate: (d: Date) => void;
@@ -999,6 +1074,7 @@ function SidePanel({ today, currentDate, setCurrentDate, items, allItems, select
   selectedItem: CalendarItem | null;
   onSelectItem: (i: CalendarItem) => void;
   onEditItem: (item: CalendarItem) => void;
+  onDeleteItem: (item: CalendarItem) => void;
   connections: CalendarItemConnection[];
   comments: CalendarItemComment[];
   currentUser: { userId: string; profile: { full_name: string; display_name: string | null; avatar_url: string | null } } | null;
@@ -1006,6 +1082,7 @@ function SidePanel({ today, currentDate, setCurrentDate, items, allItems, select
 }) {
   const [miniMonth, setMiniMonth] = useState(today.getMonth());
   const [miniYear, setMiniYear] = useState(today.getFullYear());
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
   const commentInputRef = useRef<HTMLInputElement>(null);
 
   const todayItems = items.filter((item) => isSameDay(new Date(item.start_time), today));
@@ -1148,12 +1225,41 @@ function SidePanel({ today, currentDate, setCurrentDate, items, allItems, select
             <div>
               <div className="flex items-center justify-between mb-3">
                 <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">📋 Detalhes do Item</p>
-                <button
-                  onClick={() => onEditItem(selectedItem)}
-                  className="text-xs text-primary hover:underline"
-                >
-                  ✏️ Editar
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => onEditItem(selectedItem)}
+                    className="text-xs text-primary hover:underline"
+                  >
+                    ✏️ Editar
+                  </button>
+                  {confirmingDeleteId === selectedItem.id ? (
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => {
+                          onDeleteItem(selectedItem);
+                          setConfirmingDeleteId(null);
+                        }}
+                        className="text-[10px] font-semibold text-red-400 hover:text-red-300 bg-red-500/10 px-2 py-0.5 rounded transition-colors"
+                      >
+                        Confirmar
+                      </button>
+                      <button
+                        onClick={() => setConfirmingDeleteId(null)}
+                        className="text-[10px] text-slate-500 hover:text-slate-300 px-1 transition-colors"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => setConfirmingDeleteId(selectedItem.id)}
+                      className="text-xs text-red-400 hover:text-red-300 transition-colors"
+                      title="Excluir item"
+                    >
+                      <Trash size={14} weight="bold" />
+                    </button>
+                  )}
+                </div>
               </div>
               <div className="rounded-[10px] border border-slate-800/50 bg-slate-900/40 p-4 space-y-4">
                 {/* Header */}

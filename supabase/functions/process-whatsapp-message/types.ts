@@ -87,6 +87,7 @@ export interface RouteMessageParams {
   parsed: ParsedMessage
   uazapiUrl: string
   uazapiToken: string
+  groupContext?: string  // WA-06.7: Contexto da conversa recente do grupo (injetado no NLP)
 }
 
 export interface MessageResponse {

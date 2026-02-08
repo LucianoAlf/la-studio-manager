@@ -43,6 +43,8 @@ export interface ExtractedEntities {
   time?: string
   duration_minutes?: number
   calendar_type?: 'event' | 'delivery' | 'creation' | 'task' | 'meeting'
+  location?: string
+  participants?: string
 
   // Kanban específico
   column?: 'brainstorm' | 'planning' | 'todo' | 'capturing' | 'editing' | 'awaiting_approval' | 'approved' | 'published' | 'archived'
@@ -77,7 +79,9 @@ function buildSystemPrompt(): string {
   const minuto = now.getUTCMinutes().toString().padStart(2, '0')
   const dataAtual = `${diaSemana}, ${dia} de ${mes} de ${ano}, ${hora}:${minuto} (horário de São Paulo)`
 
-  return `Você é o assistente de IA do LA Studio Manager, uma plataforma de gestão do marketing da LA Music.
+  return `Você é o Mike, assistente de gestão do LA Studio Manager — plataforma de marketing da LA Music (escola de música no Rio de Janeiro).
+
+Tom: profissional, direto, amigável. Use NO MÁXIMO 2 emojis por mensagem. Seja conciso.
 
 📅 DATA/HORA ATUAL: ${dataAtual}
 ⚠️ IMPORTANTE: Use SEMPRE o ano ${ano} ao resolver datas. "Amanhã" = próximo dia de ${ano}, "sexta" = próxima sexta-feira de ${ano}. NUNCA retorne datas de anos anteriores. Para datas relativas como "amanhã", "sexta", etc., retorne em formato relativo (ex: "amanhã", "sexta") e NÃO em formato ISO.
@@ -91,8 +95,8 @@ Sua função é classificar mensagens do WhatsApp e extrair informações estrut
    Entidades: title, priority, content_type, platforms, brand, column, description
 
 2. **create_calendar** — Criar item no calendário
-   Gatilhos: "agenda pra", "marca pra", "reunião dia", "gravação dia", "entrega dia"
-   Entidades: title, date, time, duration_minutes, calendar_type, platforms, content_type
+   Gatilhos: "agenda pra", "marca pra", "reunião dia", "gravação dia", "entrega dia", "tenho uma reunião"
+   Entidades: title, date, time, duration_minutes, calendar_type, platforms, content_type, location, participants
 
 3. **create_reminder** — Criar lembrete
    Gatilhos: "me lembra", "lembrete pra", "não deixa eu esquecer"
@@ -136,6 +140,34 @@ Sua função é classificar mensagens do WhatsApp e extrair informações estrut
 **Tipos calendário:** event, delivery, creation, task, meeting
 **Períodos:** today, tomorrow, this_week, next_week, this_month
 
+## EXTRAÇÃO DE ENTIDADES — OBRIGATÓRIO
+
+Quando classificar como create_calendar, extraia TODAS as entidades possíveis:
+- title: nome do evento (ex: "Reunião com John")
+- date: data (normalizar: "amanhã" → manter relativo, "segunda" → manter relativo)
+- time: horário (normalizar: "10h" → "10:00", "às 3" → "15:00", "3 da tarde" → "15:00")
+- location: local ou "online" (se mencionado)
+- participants: pessoas envolvidas (se mencionadas)
+- calendar_type: event/delivery/creation/task/meeting
+- duration_minutes: duração em minutos (se mencionada)
+
+Quando classificar como create_card, extraia:
+- title: nome da tarefa
+- deadline: prazo (campo date)
+- priority: urgent/high/medium/low
+- description: detalhes
+
+Exemplo: "Reunião amanhã às 10h com John no Zoom" deve extrair:
+- title: "Reunião com John"
+- date: "amanhã"
+- time: "10:00"
+- participants: "John"
+- location: "Online (Zoom)"
+- calendar_type: "meeting"
+
+NÃO invente dados que o usuário NÃO mencionou.
+Se o usuário disse "reunião com John" sem hora/data, retorne apenas title e participants.
+
 ## REGRAS
 
 1. Se o usuário não especificar coluna, assumir "brainstorm" para create_card
@@ -143,9 +175,10 @@ Sua função é classificar mensagens do WhatsApp e extrair informações estrut
 3. Se o usuário não especificar marca, assumir "la_music"
 4. Datas relativas: "amanhã" = dia seguinte, "sexta" = próxima sexta, etc. Retorne em formato relativo (ex: "amanhã", "sexta") para que o sistema resolva corretamente.
 5. Se a mensagem for ambígua, classificar como "unknown" e pedir esclarecimento
-6. Responda SEMPRE em português brasileiro, tom amigável e profissional
+6. Responda SEMPRE em português brasileiro, tom profissional e direto (você é o Mike)
 7. Para create_card e create_calendar, SEMPRE pedir confirmação (needs_confirmation: true)
 8. Para queries, não precisa confirmação (needs_confirmation: false)
+9. Use NO MÁXIMO 2 emojis no response_text
 
 ## FORMATO DE RESPOSTA
 
@@ -171,7 +204,8 @@ export async function classifyMessage(
   text: string,
   userName: string,
   conversationContext?: string,
-  memoryContext?: string
+  memoryContext?: string,
+  groupContext?: string,
 ): Promise<ClassificationResult> {
   const geminiKey = Deno.env.get('GEMINI_API_KEY')
   const openaiKey = Deno.env.get('OPENAI_API_KEY')
@@ -187,6 +221,11 @@ export async function classifyMessage(
   // WA-04: Injetar memória do agente (vai ANTES do userMessage para contexto de background)
   if (memoryContext) {
     userMessage = `MEMÓRIA DO AGENTE (use para personalizar resposta e inferir contexto):\n${memoryContext}\n\n${userMessage}`
+  }
+
+  // WA-06.7: Injetar contexto do grupo (conversa recente)
+  if (groupContext) {
+    userMessage = `CONTEXTO DO GRUPO DE WHATSAPP — Você acompanhou a conversa em silêncio e agora foi chamado para ajudar.\nUse esse contexto para entender referências como "esse evento", "o que ele disse", "aquilo que combinamos".\nNão pedir informações que já foram mencionadas na conversa.\nCitar quem disse o quê quando relevante.\n${groupContext}\n\n${userMessage}`
   }
 
   // Tentar Gemini primeiro (gratuito)

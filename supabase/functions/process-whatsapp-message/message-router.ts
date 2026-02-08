@@ -12,6 +12,10 @@ import { loadMemoryContext, formatMemoryForPrompt, saveEpisode, learnFact } from
 import { handleQueryCalendar, handleQueryCards, handleQueryProjects, handleGenerateReport } from './query-handler.ts'
 import { transcribeAudio } from './audio-handler.ts'
 import { analyzeImage } from './image-handler.ts'
+import { getPendingAction, clearPendingAction, savePendingAction, processFollowUpResponse } from './followup-handler.ts'
+import type { PendingAction } from './followup-handler.ts'
+import { generateFollowUp, getMissingFields, buildPartialSummary } from './mike-personality.ts'
+import { getEventConfirmation, processParticipantResponse, notifyParticipants, parseParticipantNames } from './participant-notifier.ts'
 import type { ClassificationResult } from './gemini-classifier.ts'
 import type { RouteMessageParams, MessageResponse } from './types.ts'
 
@@ -73,6 +77,110 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
       text: `Não consegui ler sua mensagem, ${firstName}. Tenta mandar por texto?`,
       intent: 'unknown',
       confidence: 0,
+    }
+  }
+
+  // ========================================
+  // WA-06.6: VERIFICAR CONFIRMAÇÃO DE EVENTO (PARTICIPANTE)
+  // Se o Mike mandou "Confirma presença? (sim/não)" para um participante,
+  // a próxima mensagem desse participante é a resposta.
+  // Prioridade MÁXIMA — antes de follow-up e NLP.
+  // ========================================
+  const eventConfirmation = await getEventConfirmation(supabase, userId)
+
+  if (eventConfirmation) {
+    console.log(`[NOTIFY] Resposta de confirmação de ${firstName} para evento "${eventConfirmation.eventTitle}"`)
+
+    const responseMessage = await processParticipantResponse(
+      supabase,
+      params.uazapiUrl,
+      params.uazapiToken,
+      eventConfirmation,
+      parsed.text
+    )
+
+    // Determinar intent baseado na resposta
+    const normalized = parsed.text.trim().toLowerCase().replace(/[.,!?;:]+$/g, '').trim()
+    const confirmWords = ['sim', 'yes', 's', 'ok', 'confirmo', 'beleza', 'bora', 'pode ser', 'claro', 'vou', 'vou sim', 'tamo junto', 'pode']
+    const declineWords = ['não', 'nao', 'no', 'n', 'não posso', 'nao posso', 'cancelar', 'não vou', 'nao vou', 'não dá', 'nao da', 'não vai dar', 'nao vai dar']
+    const isConfirm = confirmWords.includes(normalized)
+    const isDecline = declineWords.includes(normalized)
+
+    let intent = 'event_confirmation_ambiguous'
+    if (isConfirm) intent = 'event_confirmed'
+    else if (isDecline) intent = 'event_declined'
+
+    return {
+      text: responseMessage,
+      intent,
+      confidence: 1.0,
+    }
+  }
+
+  // ========================================
+  // WA-06.5: VERIFICAR FOLLOW-UP PENDENTE
+  // Se o Mike fez uma pergunta (ex: "Que horas?"), a próxima mensagem
+  // do usuário é a resposta — não deve ir pro NLP como mensagem nova.
+  // ========================================
+  const pending = await getPendingAction(supabase, userId)
+
+  if (pending) {
+    console.log(`[FOLLOWUP] Ação pendente: ${pending.action}, aguardando: ${pending.waitingForField}`)
+
+    const followUpResult = processFollowUpResponse(pending, parsed.text)
+
+    if (!followUpResult) {
+      // Cancelou ou mudou de assunto — limpar e continuar fluxo normal
+      await clearPendingAction(supabase, userId)
+      console.log('[FOLLOWUP] Cancelado ou mudou de assunto')
+
+      // Se cancelou explicitamente, responder e parar
+      const lower = parsed.text.toLowerCase().trim()
+      const isCancelWord = ['cancelar', 'cancela', 'deixa', 'esquece', 'deixa pra la', 'deixa pra lá', 'nao quero', 'não quero', 'para', 'parar'].includes(lower)
+      if (isCancelWord) {
+        return {
+          text: 'Ok, cancelei.',
+          intent: 'followup_cancelled',
+          confidence: 1.0,
+        }
+      }
+      // Mudou de assunto — cair no fluxo normal (NLP vai classificar)
+    } else if (followUpResult.complete) {
+      // Todos os dados coletados — ir pro fluxo de confirmação
+      await clearPendingAction(supabase, userId)
+      console.log('[FOLLOWUP] Dados completos:', JSON.stringify(followUpResult.entities))
+
+      // Salvar contexto de confirmação (mesmo fluxo do WA-02/03)
+      const contextType = pending.action === 'create_calendar' ? 'creating_calendar' : 'creating_card'
+      await saveConversationContext(supabase, userId, contextType, {
+        step: 'awaiting_confirmation',
+        entities: followUpResult.entities,
+        classified_at: new Date().toISOString(),
+      })
+
+      // Montar mensagem de confirmação no tom Mike
+      const confirmMsg = buildConfirmationMessage(pending.action, followUpResult.entities)
+      return {
+        text: confirmMsg,
+        intent: `followup_${pending.action}_complete`,
+        confidence: 1.0,
+      }
+    } else {
+      // Ainda falta campo — atualizar ação pendente e perguntar próximo
+      const updatedPending: PendingAction = {
+        ...pending,
+        entities: followUpResult.entities,
+        missingFields: pending.missingFields.filter(f => f !== pending.waitingForField),
+        currentQuestion: followUpResult.nextQuestion!,
+        waitingForField: followUpResult.nextField!,
+      }
+      await savePendingAction(supabase, userId, updatedPending)
+
+      return {
+        text: followUpResult.nextQuestion!,
+        intent: `followup_asking_${followUpResult.nextField}`,
+        confidence: 1.0,
+      }
     }
   }
 
@@ -152,6 +260,48 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
             metadata: { applies_to: 'brand_usage', brand: ents.brand },
           }).catch(e => console.error('[WA-04] Fact learn error:', e))
         }
+
+        // ========================================
+        // WA-06.6: NOTIFICAR PARTICIPANTES APÓS CRIAR EVENTO
+        // Se o evento tem participantes, buscar e notificar via WhatsApp
+        // ========================================
+        if (result.success && activeContext.context_type === 'creating_calendar' && ents.participants) {
+          const participantNames = parseParticipantNames(ents.participants as string)
+
+          if (participantNames.length > 0) {
+            console.log(`[NOTIFY] Notificando participantes: ${participantNames.join(', ')}`)
+
+            const notifyResults = await notifyParticipants(supabase, params.uazapiUrl, params.uazapiToken, {
+              eventId: result.record_id || '',
+              eventTitle: (ents.title as string) || 'Evento',
+              eventDate: (ents.date as string) || '',
+              eventTime: (ents.time as string) || null,
+              eventLocation: (ents.location as string) || null,
+              creatorUserId: userId,
+              creatorName: firstName,
+              creatorPhone: user.phone_number,
+              participantNames,
+            })
+
+            // Append status das notificações à mensagem de sucesso
+            const notified = notifyResults.filter(r => r.notified)
+            const notFound = notifyResults.filter(r => !r.found)
+
+            let statusMsg = ''
+            if (notified.length > 0) {
+              const names = notified.map(r => r.participantName).join(', ')
+              statusMsg += `\nNotifiquei ${names} pelo WhatsApp.`
+            }
+            if (notFound.length > 0) {
+              const names = notFound.map(r => r.participantName).join(', ')
+              statusMsg += `\n${names} não está cadastrado no sistema — não consegui notificar.`
+            }
+
+            if (statusMsg) {
+              result.message += statusMsg
+            }
+          }
+        }
       }
 
       return {
@@ -192,7 +342,7 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
       }
 
       return {
-        text: `👍 Tudo bem, cancelei! Nenhuma alteração foi feita.\n\nQuando quiser, é só me mandar um novo comando. 😉`,
+        text: `Ok, cancelei.`,
         intent: `${activeContext.context_type}_cancelled`,
         confidence: 1.0,
       }
@@ -221,7 +371,7 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
   // ========================================
   // CLASSIFICAR MENSAGEM COM GEMINI
   // ========================================
-  const classification = await classifyMessage(parsed.text, firstName, conversationContext, memoryPrompt)
+  const classification = await classifyMessage(parsed.text, firstName, conversationContext, memoryPrompt, params.groupContext)
 
   // ========================================
   // ROTEAR POR INTENÇÃO
@@ -333,7 +483,7 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
     case 'unknown':
     default:
       return {
-        text: classification.response_text || `Não entendi bem, ${firstName}. Pode reformular? Ou digite "ajuda".`,
+        text: classification.response_text || `Não entendi, ${firstName}. Pode reformular? Ou manda "ajuda".`,
         intent: 'unknown',
         confidence: classification.confidence,
       }
@@ -353,6 +503,31 @@ async function handleCreateCard(
 ): Promise<MessageResponse> {
   const { entities } = classification
 
+  // WA-06.5: Verificar se falta informação antes de criar
+  const ents = entities as unknown as Record<string, unknown>
+  const followUp = generateFollowUp('create_card', ents)
+  if (followUp) {
+    // Falta informação — iniciar follow-up
+    const summary = buildPartialSummary('create_card', ents)
+    const pending: PendingAction = {
+      action: 'create_card',
+      entities: { ...ents },
+      missingFields: getMissingFields('create_card', ents),
+      currentQuestion: followUp.question,
+      waitingForField: followUp.missingField,
+      source: 'text',
+      createdAt: new Date().toISOString(),
+    }
+    await savePendingAction(supabase, userId, pending)
+
+    return {
+      text: `${summary}\n${followUp.question}`,
+      intent: `followup_asking_${followUp.missingField}`,
+      confidence: classification.confidence,
+    }
+  }
+
+  // Tem tudo — pedir confirmação
   if (classification.needs_confirmation) {
     await saveConversationContext(supabase, userId, 'creating_card', {
       step: 'awaiting_confirmation',
@@ -361,18 +536,8 @@ async function handleCreateCard(
     })
   }
 
-  const parts: string[] = ['🎯 Entendi! Vou criar um *card no Kanban*:\n']
-  if (entities.title) parts.push(`📝 Título: *${entities.title}*`)
-  if (entities.priority) parts.push(`⚡ Prioridade: *${formatPriority(entities.priority)}*`)
-  if (entities.content_type) parts.push(`🎬 Tipo: *${formatContentType(entities.content_type)}*`)
-  if (entities.brand) parts.push(`🏷️ Marca: *${formatBrand(entities.brand)}*`)
-  if (entities.column) parts.push(`📋 Coluna: *${formatColumn(entities.column)}*`)
-  if (entities.platforms?.length) parts.push(`📱 Plataformas: *${entities.platforms.join(', ')}*`)
-  if (entities.description) parts.push(`📄 Descrição: ${entities.description}`)
-  parts.push('\n✅ Confirma? (sim/não)')
-
   return {
-    text: parts.join('\n'),
+    text: buildConfirmationMessage('create_card', ents),
     intent: classification.intent,
     confidence: classification.confidence,
   }
@@ -387,6 +552,31 @@ async function handleCreateCalendar(
 ): Promise<MessageResponse> {
   const { entities } = classification
 
+  // WA-06.5: Verificar se falta informação antes de criar
+  const ents = entities as unknown as Record<string, unknown>
+  const followUp = generateFollowUp('create_calendar', ents)
+  if (followUp) {
+    // Falta informação — iniciar follow-up
+    const summary = buildPartialSummary('create_calendar', ents)
+    const pending: PendingAction = {
+      action: 'create_calendar',
+      entities: { ...ents },
+      missingFields: getMissingFields('create_calendar', ents),
+      currentQuestion: followUp.question,
+      waitingForField: followUp.missingField,
+      source: 'text',
+      createdAt: new Date().toISOString(),
+    }
+    await savePendingAction(supabase, userId, pending)
+
+    return {
+      text: `${summary}\n${followUp.question}`,
+      intent: `followup_asking_${followUp.missingField}`,
+      confidence: classification.confidence,
+    }
+  }
+
+  // Tem tudo — pedir confirmação
   if (classification.needs_confirmation) {
     await saveConversationContext(supabase, userId, 'creating_calendar', {
       step: 'awaiting_confirmation',
@@ -395,17 +585,8 @@ async function handleCreateCalendar(
     })
   }
 
-  const parts: string[] = ['📅 Entendi! Vou criar um *item no calendário*:\n']
-  if (entities.title) parts.push(`📝 Título: *${entities.title}*`)
-  if (entities.calendar_type) parts.push(`📌 Tipo: *${formatCalendarType(entities.calendar_type)}*`)
-  if (entities.date) parts.push(`📆 Data: *${entities.date}*`)
-  if (entities.time) parts.push(`⏰ Horário: *${entities.time}*`)
-  if (entities.duration_minutes) parts.push(`⏱️ Duração: *${entities.duration_minutes} min*`)
-  if (entities.platforms?.length) parts.push(`📱 Plataformas: *${entities.platforms.join(', ')}*`)
-  parts.push('\n✅ Confirma? (sim/não)')
-
   return {
-    text: parts.join('\n'),
+    text: buildConfirmationMessage('create_calendar', ents),
     intent: classification.intent,
     confidence: classification.confidence,
   }
@@ -551,6 +732,76 @@ async function handleAudioMessage(
   }).catch(e => console.error('[WA-06] Episode save error:', e))
 
   // ========================================
+  // WA-06.6: VERIFICAR CONFIRMAÇÃO DE EVENTO (áudio)
+  // Se o participante respondeu por áudio à notificação de evento
+  // ========================================
+  const audioEventConfirmation = await getEventConfirmation(supabase, userId)
+  if (audioEventConfirmation) {
+    console.log(`[NOTIFY-AUDIO] Resposta de confirmação de ${firstName} para evento "${audioEventConfirmation.eventTitle}"`)
+    const audioEventResponse = await processParticipantResponse(
+      supabase, uazapiUrl, uazapiToken,
+      audioEventConfirmation, result.transcription
+    )
+    return {
+      text: audioEventResponse,
+      intent: 'audio_event_confirmation',
+      confidence: 1.0,
+      metadata: { transcription: result.transcription },
+    }
+  }
+
+  // ========================================
+  // WA-06.5: VERIFICAR FOLLOW-UP PENDENTE (áudio)
+  // Se o Mike perguntou "Que horas?" e o usuário respondeu por áudio
+  // ========================================
+  const audioPending = await getPendingAction(supabase, userId)
+  if (audioPending) {
+    console.log(`[FOLLOWUP-AUDIO] Ação pendente: ${audioPending.action}, aguardando: ${audioPending.waitingForField}`)
+    const audioFollowUp = processFollowUpResponse(audioPending, result.transcription)
+
+    if (!audioFollowUp) {
+      await clearPendingAction(supabase, userId)
+      // Cancelou — responder e parar
+      return {
+        text: 'Ok, cancelei.',
+        intent: 'audio_followup_cancelled',
+        confidence: 1.0,
+        metadata: { transcription: result.transcription },
+      }
+    } else if (audioFollowUp.complete) {
+      await clearPendingAction(supabase, userId)
+      const contextType = audioPending.action === 'create_calendar' ? 'creating_calendar' : 'creating_card'
+      await saveConversationContext(supabase, userId, contextType, {
+        step: 'awaiting_confirmation',
+        entities: audioFollowUp.entities,
+        classified_at: new Date().toISOString(),
+      })
+      const confirmMsg = buildConfirmationMessage(audioPending.action, audioFollowUp.entities)
+      return {
+        text: confirmMsg,
+        intent: `audio_followup_${audioPending.action}_complete`,
+        confidence: 1.0,
+        metadata: { transcription: result.transcription },
+      }
+    } else {
+      const updatedPending: PendingAction = {
+        ...audioPending,
+        entities: audioFollowUp.entities,
+        missingFields: audioPending.missingFields.filter(f => f !== audioPending.waitingForField),
+        currentQuestion: audioFollowUp.nextQuestion!,
+        waitingForField: audioFollowUp.nextField!,
+      }
+      await savePendingAction(supabase, userId, updatedPending)
+      return {
+        text: audioFollowUp.nextQuestion!,
+        intent: `audio_followup_asking_${audioFollowUp.nextField}`,
+        confidence: 1.0,
+        metadata: { transcription: result.transcription },
+      }
+    }
+  }
+
+  // ========================================
   // VERIFICAR CONTEXTO DE CONFIRMAÇÃO PENDENTE
   // Se o áudio transcrito for "sim/não" e houver contexto ativo,
   // tratar como confirmação (mesmo fluxo do texto)
@@ -652,7 +903,7 @@ async function handleAudioMessage(
   }
 
   // Classificar o texto transcrito
-  const classification = await classifyMessage(result.transcription, firstName, undefined, memoryPrompt)
+  const classification = await classifyMessage(result.transcription, firstName, undefined, memoryPrompt, params.groupContext)
 
   // Rotear pela intenção classificada
   // A transcrição é interna — o usuário recebe apenas a resposta natural
@@ -791,6 +1042,11 @@ async function handleImageMessage(
       `Parece ser algo para agendar. Quer que eu crie um evento?\n`,
     ]
     if (ents.title) parts.push(`📝 Título: *${ents.title}*`)
+    if (ents.date) parts.push(`📆 Data: *${ents.date}*`)
+    if (ents.time) parts.push(`⏰ Horário: *${ents.time}*`)
+    if (ents.location) parts.push(`📍 Local: *${ents.location}*`)
+    if (ents.people) parts.push(`👥 Participantes: *${ents.people}*`)
+    if (ents.calendar_type) parts.push(`📌 Tipo: *${ents.calendar_type}*`)
     if (ents.notes) parts.push(`💡 ${ents.notes}`)
     parts.push('\n✅ Confirma? (sim/não)')
 
@@ -798,6 +1054,10 @@ async function handleImageMessage(
       step: 'awaiting_confirmation',
       entities: {
         title: ents.title,
+        date: ents.date || null,
+        time: ents.time || null,
+        location: ents.location || null,
+        calendar_type: ents.calendar_type || 'meeting',
         description: result.description,
         source: 'image_analysis',
       },
@@ -959,6 +1219,35 @@ async function saveConversationContextForMedia(
   } catch (error) {
     console.error('[WA-06] Error saving media context:', error)
   }
+}
+
+// ============================================
+// WA-06.5: MENSAGEM DE CONFIRMAÇÃO (TOM MIKE)
+// ============================================
+
+function buildConfirmationMessage(action: string, entities: Record<string, unknown>): string {
+  const parts: string[] = []
+
+  if (action === 'create_calendar') {
+    parts.push('📝 *' + (entities.title || 'Evento') + '*')
+    if (entities.date) {
+      let dateLine = `📅 ${entities.date}`
+      if (entities.time) dateLine += ` às ${entities.time}`
+      parts.push(dateLine)
+    }
+    if (entities.location) parts.push(`📍 ${entities.location}`)
+    if (entities.participants) parts.push(`👤 ${entities.participants}`)
+    if (entities.duration_minutes) parts.push(`⏱️ ${entities.duration_minutes} min`)
+  } else if (action === 'create_card') {
+    parts.push('📝 *' + (entities.title || 'Tarefa') + '*')
+    if (entities.priority === 'urgent') parts.push('🔴 Urgente')
+    else if (entities.priority === 'high') parts.push('🟠 Alta prioridade')
+    if (entities.deadline || entities.date) parts.push(`📅 Prazo: ${entities.deadline || entities.date}`)
+    if (entities.content_type) parts.push(`🎬 ${entities.content_type}`)
+  }
+
+  parts.push('\nConfirma? (sim/não)')
+  return parts.join('\n')
 }
 
 // ============================================

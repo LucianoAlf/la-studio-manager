@@ -170,18 +170,15 @@ async function executeCreateCard(ctx: ExecutionContext): Promise<ExecutionResult
 
   console.log(`[WA-03] Card created: ${card.id} - "${card.title}"`)
 
-  // 6. Montar resposta de sucesso
-  const emoji = getPriorityEmoji(entities.priority || 'medium')
+  // 6. Montar resposta de sucesso (tom Mike)
   return {
     success: true,
     record_id: card.id,
-    message: `✅ Card criado com sucesso!\n\n` +
+    message: `Pronto, criei a tarefa!\n\n` +
       `📝 *${card.title}*\n` +
-      `${emoji} Prioridade: ${formatPriority(entities.priority || 'medium')}\n` +
-      `📋 Coluna: ${column.name}\n` +
-      (entities.content_type ? `🎬 Tipo: ${entities.content_type}\n` : '') +
-      (entities.brand ? `🏷️ Marca: ${entities.brand === 'la_kids' ? 'LA Kids' : 'LA Music'}\n` : '') +
-      `\n🔮 O card já apareceu no dashboard!`,
+      `📋 ${column.name}` +
+      (entities.priority && entities.priority !== 'medium' ? ` · ${formatPriority(entities.priority)}` : '') +
+      (entities.content_type ? `\n🎬 ${entities.content_type}` : ''),
   }
 }
 
@@ -260,20 +257,18 @@ async function executeCreateCalendar(ctx: ExecutionContext): Promise<ExecutionRe
 
   console.log(`[WA-03] Calendar item created: ${item.id} - "${item.title}"`)
 
-  // 5. Montar resposta de sucesso
+  // 5. Montar resposta de sucesso (tom Mike)
   const dateStr = formatDateBR(startTime)
   const timeStr = entities.time ? ` às ${entities.time}` : ' (dia todo)'
-  const typeEmoji = getCalendarTypeEmoji(calendarType)
 
   return {
     success: true,
     record_id: item.id,
-    message: `✅ Item criado no calendário!\n\n` +
-      `${typeEmoji} *${item.title}*\n` +
-      `📆 ${dateStr}${timeStr}\n` +
-      (durationMinutes && !allDay ? `⏱️ Duração: ${durationMinutes} min\n` : '') +
-      (entities.content_type ? `🎬 Tipo: ${entities.content_type}\n` : '') +
-      `\n🔮 O evento já apareceu no calendário do dashboard!`,
+    message: `Pronto, agendei!\n\n` +
+      `📝 *${item.title}*\n` +
+      `� ${dateStr}${timeStr}` +
+      (durationMinutes && !allDay ? `\n⏱️ ${durationMinutes} min` : '') +
+      (entities.location ? `\n📍 ${entities.location}` : ''),
   }
 }
 
@@ -349,10 +344,9 @@ async function executeCreateReminder(ctx: ExecutionContext): Promise<ExecutionRe
   return {
     success: true,
     record_id: reminder.id,
-    message: `✅ Lembrete criado!\n\n` +
+    message: `Pronto, lembrete criado!\n\n` +
       `📝 *${entities.reminder_text || entities.title || 'Lembrete'}*\n` +
-      `📆 ${dateStr} às ${timeStr}\n` +
-      `\n📱 Vou te mandar uma mensagem nesse horário!`,
+      `� ${dateStr} às ${timeStr}`,
   }
 }
 

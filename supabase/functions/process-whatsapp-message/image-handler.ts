@@ -37,26 +37,52 @@ Ao analisar imagens recebidas via WhatsApp, considere o contexto de produção d
 - Comprovantes, documentos, contratos
 - Fotos de produtos, cenários, locações
 
-Responda SEMPRE em JSON válido com esta estrutura:
-{
-  "description": "Descrição objetiva do que aparece na imagem",
-  "suggested_action": "create_card | create_calendar | general_info | none",
-  "suggested_entities": {
-    "title": "título sugerido se for criar algo",
-    "content_type": "video | carousel | reels | story | photo | null",
-    "priority": "urgent | high | medium | low | null",
-    "notes": "observações relevantes"
-  },
-  "confidence": 0.0 a 1.0
-}
-
 Regras:
 - Se a imagem é claramente uma referência de conteúdo → suggested_action: "create_card"
-- Se parece um agendamento/evento → suggested_action: "create_calendar"
+- Se parece um agendamento/evento/reunião → suggested_action: "create_calendar"
 - Se é informativa mas não requer ação → suggested_action: "general_info"
 - Se não conseguir identificar → suggested_action: "none"
-- Seja conciso na descrição (máx 200 caracteres)
-- confidence < 0.5 → suggested_action: "none"`
+- Seja conciso na descrição (máx 200 caracteres, texto puro, sem JSON)
+- confidence < 0.5 → suggested_action: "none"
+- IMPORTANTE: Se a imagem contém data, horário, local ou nomes de pessoas, EXTRAIA nos campos date, time, location e people de suggested_entities
+- Converta horários para formato HH:MM (ex: "10H" → "10:00", "15h30" → "15:30")
+- Converta datas relativas para YYYY-MM-DD quando possível, ou use termos como "amanhã", "sexta"`
+
+// Schema JSON forçado via responseJsonSchema — garante JSON limpo do Gemini
+const VISION_JSON_SCHEMA = {
+  type: 'object',
+  properties: {
+    description: {
+      type: 'string',
+      description: 'Descrição curta e objetiva da imagem em texto puro (máx 200 chars)',
+    },
+    suggested_action: {
+      type: 'string',
+      enum: ['create_card', 'create_calendar', 'general_info', 'none'],
+      description: 'Ação sugerida baseada no conteúdo da imagem',
+    },
+    confidence: {
+      type: 'number',
+      description: 'Nível de confiança de 0.0 a 1.0',
+    },
+    suggested_entities: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'Título sugerido se for criar algo' },
+        date: { type: 'string', description: 'Data se mencionada na imagem (formato YYYY-MM-DD ou relativo: hoje, amanhã, sexta). Calcule a partir da data atual.' },
+        time: { type: 'string', description: 'Horário se mencionado na imagem (formato HH:MM 24h). Ex: "10H" → "10:00", "15h30" → "15:30"' },
+        location: { type: 'string', description: 'Local se mencionado na imagem' },
+        people: { type: 'string', description: 'Pessoas mencionadas (nomes separados por vírgula)' },
+        calendar_type: { type: 'string', enum: ['event', 'meeting', 'task', 'delivery', 'creation'], description: 'Tipo de evento para o calendário' },
+        content_type: { type: 'string', description: 'video, carousel, reels, story, photo' },
+        priority: { type: 'string', enum: ['urgent', 'high', 'medium', 'low'] },
+        notes: { type: 'string', description: 'Observações adicionais' },
+      },
+      required: ['title'],
+    },
+  },
+  required: ['description', 'suggested_action', 'confidence'],
+}
 
 /**
  * Analisa imagem via UAZAPI (download base64) + Gemini 3 Flash Preview.
@@ -125,7 +151,7 @@ export async function analyzeImage(params: AnalyzeImageParams): Promise<ImageRes
       : `${userName} enviou esta imagem sem legenda. Analise e descreva o que vê.`
 
     const visionResponse = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent`,
       {
         method: 'POST',
         headers: {
@@ -151,6 +177,8 @@ export async function analyzeImage(params: AnalyzeImageParams): Promise<ImageRes
           generationConfig: {
             temperature: 0.3,
             maxOutputTokens: 500,
+            responseMimeType: 'application/json',
+            responseJsonSchema: VISION_JSON_SCHEMA,
           },
         }),
       }
@@ -202,40 +230,62 @@ export async function analyzeImage(params: AnalyzeImageParams): Promise<ImageRes
 }
 
 /**
- * Parse da resposta do Vision com fallback robusto.
- * O Gemini pode retornar JSON puro, envolvido em markdown, ou texto livre.
+ * Parse robusto da resposta do Gemini Vision com 3 tentativas de fallback.
+ * 1. JSON direto (quando responseMimeType funciona)
+ * 2. Limpar markdown code fences
+ * 3. Extrair primeiro bloco JSON com regex
  */
 function parseVisionResponse(raw: string): {
   description: string
   suggested_action: string
   suggested_entities: Record<string, unknown> | null
 } {
+  // deno-lint-ignore no-explicit-any
+  let parsed: any = null
+
+  // Tentativa 1: JSON direto (responseMimeType: application/json)
   try {
-    // Tentar extrair JSON de dentro de markdown ```json ... ```
-    const jsonMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/)
-    const jsonStr = jsonMatch ? jsonMatch[1].trim() : raw.trim()
-
-    const parsed = JSON.parse(jsonStr)
-
-    // Garantir que description é texto limpo (não JSON escapado)
-    let desc = parsed.description || 'Imagem recebida'
-    if (desc.startsWith('{') || desc.startsWith('[')) {
-      desc = 'Imagem recebida'
+    parsed = JSON.parse(raw)
+  } catch {
+    // Tentativa 2: Limpar markdown code fences
+    const cleaned = raw
+      .replace(/```(?:json|JSON)?\s*/gi, '')
+      .replace(/```\s*/g, '')
+      .trim()
+    try {
+      parsed = JSON.parse(cleaned)
+    } catch {
+      // Tentativa 3: Extrair primeiro bloco JSON com regex
+      const jsonMatch = cleaned.match(/\{[\s\S]*\}/)
+      if (jsonMatch) {
+        try {
+          parsed = JSON.parse(jsonMatch[0])
+        } catch {
+          console.error('[WA-06] Todas as tentativas de parse falharam')
+        }
+      }
     }
+  }
 
+  if (parsed && parsed.description) {
     return {
-      description: desc.substring(0, 300),
+      description: String(parsed.description).substring(0, 300),
       suggested_action: parsed.suggested_action || 'none',
       suggested_entities: parsed.suggested_entities || null,
     }
-  } catch {
-    // Fallback: usar texto bruto como descrição (limpar JSON residual)
-    console.warn('[WA-06] Failed to parse Vision JSON, using raw text as description')
-    const cleanText = raw.replace(/[{}"\[\]]/g, '').replace(/\n/g, ' ').trim()
-    return {
-      description: cleanText.substring(0, 300) || 'Imagem recebida',
-      suggested_action: 'none',
-      suggested_entities: null,
-    }
+  }
+
+  // Fallback total: texto limpo sem JSON
+  console.warn('[WA-06] Parse falhou, usando texto bruto como descrição')
+  const cleanText = raw
+    .replace(/```(?:json|JSON)?\s*/gi, '')
+    .replace(/```\s*/g, '')
+    .replace(/[{}"\[\]]/g, '')
+    .replace(/\n/g, ' ')
+    .trim()
+  return {
+    description: cleanText.substring(0, 300) || 'Imagem recebida',
+    suggested_action: 'none',
+    suggested_entities: null,
   }
 }

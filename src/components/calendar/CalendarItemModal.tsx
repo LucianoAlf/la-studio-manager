@@ -15,17 +15,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/shadcn/select";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/shadcn/alert-dialog";
 import { Textarea } from "@/components/ui/shadcn/textarea";
 import { FormField } from "@/components/ui/form-field";
 import { PlatformCheckboxes } from "@/components/ui/platform-checkboxes";
@@ -115,6 +104,8 @@ export function CalendarItemModal({
 
   // UI state
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
@@ -150,6 +141,7 @@ export function CalendarItemModal({
       }
     }
     setFormErrors({});
+    setConfirmingDelete(false);
   }, [item, defaultDate, open]);
 
   function resetForm() {
@@ -213,13 +205,18 @@ export function CalendarItemModal({
 
   async function handleDelete() {
     if (!item) return;
+    setDeleting(true);
     try {
       await deleteCalendarItem(item.id);
+      toast.success("Item excluído");
       onSaved();
       onOpenChange(false);
-      toast.success("Item excluído");
-    } catch {
+    } catch (err) {
+      console.error('[Calendar] Delete failed:', err);
       toast.error("Erro ao excluir");
+    } finally {
+      setDeleting(false);
+      setConfirmingDelete(false);
     }
   }
 
@@ -376,36 +373,34 @@ export function CalendarItemModal({
 
         <DialogFooter className="flex items-center gap-2 sm:justify-between">
           <div>
-            {item && (
-              <AlertDialog>
-                <AlertDialogTrigger asChild>
-                  <button
-                    type="button"
-                    className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-md transition-colors"
-                  >
-                    <Trash size={14} weight="bold" /> Excluir
-                  </button>
-                </AlertDialogTrigger>
-                <AlertDialogContent className="bg-slate-900 border-slate-700">
-                  <AlertDialogHeader>
-                    <AlertDialogTitle className="text-slate-100">Confirmar exclusão</AlertDialogTitle>
-                    <AlertDialogDescription className="text-slate-400">
-                      Tem certeza que deseja excluir &ldquo;{item.title}&rdquo;? Esta ação não pode ser desfeita.
-                    </AlertDialogDescription>
-                  </AlertDialogHeader>
-                  <AlertDialogFooter>
-                    <AlertDialogCancel className="bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700">
-                      Cancelar
-                    </AlertDialogCancel>
-                    <AlertDialogAction
-                      onClick={handleDelete}
-                      className="bg-red-600 text-white hover:bg-red-700"
-                    >
-                      Excluir
-                    </AlertDialogAction>
-                  </AlertDialogFooter>
-                </AlertDialogContent>
-              </AlertDialog>
+            {item && !confirmingDelete && (
+              <button
+                type="button"
+                onClick={() => setConfirmingDelete(true)}
+                className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-md transition-colors"
+              >
+                <Trash size={14} weight="bold" /> Excluir
+              </button>
+            )}
+            {item && confirmingDelete && (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-slate-400">Tem certeza?</span>
+                <button
+                  type="button"
+                  onClick={handleDelete}
+                  disabled={deleting}
+                  className="px-3 py-1.5 text-xs font-semibold bg-red-600 text-white hover:bg-red-700 rounded-md transition-colors disabled:opacity-50"
+                >
+                  {deleting ? 'Excluindo...' : 'Sim, excluir'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmingDelete(false)}
+                  className="px-3 py-1.5 text-xs text-slate-400 hover:text-slate-200 rounded-md transition-colors"
+                >
+                  Cancelar
+                </button>
+              </div>
             )}
           </div>
           <div className="flex items-center gap-2">
