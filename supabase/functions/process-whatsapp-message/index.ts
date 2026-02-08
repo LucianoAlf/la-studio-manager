@@ -8,7 +8,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { parseWebhookPayload, normalizePhoneNumber, corsHeaders } from './utils.ts'
 import { routeMessage } from './message-router.ts'
 import { sendTextMessage } from './send-message.ts'
-import { isGroupEnabled, containsMikeName, BOT_PHONE_NUMBER } from './group-config.ts'
+import { isGroupEnabled, containsMikeName, BOT_PHONE_NUMBER, loadMikeConfig } from './group-config.ts'
 import { handleGroupMessage } from './group-handler.ts'
 import { saveGroupMessage, saveMikeResponse, getGroupContextSummary } from './group-memory.ts'
 import { transcribeAudio } from './audio-handler.ts'
@@ -34,6 +34,9 @@ serve(async (req: Request) => {
     // 1. Parse webhook payload
     // Criar cliente Supabase antes do parse para poder salvar debug
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+
+    // WA-07: Carregar mike_config do banco (cache por invocação)
+    await loadMikeConfig(supabase)
 
     const parsed = parseWebhookPayload(body)
     if (!parsed) {

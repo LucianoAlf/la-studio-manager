@@ -23,13 +23,13 @@ export async function processWeeklySummary(
 ): Promise<{ processed: number; errors: number }> {
   // Buscar usuários com weekly summary habilitado
   const { data: subscribers, error } = await supabase
-    .from('user_notification_preferences')
+    .from('user_notification_settings')
     .select(`
       user_id,
       weekly_summary_enabled,
       weekly_summary_day,
       weekly_summary_time,
-      user:user_profiles!user_notification_preferences_user_id_fkey(
+      user:user_profiles!user_notification_settings_user_id_fkey(
         id, full_name, user_id, role
       )
     `)

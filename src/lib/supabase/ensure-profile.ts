@@ -21,7 +21,7 @@ export async function ensureUserProfile() {
             full_name: user.email?.split('@')[0] || 'Usuário',
             display_name: user.email?.split('@')[0] || 'Usuário',
             role: 'editor',
-        })
+        } as never)
         .select()
         .single()
 

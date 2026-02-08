@@ -1706,13 +1706,6 @@ function ConfiguracoesTab({ columns, setColumns, cards, users }: {
   cards: KanbanCardType[];
   users: UserProfile[];
 }) {
-  const [notifs, setNotifs] = useState({
-    novasTarefas: true,
-    lembretePrazo: true,
-    aprovacaoPendente: true,
-    tarefaAtrasada: false,
-  });
-
   // Estado de edição de coluna
   const [editingColumnId, setEditingColumnId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({ name: "", slug: "", color: "", emoji: "" });
@@ -1726,10 +1719,6 @@ function ConfiguracoesTab({ columns, setColumns, cards, users }: {
 
   // Estado de confirmação de exclusão
   const [deletingColumnId, setDeletingColumnId] = useState<string | null>(null);
-
-  function toggleNotif(key: keyof typeof notifs) {
-    setNotifs((prev) => ({ ...prev, [key]: !prev[key] }));
-  }
 
   // Gerar slug a partir do nome
   function generateSlug(name: string): string {
@@ -1882,38 +1871,18 @@ function ConfiguracoesTab({ columns, setColumns, cards, users }: {
         </div>
       </Card>
 
-      {/* Seção 2 — Notificações WhatsApp */}
+      {/* Seção 2 — Notificações WhatsApp (migrado para /configuracoes) */}
       <Card variant="default">
-        <h3 className="mb-4 text-lg font-semibold text-slate-50">Notificações WhatsApp</h3>
-        <div className="space-y-0 divide-y divide-slate-800/40">
-          {([
-            { key: "novasTarefas" as const, label: "Notificar novas tarefas" },
-            { key: "lembretePrazo" as const, label: "Lembrete de prazo (24h antes)" },
-            { key: "aprovacaoPendente" as const, label: "Aprovação pendente" },
-            { key: "tarefaAtrasada" as const, label: "Tarefa atrasada" },
-          ]).map(({ key, label }) => (
-            <div key={key} className="flex items-center justify-between py-3">
-              <span className="text-sm text-slate-300">{label}</span>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={notifs[key]}
-                onClick={() => toggleNotif(key)}
-                className={cn(
-                  "relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full transition-colors",
-                  notifs[key] ? "bg-accent-cyan" : "bg-slate-700"
-                )}
-              >
-                <span
-                  className={cn(
-                    "pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow-sm ring-0 transition-transform",
-                    notifs[key] ? "translate-x-6" : "translate-x-1"
-                  )}
-                />
-              </button>
-            </div>
-          ))}
-        </div>
+        <h3 className="mb-3 text-lg font-semibold text-slate-50">Notificações WhatsApp</h3>
+        <p className="text-sm text-slate-400 mb-4">
+          As preferências de notificação agora ficam centralizadas na página de Configurações.
+        </p>
+        <a
+          href="/configuracoes"
+          className="inline-flex items-center gap-2 rounded-lg bg-accent-cyan/10 px-4 py-2 text-sm font-medium text-accent-cyan hover:bg-accent-cyan/20 transition-colors"
+        >
+          Gerenciar notificações →
+        </a>
       </Card>
 
       {/* Seção 3 — Colunas Kanban (CRUD completo) */}

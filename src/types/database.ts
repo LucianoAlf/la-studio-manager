@@ -29,6 +29,10 @@ export interface Database {
           language: string;
           notification_preferences: Json;
           is_active: boolean;
+          is_admin: boolean;
+          whatsapp_jid: string | null;
+          bio: string | null;
+          specializations: string[];
           last_active_at: string | null;
           created_at: string;
           updated_at: string;
@@ -36,8 +40,12 @@ export interface Database {
         };
         Insert: Omit<
           Database["public"]["Tables"]["user_profiles"]["Row"],
-          "id" | "created_at" | "updated_at"
-        >;
+          "id" | "created_at" | "updated_at" | "is_admin" | "is_active" | "specializations"
+        > & {
+          is_admin?: boolean;
+          is_active?: boolean;
+          specializations?: string[];
+        };
         Update: Partial<
           Database["public"]["Tables"]["user_profiles"]["Insert"]
         >;
@@ -158,6 +166,67 @@ export interface Database {
         >;
         Update: Partial<
           Database["public"]["Tables"]["calendar_item_comments"]["Insert"]
+        >;
+      };
+      user_notification_settings: {
+        Row: {
+          id: string;
+          user_id: string;
+          calendar_reminders_enabled: boolean;
+          calendar_reminder_days: number[];
+          calendar_reminder_time: string;
+          daily_summary_enabled: boolean;
+          daily_summary_time: string;
+          weekly_summary_enabled: boolean;
+          weekly_summary_day: number;
+          weekly_summary_time: string;
+          monthly_summary_enabled: boolean;
+          monthly_summary_day: number;
+          monthly_summary_time: string;
+          urgent_alerts_enabled: boolean;
+          deadline_alerts_enabled: boolean;
+          assignment_alerts_enabled: boolean;
+          group_reports_enabled: boolean;
+          reminders_enabled: boolean;
+          quiet_hours_enabled: boolean;
+          quiet_hours_start: string;
+          quiet_hours_end: string;
+          timezone: string;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: Omit<
+          Database["public"]["Tables"]["user_notification_settings"]["Row"],
+          "id" | "created_at" | "updated_at"
+        >;
+        Update: Partial<
+          Database["public"]["Tables"]["user_notification_settings"]["Insert"]
+        >;
+      };
+      mike_config: {
+        Row: {
+          id: string;
+          enabled_groups: Json;
+          agent_trigger_names: string[];
+          group_session_timeout_minutes: number;
+          group_memory_hours_back: number;
+          group_memory_max_messages: number;
+          group_memory_retention_days: number;
+          personality_tone: string;
+          personality_emoji_level: string;
+          default_ai_model: string;
+          fallback_ai_model: string;
+          max_output_tokens: number;
+          bot_phone_number: string;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: Omit<
+          Database["public"]["Tables"]["mike_config"]["Row"],
+          "id" | "created_at" | "updated_at"
+        >;
+        Update: Partial<
+          Database["public"]["Tables"]["mike_config"]["Insert"]
         >;
       };
       // TODO: Run `npm run db:types` to generate complete types

@@ -23,13 +23,13 @@ export async function processDailyDigest(
 ): Promise<{ processed: number; errors: number; details?: string }> {
   // 1. Buscar usuários que têm daily digest habilitado
   const { data: subscribers, error } = await supabase
-    .from('user_notification_preferences')
+    .from('user_notification_settings')
     .select(`
       user_id,
       daily_digest_enabled,
       daily_digest_time,
       timezone,
-      user:user_profiles!user_notification_preferences_user_id_fkey(
+      user:user_profiles!user_notification_settings_user_id_fkey(
         id, full_name, user_id, role
       )
     `)

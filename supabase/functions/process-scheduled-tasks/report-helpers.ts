@@ -198,12 +198,13 @@ export async function getUserPhone(supabase: any, profileId: string): Promise<st
  */
 export async function isInQuietHours(supabase: any, profileId: string): Promise<boolean> {
   const { data: prefs } = await supabase
-    .from('user_notification_preferences')
-    .select('quiet_hours_start, quiet_hours_end, timezone')
+    .from('user_notification_settings')
+    .select('quiet_hours_enabled, quiet_hours_start, quiet_hours_end, timezone')
     .eq('user_id', profileId)
     .single()
 
   if (!prefs) return false // Sem preferências = sem quiet hours
+  if (prefs.quiet_hours_enabled === false) return false // Quiet hours desabilitado
 
   // Hora atual em SP
   const spNow = getSPNow()
@@ -229,7 +230,7 @@ export async function isInQuietHours(supabase: any, profileId: string): Promise<
  */
 export async function areRemindersEnabled(supabase: any, profileId: string): Promise<boolean> {
   const { data: prefs } = await supabase
-    .from('user_notification_preferences')
+    .from('user_notification_settings')
     .select('reminders_enabled')
     .eq('user_id', profileId)
     .single()

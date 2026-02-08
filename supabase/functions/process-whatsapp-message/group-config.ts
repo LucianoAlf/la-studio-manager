@@ -1,100 +1,184 @@
 // =============================================================================
-// GROUP-CONFIG.TS — WA-06.7: Configuração de grupos do Mike
+// GROUP-CONFIG.TS — WA-06.7 + WA-07: Configuração de grupos do Mike
 // Grupos habilitados, triggers de ativação, frases de dispensa, timeout
+// Agora com suporte a mike_config do banco (fallback para hardcoded)
 // =============================================================================
 
-/**
- * Grupos onde o Mike está habilitado para operar.
- * Formato: JID do grupo → nome legível (para logs).
- */
-export const ENABLED_GROUPS: Record<string, string> = {
+// =============================================================================
+// DEFAULTS HARDCODED (fallback caso o banco não esteja acessível)
+// =============================================================================
+
+const DEFAULT_ENABLED_GROUPS: Record<string, string> = {
   '120363154727577617@g.us': 'Marketing 2.0 L.A',
   '120363422932217390@g.us': 'Marketing LA Music',
 }
+
+const DEFAULT_TRIGGER_NAMES: string[] = ['mike', 'maike', 'maik', 'mik']
+const DEFAULT_SESSION_TIMEOUT = 5
+const DEFAULT_MEMORY_HOURS_BACK = 4
+const DEFAULT_MEMORY_MAX_MESSAGES = 50
+const DEFAULT_MEMORY_RETENTION_DAYS = 7
+const DEFAULT_BOT_PHONE = '5521989784688'
+
+// =============================================================================
+// CACHE — Carregado do banco uma vez por invocação da Edge Function
+// =============================================================================
+
+interface MikeConfigCache {
+  enabled_groups: Record<string, string>
+  agent_trigger_names: string[]
+  group_session_timeout_minutes: number
+  group_memory_hours_back: number
+  group_memory_max_messages: number
+  group_memory_retention_days: number
+  bot_phone_number: string
+}
+
+let _configCache: MikeConfigCache | null = null
+
+/**
+ * Carrega mike_config do banco (singleton). Cacheia por invocação.
+ * Se falhar, usa defaults hardcoded.
+ */
+// deno-lint-ignore no-explicit-any
+export async function loadMikeConfig(supabase: any): Promise<MikeConfigCache> {
+  if (_configCache) return _configCache
+
+  try {
+    const { data, error } = await supabase
+      .from('mike_config')
+      .select('enabled_groups, agent_trigger_names, group_session_timeout_minutes, group_memory_hours_back, group_memory_max_messages, group_memory_retention_days, bot_phone_number')
+      .limit(1)
+      .single()
+
+    if (error || !data) {
+      console.warn('[GROUP-CONFIG] Falha ao carregar mike_config, usando defaults:', error?.message)
+      _configCache = {
+        enabled_groups: DEFAULT_ENABLED_GROUPS,
+        agent_trigger_names: DEFAULT_TRIGGER_NAMES,
+        group_session_timeout_minutes: DEFAULT_SESSION_TIMEOUT,
+        group_memory_hours_back: DEFAULT_MEMORY_HOURS_BACK,
+        group_memory_max_messages: DEFAULT_MEMORY_MAX_MESSAGES,
+        group_memory_retention_days: DEFAULT_MEMORY_RETENTION_DAYS,
+        bot_phone_number: DEFAULT_BOT_PHONE,
+      }
+    } else {
+      _configCache = {
+        enabled_groups: (data.enabled_groups as Record<string, string>) || DEFAULT_ENABLED_GROUPS,
+        agent_trigger_names: (data.agent_trigger_names as string[]) || DEFAULT_TRIGGER_NAMES,
+        group_session_timeout_minutes: data.group_session_timeout_minutes ?? DEFAULT_SESSION_TIMEOUT,
+        group_memory_hours_back: data.group_memory_hours_back ?? DEFAULT_MEMORY_HOURS_BACK,
+        group_memory_max_messages: data.group_memory_max_messages ?? DEFAULT_MEMORY_MAX_MESSAGES,
+        group_memory_retention_days: data.group_memory_retention_days ?? DEFAULT_MEMORY_RETENTION_DAYS,
+        bot_phone_number: data.bot_phone_number ?? DEFAULT_BOT_PHONE,
+      }
+      console.log(`[GROUP-CONFIG] mike_config carregado: ${Object.keys(_configCache.enabled_groups).length} grupos, ${_configCache.agent_trigger_names.length} triggers`)
+    }
+  } catch (err) {
+    console.warn('[GROUP-CONFIG] Exceção ao carregar mike_config, usando defaults:', err)
+    _configCache = {
+      enabled_groups: DEFAULT_ENABLED_GROUPS,
+      agent_trigger_names: DEFAULT_TRIGGER_NAMES,
+      group_session_timeout_minutes: DEFAULT_SESSION_TIMEOUT,
+      group_memory_hours_back: DEFAULT_MEMORY_HOURS_BACK,
+      group_memory_max_messages: DEFAULT_MEMORY_MAX_MESSAGES,
+      group_memory_retention_days: DEFAULT_MEMORY_RETENTION_DAYS,
+      bot_phone_number: DEFAULT_BOT_PHONE,
+    }
+  }
+
+  return _configCache
+}
+
+/**
+ * Retorna o cache atual (ou defaults se não carregado).
+ * Para uso síncrono em funções que já passaram pelo loadMikeConfig.
+ */
+function getConfig(): MikeConfigCache {
+  return _configCache || {
+    enabled_groups: DEFAULT_ENABLED_GROUPS,
+    agent_trigger_names: DEFAULT_TRIGGER_NAMES,
+    group_session_timeout_minutes: DEFAULT_SESSION_TIMEOUT,
+    group_memory_hours_back: DEFAULT_MEMORY_HOURS_BACK,
+    group_memory_max_messages: DEFAULT_MEMORY_MAX_MESSAGES,
+    group_memory_retention_days: DEFAULT_MEMORY_RETENTION_DAYS,
+    bot_phone_number: DEFAULT_BOT_PHONE,
+  }
+}
+
+// =============================================================================
+// EXPORTS COMPATÍVEIS (mesma interface de antes, agora lê do cache)
+// =============================================================================
+
+/** Getter dinâmico — retorna grupos habilitados do cache/banco */
+export function getEnabledGroups(): Record<string, string> {
+  return getConfig().enabled_groups
+}
+
+/** Alias para compatibilidade — ENABLED_GROUPS agora é getter */
+export const ENABLED_GROUPS: Record<string, string> = DEFAULT_ENABLED_GROUPS
 
 /**
  * Verifica se um grupo está habilitado para o Mike.
  */
 export function isGroupEnabled(groupJid: string): boolean {
-  return groupJid in ENABLED_GROUPS
+  return groupJid in getConfig().enabled_groups
 }
 
-/**
- * Nomes/variações que ativam o Mike no grupo.
- * Case-insensitive, sem acentos.
- */
-export const AGENT_TRIGGER_NAMES: string[] = [
-  'mike',
-  'maike',
-  'maik',
-  'mik',
-]
+/** Getter dinâmico — retorna trigger names do cache/banco */
+export function getTriggerNames(): string[] {
+  return getConfig().agent_trigger_names
+}
+
+/** Alias para compatibilidade */
+export const AGENT_TRIGGER_NAMES: string[] = DEFAULT_TRIGGER_NAMES
 
 /**
  * Frases que dispensam o Mike (encerram sessão ativa).
+ * Geradas dinamicamente a partir dos trigger names.
  */
-export const DISMISS_PHRASES: string[] = [
-  'valeu mike',
-  'valeu maike',
-  'obrigado mike',
-  'obrigado maike',
-  'obrigada mike',
-  'obrigada maike',
-  'brigado mike',
-  'brigado maike',
-  'brigada mike',
-  'brigada maike',
-  'tchau mike',
-  'tchau maike',
-  'falou mike',
-  'falou maike',
-  'pode parar mike',
-  'pode parar maike',
-  'para mike',
-  'para maike',
-  'ok mike',
-  'ok maike',
-  'beleza mike',
-  'beleza maike',
-  'tmj mike',
-  'tmj maike',
-  'tamo junto mike',
-  'tamo junto maike',
-  'era isso mike',
-  'era isso maike',
-  'so isso mike',
-  'so isso maike',
-  'só isso mike',
-  'só isso maike',
-]
+function buildDismissPhrases(): string[] {
+  const names = getConfig().agent_trigger_names
+  const templates = [
+    'valeu', 'obrigado', 'obrigada', 'brigado', 'brigada',
+    'tchau', 'falou', 'pode parar', 'para', 'ok', 'beleza',
+    'tmj', 'tamo junto', 'era isso', 'so isso', 'só isso',
+  ]
+  const phrases: string[] = []
+  for (const template of templates) {
+    for (const name of names) {
+      phrases.push(`${template} ${name}`)
+    }
+  }
+  return phrases
+}
 
-/**
- * Timeout da sessão de grupo em minutos.
- * Após esse tempo sem interação, Mike volta ao silêncio.
- */
-export const GROUP_SESSION_TIMEOUT_MINUTES = 5
+export const DISMISS_PHRASES: string[] = buildDismissPhrases()
+
+/** Timeout da sessão de grupo em minutos. */
+export function getSessionTimeout(): number {
+  return getConfig().group_session_timeout_minutes
+}
+export const GROUP_SESSION_TIMEOUT_MINUTES = DEFAULT_SESSION_TIMEOUT
 
 // =============================================================================
 // CONFIGURAÇÃO DE MEMÓRIA DO GRUPO
 // =============================================================================
 
-/**
- * Quantas horas de conversa buscar quando Mike é ativado.
- * 4h = contexto da manhã ou da tarde inteira.
- */
-export const GROUP_MEMORY_HOURS_BACK = 4
+export function getMemoryHoursBack(): number {
+  return getConfig().group_memory_hours_back
+}
+export const GROUP_MEMORY_HOURS_BACK = DEFAULT_MEMORY_HOURS_BACK
 
-/**
- * Máximo de mensagens a recuperar para contexto.
- * 50 mensagens ≈ 2000-4000 tokens no prompt.
- */
-export const GROUP_MEMORY_MAX_MESSAGES = 50
+export function getMemoryMaxMessages(): number {
+  return getConfig().group_memory_max_messages
+}
+export const GROUP_MEMORY_MAX_MESSAGES = DEFAULT_MEMORY_MAX_MESSAGES
 
-/**
- * Dias de retenção da memória do grupo.
- * Após esse período, mensagens são deletadas automaticamente via cron.
- */
-export const GROUP_MEMORY_RETENTION_DAYS = 7
+export function getMemoryRetentionDays(): number {
+  return getConfig().group_memory_retention_days
+}
+export const GROUP_MEMORY_RETENTION_DAYS = DEFAULT_MEMORY_RETENTION_DAYS
 
 // =============================================================================
 // FUNÇÕES DE DETECÇÃO
@@ -166,7 +250,10 @@ export function removeMikeName(text: string): string {
   return cleaned.replace(/\s+/g, ' ').trim()
 }
 
-/**
- * Número do bot (UAZAPI) — para identificar mensagens do próprio Mike.
- */
-export const BOT_PHONE_NUMBER = '5521989784688'
+/** Getter dinâmico — retorna número do bot do cache/banco */
+export function getBotPhoneNumber(): string {
+  return getConfig().bot_phone_number
+}
+
+/** Alias para compatibilidade */
+export const BOT_PHONE_NUMBER = DEFAULT_BOT_PHONE
