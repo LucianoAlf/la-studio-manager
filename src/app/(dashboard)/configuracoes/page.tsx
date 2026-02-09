@@ -2,22 +2,23 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import { Header } from "@/components/layout/header";
-import { getMyProfile, getMyNotificationSettings, getMikeConfig, getTeamMembers } from "@/lib/queries/settings";
-import type { UserNotificationSettings, MikeConfig, UserProfileExtended } from "@/lib/types/settings";
+import { getMyProfileWithEmail, getMyNotificationSettings, getMikeConfig, getTeamMembersWithEmail } from "@/lib/queries/settings";
+import type { UserNotificationSettings, MikeConfig, UserProfileExtended, TeamMemberWithEmail } from "@/lib/types/settings";
 import { ProfileSection } from "./_components/profile-section";
 import { NotificationsSection } from "./_components/notifications-section";
 import { MikeSection } from "./_components/mike-section";
 import { TeamSection } from "./_components/team-section";
+import { RemindersSection } from "./_components/reminders-section";
 import { SpinnerGap } from "@phosphor-icons/react";
 import { motion, LayoutGroup } from "framer-motion";
 
 type TabId = "perfil" | "notificacoes" | "mike" | "equipe";
 
-const TABS: { id: TabId; label: string }[] = [
+const ALL_TABS: { id: TabId; label: string; adminOnly?: boolean }[] = [
   { id: "perfil", label: "Perfil" },
   { id: "notificacoes", label: "Notificações" },
-  { id: "mike", label: "Mike" },
-  { id: "equipe", label: "Equipe" },
+  { id: "mike", label: "Mike", adminOnly: true },
+  { id: "equipe", label: "Equipe", adminOnly: true },
 ];
 
 export default function ConfiguracoesPage() {
@@ -25,9 +26,10 @@ export default function ConfiguracoesPage() {
 
   // Data states
   const [profile, setProfile] = useState<UserProfileExtended | null>(null);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
   const [notifSettings, setNotifSettings] = useState<UserNotificationSettings | null>(null);
   const [mikeConfig, setMikeConfig] = useState<MikeConfig | null>(null);
-  const [teamMembers, setTeamMembers] = useState<UserProfileExtended[]>([]);
+  const [teamMembers, setTeamMembers] = useState<TeamMemberWithEmail[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -37,13 +39,14 @@ export default function ConfiguracoesPage() {
     setLoading(true);
     setError(null);
     try {
-      // Buscar perfil primeiro (com fallback para iframe)
-      const myProfile = await getMyProfile();
+      // Buscar perfil + email (com fallback para iframe)
+      const { profile: myProfile, email } = await getMyProfileWithEmail();
       if (!myProfile) {
         setError("Não foi possível carregar seu perfil.");
         return;
       }
       setProfile(myProfile);
+      setUserEmail(email);
 
       const profileIsAdmin = myProfile.is_admin === true || myProfile.role === "admin";
 
@@ -51,7 +54,7 @@ export default function ConfiguracoesPage() {
       const [notif, mike, team] = await Promise.all([
         getMyNotificationSettings(myProfile.user_id).catch(() => null),
         profileIsAdmin ? getMikeConfig().catch(() => null) : Promise.resolve(null),
-        getTeamMembers().catch(() => []),
+        getTeamMembersWithEmail().catch(() => []),
       ]);
       setNotifSettings(notif);
       setMikeConfig(mike);
@@ -107,7 +110,7 @@ export default function ConfiguracoesPage() {
           {/* Tabs com sliding indicator */}
           <LayoutGroup>
             <nav className="relative flex p-1 rounded-xl bg-slate-900/60 border border-slate-800">
-              {TABS.map((tab) => (
+              {ALL_TABS.filter((tab) => !tab.adminOnly || isAdmin).map((tab) => (
                 <button
                   key={tab.id}
                   type="button"
@@ -137,16 +140,20 @@ export default function ConfiguracoesPage() {
           {activeTab === "perfil" && (
             <ProfileSection
               profile={profile}
+              email={userEmail || undefined}
               onProfileUpdated={handleProfileUpdated}
             />
           )}
 
           {activeTab === "notificacoes" && (
-            <NotificationsSection
-              authUserId={profile.user_id}
-              settings={notifSettings}
-              onSettingsUpdated={setNotifSettings}
-            />
+            <>
+              <NotificationsSection
+                authUserId={profile.user_id}
+                settings={notifSettings}
+                onSettingsUpdated={setNotifSettings}
+              />
+              <RemindersSection profileId={profile.id} />
+            </>
           )}
 
           {activeTab === "mike" && (
@@ -172,7 +179,7 @@ export default function ConfiguracoesPage() {
               members={teamMembers}
               isAdmin={isAdmin}
               currentProfileId={profile.id}
-              onMembersUpdated={setTeamMembers}
+              onMembersUpdated={(updated) => setTeamMembers(updated)}
             />
           )}
         </div>

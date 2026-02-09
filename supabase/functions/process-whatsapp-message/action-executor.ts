@@ -336,7 +336,10 @@ async function executeCreateReminder(ctx: ExecutionContext): Promise<ExecutionRe
   // 2. Montar conteúdo do lembrete
   const reminderContent = `⏰ *Lembrete!*\n\n${entities.reminder_text || entities.title || 'Lembrete sem descrição'}`
 
-  // 3. INSERT
+  // 3. Resolver recorrência
+  const recurrence = entities.reminder_recurrence || null
+
+  // 4. INSERT
   const { data: reminder, error: insertError } = await supabase
     .from('whatsapp_scheduled_messages')
     .insert({
@@ -348,10 +351,12 @@ async function executeCreateReminder(ctx: ExecutionContext): Promise<ExecutionRe
       scheduled_for: scheduledFor.toISOString(),
       status: 'pending',
       source: 'manual',             // Criado pelo usuário via WhatsApp
+      recurrence,                   // null = único, 'daily'|'weekdays'|'weekly'|'monthly'
       metadata: {
         created_via: 'whatsapp',
         original_date_text: entities.reminder_date || entities.date || null,
         original_time_text: entities.reminder_time || entities.time || null,
+        original_recurrence_text: entities.reminder_recurrence || null,
       },
     })
     .select('id, scheduled_for')
@@ -366,18 +371,24 @@ async function executeCreateReminder(ctx: ExecutionContext): Promise<ExecutionRe
     }
   }
 
-  console.log(`[WA-03] Reminder created: ${reminder.id} for ${scheduledFor.toISOString()}`)
+  console.log(`[WA-03] Reminder created: ${reminder.id} for ${scheduledFor.toISOString()} recurrence=${recurrence}`)
 
-  // 4. Montar resposta de sucesso
+  // 5. Montar resposta de sucesso
   const dateStr = formatDateBR(scheduledFor)
   const timeStr = formatTimeBR(scheduledFor)
+
+  const recLabels: Record<string, string> = {
+    daily: 'todo dia', weekdays: 'dias úteis (seg-sex)',
+    weekly: 'toda semana', monthly: 'todo mês',
+  }
+  const recText = recurrence ? `\n🔄 Repete: ${recLabels[recurrence] || recurrence}` : ''
 
   return {
     success: true,
     record_id: reminder.id,
-    message: `Pronto, lembrete criado!\n\n` +
+    message: `Pronto, lembrete criado! ⏰\n\n` +
       `📝 *${entities.reminder_text || entities.title || 'Lembrete'}*\n` +
-      `� ${dateStr} às ${timeStr}`,
+      `📅 ${dateStr} às ${timeStr}${recText}`,
   }
 }
 

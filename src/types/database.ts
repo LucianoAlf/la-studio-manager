@@ -24,7 +24,7 @@ export interface Database {
           display_name: string | null;
           avatar_url: string | null;
           phone: string | null;
-          role: "admin" | "editor" | "viewer" | "developer";
+          role: "admin" | "usuario";
           timezone: string;
           language: string;
           notification_preferences: Json;

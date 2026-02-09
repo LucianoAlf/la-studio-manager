@@ -99,6 +99,22 @@ export interface UserProfileExtended {
   updated_at: string;
 }
 
+// === TEAM MEMBER COM EMAIL (retorno da RPC get_team_members_with_email) ===
+export interface TeamMemberWithEmail extends UserProfileExtended {
+  email: string | null;
+}
+
+// === ROLES DISPONÍVEIS ===
+export const ROLE_OPTIONS = [
+  { value: "admin", label: "Administrador", description: "Acesso total, gerencia equipe e configurações" },
+  { value: "usuario", label: "Usuário", description: "Acesso ao dashboard e projetos" },
+] as const;
+
+export const ROLE_LABELS: Record<string, string> = {
+  admin: "Administrador",
+  usuario: "Usuário",
+};
+
 // === DEFAULTS para criação ===
 export const DEFAULT_NOTIFICATION_SETTINGS: Omit<UserNotificationSettings, "id" | "user_id" | "created_at" | "updated_at"> = {
   calendar_reminders_enabled: true,

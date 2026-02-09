@@ -88,8 +88,8 @@ export const CALENDAR_CATEGORIES = {
 // --- Team (for reference/seed) ---
 export const TEAM = [
   { name: "Yuri", role: "admin", displayRole: "Líder Marketing" },
-  { name: "John", role: "editor", displayRole: "Produção" },
-  { name: "Rayan", role: "editor", displayRole: "Tráfego" },
-  { name: "Alf", role: "developer", displayRole: "Desenvolvimento" },
-  { name: "Hugo", role: "developer", displayRole: "Desenvolvimento" },
+  { name: "John", role: "usuario", displayRole: "Produção" },
+  { name: "Rayan", role: "usuario", displayRole: "Tráfego" },
+  { name: "Alf", role: "admin", displayRole: "Desenvolvimento" },
+  { name: "Hugo", role: "usuario", displayRole: "Desenvolvimento" },
 ] as const;

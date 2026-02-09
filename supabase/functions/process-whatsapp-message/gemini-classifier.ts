@@ -66,6 +66,7 @@ export interface ExtractedEntities {
   reminder_date?: string
   reminder_time?: string
   reminder_text?: string
+  reminder_recurrence?: 'daily' | 'weekdays' | 'weekly' | 'monthly' | null
 
   // Contacts (agenda)
   contact_name?: string
@@ -187,7 +188,16 @@ Você é um classificador de intenções E consultor criativo. Sua função é:
 
 3. **create_reminder** — Criar lembrete
    Gatilhos: "me lembra", "lembrete pra", "não deixa eu esquecer"
-   Entidades: reminder_text, reminder_date, reminder_time
+   Entidades: reminder_text, reminder_date, reminder_time, reminder_recurrence
+   
+   **RECORRÊNCIA em lembretes:**
+   - Se o usuário diz "toda segunda", "todo dia", "diariamente" → reminder_recurrence = "weekly" (ou "daily")
+   - "toda segunda-feira" / "toda terça" / "toda sexta" → reminder_recurrence = "weekly", reminder_date = dia da semana mencionado
+   - "todo dia" / "diariamente" / "todos os dias" → reminder_recurrence = "daily"
+   - "dias úteis" / "de segunda a sexta" → reminder_recurrence = "weekdays"
+   - "todo mês" / "mensalmente" / "todo dia 15" → reminder_recurrence = "monthly"
+   - Se NÃO mencionar recorrência → reminder_recurrence = null (lembrete único)
+   - Se não ficou claro se é único ou recorrente, deixe reminder_recurrence = null e o sistema vai perguntar
 
 4. **query_calendar** — Consultar agenda NO BANCO DE DADOS
    Gatilhos: "o que tem hoje", "agenda da semana", "o que tem amanhã", "próximos eventos", "qual o dia da reunião com X?", "quando é a reunião?"

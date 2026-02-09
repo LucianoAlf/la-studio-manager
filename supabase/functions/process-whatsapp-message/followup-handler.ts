@@ -176,6 +176,24 @@ export function processFollowUpResponse(
       updatedEntities.title = userResponse.trim()
       break
 
+    case 'reminder_text':
+      updatedEntities.reminder_text = userResponse.trim()
+      break
+
+    case 'reminder_time':
+      updatedEntities.reminder_time = parseTimeResponse(response)
+      break
+
+    case 'reminder_recurrence': {
+      const rec = parseRecurrenceResponse(response)
+      updatedEntities.reminder_recurrence = rec
+      // Se é recorrente e não tem data, definir "hoje" como início
+      if (rec && !updatedEntities.reminder_date) {
+        updatedEntities.reminder_date = 'hoje'
+      }
+      break
+    }
+
     default:
       updatedEntities[field] = userResponse.trim()
   }
@@ -341,6 +359,58 @@ function parseDeadlineAndAssignee(text: string): { deadline: string | null; assi
   }
 
   return { deadline, assigned_to }
+}
+
+/**
+ * Interpreta resposta de recorrência do usuário.
+ * Retorna o valor normalizado ou null para lembrete único.
+ */
+function parseRecurrenceResponse(response: string): string | null {
+  const r = response.toLowerCase().trim()
+
+  // Único / sem repetição
+  if (['unico', 'único', 'uma vez', 'so uma vez', 'só uma vez', 'sem repeticao',
+       'sem repetição', 'nao', 'não', 'nao repete', 'não repete', 'só essa vez',
+       'so essa vez', 'apenas uma vez', 'uma vez só'].some(w => r.includes(w))) {
+    return null
+  }
+
+  // Diário
+  if (['todo dia', 'todos os dias', 'diario', 'diário', 'diariamente',
+       'cada dia', 'sempre'].some(w => r.includes(w))) {
+    return 'daily'
+  }
+
+  // Dias úteis
+  if (['dias uteis', 'dias úteis', 'segunda a sexta', 'seg a sex',
+       'dia de semana', 'dias de semana'].some(w => r.includes(w))) {
+    return 'weekdays'
+  }
+
+  // Semanal
+  if (['semanal', 'semanalmente', 'toda semana', 'todas as semanas',
+       'toda segunda', 'toda terça', 'toda terca', 'toda quarta',
+       'toda quinta', 'toda sexta', 'todo sabado', 'todo sábado',
+       'todo domingo', 'por semana', '1x por semana', 'uma vez por semana'].some(w => r.includes(w))) {
+    return 'weekly'
+  }
+
+  // Mensal
+  if (['mensal', 'mensalmente', 'todo mes', 'todo mês', 'todos os meses',
+       'uma vez por mes', 'uma vez por mês', '1x por mes', '1x por mês',
+       'todo dia 1', 'todo dia 5', 'todo dia 10', 'todo dia 15',
+       'todo dia 20', 'todo dia 25', 'todo dia 30',
+       'primeira segunda', 'primeiro dia'].some(w => r.includes(w))) {
+    return 'monthly'
+  }
+
+  // Se respondeu algo que parece ser "sim" para recorrente mas sem especificar
+  if (['sim', 'recorrente', 'repete', 'repetir'].some(w => r === w || r.startsWith(w))) {
+    return 'weekly' // Default para semanal se não especificou
+  }
+
+  // Não conseguiu interpretar — tratar como único
+  return null
 }
 
 /**

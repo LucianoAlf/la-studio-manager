@@ -1233,19 +1233,72 @@ async function handleCreateReminder(
 ): Promise<MessageResponse> {
   const { entities } = classification
 
-  if (classification.needs_confirmation) {
-    await saveConversationContext(supabase, userId, 'creating_reminder', {
-      step: 'awaiting_confirmation',
-      entities,
-      classified_at: new Date().toISOString(),
-    })
+  // Mapear entidades para campos do follow-up
+  const mappedEntities: Record<string, unknown> = { ...entities }
+
+  // Se tem recorrência, não precisa de data (a data é calculada pelo tipo)
+  if (entities.reminder_recurrence && !entities.reminder_date) {
+    // Para recorrentes, a "data" é o próximo dia relevante
+    // Ex: "toda segunda" → próxima segunda
+    if (entities.reminder_recurrence === 'daily' || entities.reminder_recurrence === 'weekdays') {
+      mappedEntities.reminder_date = 'hoje'
+    }
   }
 
+  // Verificar se falta informação importante (horário, recorrência)
+  const followUp = generateFollowUp('create_reminder', mappedEntities)
+
+  if (followUp) {
+    // Falta informação → iniciar follow-up
+    const summary = buildPartialSummary('create_reminder', mappedEntities)
+    const allMissing = getMissingFields('create_reminder', mappedEntities)
+    await savePendingAction(supabase, userId, {
+      action: 'create_reminder',
+      entities: mappedEntities,
+      missingFields: allMissing,
+      currentQuestion: followUp.question,
+      waitingForField: followUp.missingField,
+      source: 'text',
+      createdAt: new Date().toISOString(),
+    })
+
+    const text = summary
+      ? `${summary}\n\n${followUp.question}`
+      : followUp.question
+
+    return {
+      text,
+      intent: classification.intent,
+      confidence: classification.confidence,
+    }
+  }
+
+  // Tudo preenchido → pedir confirmação
+  // Se recurrence não foi definida explicitamente, tratar como único
+  if (!mappedEntities.reminder_recurrence) {
+    mappedEntities.reminder_recurrence = null
+  }
+
+  await saveConversationContext(supabase, userId, 'creating_reminder', {
+    step: 'awaiting_confirmation',
+    entities: mappedEntities,
+    classified_at: new Date().toISOString(),
+  })
+
   const parts: string[] = ['⏰ Entendi! Vou criar um *lembrete*:\n']
-  if (entities.reminder_text) parts.push(`📝 Lembrete: *${entities.reminder_text}*`)
-  if (entities.reminder_date) parts.push(`📆 Data: *${entities.reminder_date}*`)
-  if (entities.reminder_time) parts.push(`⏰ Horário: *${entities.reminder_time}*`)
-  parts.push('\n✅ Confirma? (sim/não)')
+  if (entities.reminder_text) parts.push(`📝 *${entities.reminder_text}*`)
+  if (entities.reminder_date) parts.push(`� ${entities.reminder_date}`)
+  if (entities.reminder_time) parts.push(`🕐 ${entities.reminder_time}`)
+  if (entities.reminder_recurrence) {
+    const recLabels: Record<string, string> = {
+      daily: '🔄 Todo dia', weekdays: '🔄 Dias úteis (seg-sex)',
+      weekly: '🔄 Toda semana', monthly: '🔄 Todo mês',
+    }
+    parts.push(recLabels[entities.reminder_recurrence] || `🔄 ${entities.reminder_recurrence}`)
+  } else {
+    parts.push('📌 Lembrete único')
+  }
+  parts.push('\nConfirma? (sim/não)')
 
   return {
     text: parts.join('\n'),

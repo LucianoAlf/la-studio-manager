@@ -1,7 +1,10 @@
 /**
- * reminder-processor.ts — WA-05
+ * reminder-processor.ts — WA-05 + WA-08 (recorrência)
  * Busca lembretes pendentes (scheduled_for <= agora), envia via UAZAPI,
  * atualiza status para 'sent' ou 'failed'. Respeita retry/max_retries.
+ *
+ * Recorrência: se o lembrete tem campo recurrence (daily/weekly/monthly/weekdays),
+ * após enviar com sucesso, cria automaticamente o próximo lembrete com a data ajustada.
  */
 
 import { sendWhatsApp, isInQuietHours, areRemindersEnabled } from './report-helpers.ts'
@@ -14,7 +17,7 @@ export async function processReminders(
   // 1. Buscar lembretes pendentes que estão "due"
   const { data: pendingMessages, error } = await supabase
     .from('whatsapp_scheduled_messages')
-    .select('id, target_phone, content, scheduled_for, retry_count, max_retries, target_user_id, source, metadata')
+    .select('id, target_type, target_phone, target_user_id, target_group_jid, content, scheduled_for, retry_count, max_retries, source, recurrence, recurrence_parent_id, metadata, message_type')
     .eq('status', 'pending')
     .lte('scheduled_for', new Date().toISOString())
     .order('scheduled_for', { ascending: true })
@@ -70,6 +73,11 @@ export async function processReminders(
 
         console.log(`[WA-05] ✅ Reminder ${msg.id} sent to ${msg.target_phone}`)
         processed++
+
+        // Se é recorrente, criar o próximo lembrete
+        if (msg.recurrence) {
+          await createNextRecurrence(supabase, msg)
+        }
       } else {
         // Falhou — incrementar retry ou marcar como failed
         const newRetryCount = (msg.retry_count || 0) + 1
@@ -98,4 +106,90 @@ export async function processReminders(
   }
 
   return { processed, errors }
+}
+
+
+// ============================================
+// RECORRÊNCIA — Cria o próximo lembrete
+// ============================================
+
+/**
+ * Calcula a próxima data baseada no tipo de recorrência e cria um novo lembrete.
+ * O lembrete original (parent) é referenciado via recurrence_parent_id.
+ */
+async function createNextRecurrence(supabase: any, msg: any): Promise<void> {
+  try {
+    const currentDate = new Date(msg.scheduled_for)
+    const nextDate = getNextRecurrenceDate(currentDate, msg.recurrence)
+
+    if (!nextDate) {
+      console.log(`[WA-05] Unknown recurrence type: ${msg.recurrence}`)
+      return
+    }
+
+    // O parent_id é o original (se este já é filho, usa o parent dele)
+    const parentId = msg.recurrence_parent_id || msg.id
+
+    const { error: insertError } = await supabase
+      .from('whatsapp_scheduled_messages')
+      .insert({
+        target_type: msg.target_type,
+        target_user_id: msg.target_user_id,
+        target_phone: msg.target_phone,
+        target_group_jid: msg.target_group_jid,
+        message_type: msg.message_type || 'text',
+        content: msg.content,
+        scheduled_for: nextDate.toISOString(),
+        status: 'pending',
+        source: msg.source,
+        recurrence: msg.recurrence,
+        recurrence_parent_id: parentId,
+        metadata: {
+          ...(msg.metadata || {}),
+          source_reference: `recur:${parentId}:${nextDate.toISOString().split('T')[0]}`,
+          recurrence_from: msg.id,
+        },
+      })
+
+    if (insertError) {
+      console.error(`[WA-05] Error creating next recurrence for ${msg.id}:`, insertError)
+    } else {
+      console.log(`[WA-05] 🔄 Next ${msg.recurrence} recurrence created for ${nextDate.toISOString().split('T')[0]}`)
+    }
+  } catch (err) {
+    console.error(`[WA-05] Error in createNextRecurrence:`, err)
+  }
+}
+
+/**
+ * Calcula a próxima data de recorrência.
+ */
+function getNextRecurrenceDate(current: Date, recurrence: string): Date | null {
+  const next = new Date(current)
+
+  switch (recurrence) {
+    case 'daily':
+      next.setDate(next.getDate() + 1)
+      return next
+
+    case 'weekdays': {
+      // Pular para o próximo dia útil (seg-sex)
+      next.setDate(next.getDate() + 1)
+      const day = next.getDay()
+      if (day === 0) next.setDate(next.getDate() + 1) // Domingo → Segunda
+      if (day === 6) next.setDate(next.getDate() + 2) // Sábado → Segunda
+      return next
+    }
+
+    case 'weekly':
+      next.setDate(next.getDate() + 7)
+      return next
+
+    case 'monthly':
+      next.setMonth(next.getMonth() + 1)
+      return next
+
+    default:
+      return null
+  }
 }

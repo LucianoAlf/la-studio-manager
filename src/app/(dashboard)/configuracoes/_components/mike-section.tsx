@@ -7,6 +7,13 @@ import { Robot, SpinnerGap, FloppyDisk, Plus, Trash } from "@phosphor-icons/reac
 import type { MikeConfig } from "@/lib/types/settings";
 import { updateMikeConfig } from "@/lib/queries/settings";
 import { toast } from "sonner";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/shadcn/select";
 
 interface MikeSectionProps {
   config: MikeConfig;
@@ -102,9 +109,7 @@ export function MikeSection({ config, isAdmin, onConfigUpdated }: MikeSectionPro
   }
 
   const inputClass =
-    "h-9 px-3 rounded-lg bg-slate-800/60 border border-slate-700 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-accent-cyan/40 focus:border-accent-cyan/40";
-  const selectClass =
-    "h-9 px-3 rounded-lg bg-slate-800/60 border border-slate-700 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-accent-cyan/40 appearance-none cursor-pointer";
+    "h-9 px-3 rounded-lg bg-slate-800/60 border border-slate-700 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-accent-cyan/40 focus:border-accent-cyan/40 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none";
 
   if (!isAdmin) {
     return (
@@ -242,33 +247,35 @@ export function MikeSection({ config, isAdmin, onConfigUpdated }: MikeSectionPro
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-1.5">
             <label className="text-xs font-medium text-slate-400">Tom de voz</label>
-            <select
+            <Select
               value={form.personality_tone}
-              onChange={(e) => setForm((prev) => ({ ...prev, personality_tone: e.target.value }))}
-              className={selectClass + " w-full"}
+              onValueChange={(v) => setForm((prev) => ({ ...prev, personality_tone: v }))}
             >
-              {TONE_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {TONE_OPTIONS.map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <div className="space-y-1.5">
             <label className="text-xs font-medium text-slate-400">Nível de emojis</label>
-            <select
+            <Select
               value={form.personality_emoji_level}
-              onChange={(e) =>
-                setForm((prev) => ({ ...prev, personality_emoji_level: e.target.value }))
-              }
-              className={selectClass + " w-full"}
+              onValueChange={(v) => setForm((prev) => ({ ...prev, personality_emoji_level: v }))}
             >
-              {EMOJI_LEVELS.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {EMOJI_LEVELS.map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         </div>
       </div>

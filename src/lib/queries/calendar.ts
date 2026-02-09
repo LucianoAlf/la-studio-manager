@@ -6,6 +6,85 @@ function getSupabase() {
   return createClient();
 }
 
+// ============================================================
+// LEMBRETES COMO ITENS VISUAIS DO CALENDÁRIO
+// ============================================================
+
+export interface CalendarReminder {
+  id: string;
+  content: string;
+  scheduled_for: string;
+  status: string;
+  source: string;
+  recurrence: string | null;
+  metadata: Record<string, unknown>;
+}
+
+/**
+ * Busca lembretes pendentes no período para exibir no calendário.
+ * Retorna como CalendarItem[] "virtuais" (type='reminder') para mesclar na view.
+ */
+export async function getCalendarReminders(startDate: string, endDate: string, userId?: string): Promise<CalendarItem[]> {
+  const supabase = getSupabase();
+
+  let query = supabase
+    .from("whatsapp_scheduled_messages")
+    .select("id, content, scheduled_for, status, source, recurrence, metadata")
+    .in("source", ["manual", "dashboard", "calendar_reminder"])
+    .in("status", ["pending", "sent"])
+    .gte("scheduled_for", startDate)
+    .lte("scheduled_for", endDate)
+    .order("scheduled_for", { ascending: true })
+    .limit(100);
+
+  if (userId) {
+    query = query.eq("target_user_id", userId);
+  }
+
+  const { data, error } = await query;
+  if (error || !data) return [];
+
+  // Converter para formato CalendarItem "virtual"
+  return (data as unknown as CalendarReminder[]).map((r) => {
+    // Extrair texto limpo do conteúdo
+    const cleanText = r.content
+      .replace(/^⏰\s*\*Lembrete!?\*\s*\n?\n?/, "")
+      .replace(/^📅\s*\*Lembrete de evento\*\s*\n?\n?/, "")
+      .split("\n")[0]
+      .replace(/^\*|\*$/g, "")
+      .trim()
+      .slice(0, 80);
+
+    return {
+      id: `reminder-${r.id}`,
+      title: cleanText || "Lembrete",
+      type: "reminder" as CalendarItem["type"],
+      start_time: r.scheduled_for,
+      end_time: null,
+      all_day: false,
+      status: r.status === "sent" ? "completed" : "confirmed",
+      description: r.content,
+      responsible_user_id: null,
+      created_by: null,
+      location: null,
+      content_type: null,
+      platforms: null,
+      tags: null,
+      metadata: {
+        ...r.metadata,
+        is_reminder: true,
+        reminder_source: r.source,
+        reminder_status: r.status,
+        reminder_recurrence: r.recurrence,
+        original_id: r.id,
+      },
+      created_at: r.scheduled_for,
+      updated_at: r.scheduled_for,
+      deleted_at: null,
+    } as unknown as CalendarItem;
+  });
+}
+
 // Buscar items por período (com filtros opcionais)
 export async function getCalendarItems(startDate: string, endDate: string, filters?: Omit<CalendarFilters, 'startDate' | 'endDate'>): Promise<CalendarItem[]> {
   const supabase = getSupabase();

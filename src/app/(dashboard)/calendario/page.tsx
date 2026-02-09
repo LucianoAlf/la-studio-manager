@@ -6,7 +6,7 @@ import { CaretLeft, CaretRight, Plus, X, Funnel, Trash } from "@phosphor-icons/r
 import { cn } from "@/lib/utils";
 import { Button, Badge, Avatar, IconButton, Chip, Dot } from "@/components/ui";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/shadcn/select";
-import { getCalendarItems, getCalendarItemConnections, getCalendarItemComments, addCalendarComment, moveCalendarItem, deleteCalendarItem } from "@/lib/queries/calendar";
+import { getCalendarItems, getCalendarItemConnections, getCalendarItemComments, addCalendarComment, moveCalendarItem, deleteCalendarItem, getCalendarReminders } from "@/lib/queries/calendar";
 import { getCurrentUserProfile, getAllUsers } from "@/lib/queries/users";
 import { TYPE_COLORS, TYPE_EMOJIS, getDateRange, getUserDisplay, PLATFORM_COLORS } from "@/lib/utils/calendar-helpers";
 import type { CalendarItem, CalendarItemType, CalendarItemConnection, CalendarItemComment, UserProfile } from "@/lib/types/database";
@@ -28,6 +28,7 @@ const TYPE_CONFIG: Record<CalendarItemType, { color: string; emoji: string; labe
   creation: { color: TYPE_COLORS.creation.border,  emoji: TYPE_EMOJIS.creation,  label: TYPE_COLORS.creation.label },
   task:     { color: TYPE_COLORS.task.border,      emoji: TYPE_EMOJIS.task,      label: TYPE_COLORS.task.label },
   meeting:  { color: TYPE_COLORS.meeting.border,   emoji: TYPE_EMOJIS.meeting,   label: TYPE_COLORS.meeting.label },
+  reminder: { color: TYPE_COLORS.reminder.border,  emoji: TYPE_EMOJIS.reminder,  label: TYPE_COLORS.reminder.label },
 };
 
 // ============================================================
@@ -81,7 +82,7 @@ export default function CalendarioPage() {
   const [currentDate, setCurrentDate] = useState(() => new Date());
   const [selectedItem, setSelectedItem] = useState<CalendarItem | null>(null);
   const [typeFilters, setTypeFilters] = useState<Record<CalendarItemType, boolean>>({
-    event: true, delivery: true, creation: true, task: true, meeting: true,
+    event: true, delivery: true, creation: true, task: true, meeting: true, reminder: true,
   });
 
   // === Filtros avançados ===
@@ -119,7 +120,7 @@ export default function CalendarioPage() {
   // Montar filtros combinados (type chips + filtros avançados)
   const combinedFilters = useMemo(() => {
     const activeTypes = (Object.keys(typeFilters) as CalendarItemType[]).filter((t) => typeFilters[t]);
-    const allActive = activeTypes.length === 5;
+    const allActive = activeTypes.length === Object.keys(typeFilters).length;
     return {
       ...advancedFilters,
       types: allActive ? advancedFilters.types : activeTypes,
@@ -140,13 +141,17 @@ export default function CalendarioPage() {
   const reloadItems = useCallback(async () => {
     try {
       const { start, end } = getDateRange(currentDate, view);
-      const data = await getCalendarItems(start, end, combinedFilters);
-      setItems(data);
+      const profileId = currentUser?.profile ? undefined : undefined;
+      const [calItems, reminderItems] = await Promise.all([
+        getCalendarItems(start, end, combinedFilters),
+        getCalendarReminders(start, end, profileId),
+      ]);
+      setItems([...calItems, ...reminderItems]);
       setSelectedItem(null);
     } catch (err) {
       console.error("Erro ao recarregar:", err);
     }
-  }, [currentDate, view, combinedFilters]);
+  }, [currentDate, view, combinedFilters, currentUser]);
 
   // Carregar items quando muda data, view, filtros ou retry
   useEffect(() => {
@@ -156,8 +161,11 @@ export default function CalendarioPage() {
       setError(null);
       try {
         const { start, end } = getDateRange(currentDate, view);
-        const data = await getCalendarItems(start, end, combinedFilters);
-        if (!cancelled) setItems(data);
+        const [calItems, reminderItems] = await Promise.all([
+          getCalendarItems(start, end, combinedFilters),
+          getCalendarReminders(start, end),
+        ]);
+        if (!cancelled) setItems([...calItems, ...reminderItems]);
       } catch (err) {
         console.error("Erro ao carregar items:", err);
         if (!cancelled) setError("Erro ao carregar dados do calendário");
@@ -175,10 +183,14 @@ export default function CalendarioPage() {
     onInsert: useCallback(async () => {
       if (isDroppingRef.current) return;
       const { start, end } = getDateRange(currentDate, view);
-      const data = await getCalendarItems(start, end, combinedFilters);
+      const [calItems, reminderItems] = await Promise.all([
+        getCalendarItems(start, end, combinedFilters),
+        getCalendarReminders(start, end),
+      ]);
+      const allData = [...calItems, ...reminderItems];
       const currentIds = new Set(items.map((i) => i.id));
-      const newIds = new Set(data.filter((i) => !currentIds.has(i.id)).map((i) => i.id));
-      setItems(data);
+      const newIds = new Set(allData.filter((i) => !currentIds.has(i.id)).map((i) => i.id));
+      setItems(allData);
       if (newIds.size > 0) {
         setRealtimeNewIds(newIds);
         setTimeout(() => setRealtimeNewIds(new Set()), 1500);
@@ -187,16 +199,23 @@ export default function CalendarioPage() {
     onUpdate: useCallback(async () => {
       if (isDroppingRef.current) return;
       const { start, end } = getDateRange(currentDate, view);
-      const data = await getCalendarItems(start, end, combinedFilters);
-      setItems(data);
+      const [calItems, reminderItems] = await Promise.all([
+        getCalendarItems(start, end, combinedFilters),
+        getCalendarReminders(start, end),
+      ]);
+      setItems([...calItems, ...reminderItems]);
     }, [currentDate, view, combinedFilters]),
     onDelete: useCallback(async () => {
       if (isDroppingRef.current) return;
       const { start, end } = getDateRange(currentDate, view);
-      const data = await getCalendarItems(start, end, combinedFilters);
-      setItems(data);
+      const [calItems, reminderItems] = await Promise.all([
+        getCalendarItems(start, end, combinedFilters),
+        getCalendarReminders(start, end),
+      ]);
+      const allData = [...calItems, ...reminderItems];
+      setItems(allData);
       setSelectedItem((prev) => {
-        if (prev && !data.find((i) => i.id === prev.id)) return null;
+        if (prev && !allData.find((i) => i.id === prev.id)) return null;
         return prev;
       });
     }, [currentDate, view, combinedFilters]),
@@ -227,6 +246,9 @@ export default function CalendarioPage() {
     targetDate: Date,
     targetHour?: number
   ) => {
+    // Lembretes virtuais (id prefixado com 'reminder-') não são arrastáveis
+    if (itemId.startsWith("reminder-")) return;
+
     const originalItem = items.find((item) => item.id === itemId);
     if (!originalItem) return;
 
@@ -704,11 +726,14 @@ function WeekView({ currentDate, today, items, onSelectItem, onDrop, realtimeNew
                   const cfg = TYPE_CONFIG[item.type];
                   const isNew = realtimeNewIds.has(item.id);
 
+                  const isReminder = item.type === "reminder";
+
                   return (
                     <div
                       key={item.id}
-                      draggable
+                      draggable={!isReminder}
                       onDragStart={(e) => {
+                        if (isReminder) { e.preventDefault(); return; }
                         e.dataTransfer.setData("text/calendar-item-id", item.id);
                         e.dataTransfer.effectAllowed = "move";
                         (e.currentTarget as HTMLElement).classList.add("calendar-item-dragging");
@@ -718,7 +743,8 @@ function WeekView({ currentDate, today, items, onSelectItem, onDrop, realtimeNew
                       }}
                       onClick={() => onSelectItem(item)}
                       className={cn(
-                        "absolute left-1 right-1 rounded-[6px] p-1 px-2 text-left transition-all hover:-translate-y-px hover:shadow-lg cursor-grab overflow-hidden z-10",
+                        "absolute left-1 right-1 rounded-[6px] p-1 px-2 text-left transition-all hover:-translate-y-px hover:shadow-lg overflow-hidden z-10",
+                        isReminder ? "cursor-pointer border-dashed" : "cursor-grab",
                         isNew && "realtime-new-item"
                       )}
                       style={{
@@ -726,9 +752,12 @@ function WeekView({ currentDate, today, items, onSelectItem, onDrop, realtimeNew
                         height,
                         borderLeft: `3px solid ${cfg.color}`,
                         backgroundColor: `${cfg.color}1F`,
+                        ...(isReminder ? { borderStyle: "dashed", opacity: 0.85 } : {}),
                       }}
                     >
-                      <p className="text-[11px] font-semibold text-slate-100 truncate">{item.title}</p>
+                      <p className="text-[11px] font-semibold text-slate-100 truncate">
+                        {isReminder && "⏰ "}{item.title}
+                      </p>
                       {height > 30 && (
                         <p className="text-[10px] text-slate-500">{formatHour(s.hour, s.minute)}{e ? ` — ${formatHour(e.hour, e.minute)}` : ""}</p>
                       )}

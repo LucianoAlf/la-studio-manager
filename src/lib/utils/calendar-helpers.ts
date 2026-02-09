@@ -7,6 +7,7 @@ export const TYPE_COLORS: Record<CalendarItemType, { bg: string; border: string;
   creation: { bg: "rgba(26,168,191,0.12)", border: "#1AA8BF", dot: "#1AA8BF", label: "Criação" },
   task:     { bg: "rgba(34,197,94,0.12)",  border: "#22C55E", dot: "#22C55E", label: "Tarefa" },
   meeting:  { bg: "rgba(139,92,246,0.12)", border: "#8B5CF6", dot: "#8B5CF6", label: "Reunião" },
+  reminder: { bg: "rgba(251,191,36,0.12)", border: "#FBBF24", dot: "#FBBF24", label: "Lembrete" },
 };
 
 export const TYPE_EMOJIS: Record<CalendarItemType, string> = {
@@ -15,6 +16,7 @@ export const TYPE_EMOJIS: Record<CalendarItemType, string> = {
   creation: "📹",
   task: "✅",
   meeting: "🧠",
+  reminder: "⏰",
 };
 
 // Helper: formatar horário "09:00"

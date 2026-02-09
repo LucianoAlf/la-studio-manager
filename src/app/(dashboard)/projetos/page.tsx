@@ -1681,9 +1681,7 @@ function PorPessoaTab({ cards, columns }: { cards: KanbanCardType[]; columns: Ka
 
 const ROLE_BADGE: Record<string, string> = {
   admin: "bg-teal-500/20 text-teal-400",
-  editor: "bg-orange-500/20 text-orange-400",
-  viewer: "bg-blue-500/20 text-blue-400",
-  developer: "bg-violet-500/20 text-violet-400",
+  usuario: "bg-orange-500/20 text-orange-400",
 };
 
 // Paleta de cores disponíveis para colunas

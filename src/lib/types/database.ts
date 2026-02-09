@@ -4,11 +4,11 @@
 // ============================================================
 
 // === ENUMS ===
-export type CalendarItemType = "event" | "delivery" | "creation" | "task" | "meeting";
+export type CalendarItemType = "event" | "delivery" | "creation" | "task" | "meeting" | "reminder";
 export type CalendarItemStatus = "pending" | "in_progress" | "completed" | "cancelled";
 export type CardType = "single_post" | "campaign";
 export type CardPriority = "low" | "medium" | "high" | "urgent";
-export type UserRole = "admin" | "editor" | "viewer" | "developer";
+export type UserRole = "admin" | "usuario";
 
 // === USER PROFILE ===
 export interface UserProfile {

@@ -9,6 +9,14 @@ import type { UserNotificationSettings } from "@/lib/types/settings";
 import { DEFAULT_NOTIFICATION_SETTINGS } from "@/lib/types/settings";
 import { upsertNotificationSettings } from "@/lib/queries/settings";
 import { toast } from "sonner";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/shadcn/select";
+import { Clock } from "@phosphor-icons/react";
 
 interface NotificationsSectionProps {
   authUserId: string;
@@ -27,11 +35,26 @@ const WEEKDAYS = [
 ];
 
 const REMINDER_DAY_OPTIONS = [
+  { value: 0, label: "No dia", highlight: true },
   { value: 1, label: "1 dia antes" },
   { value: 2, label: "2 dias antes" },
   { value: 3, label: "3 dias antes" },
   { value: 5, label: "5 dias antes" },
   { value: 7, label: "7 dias antes" },
+];
+
+const TIMEZONES = [
+  { value: "America/Sao_Paulo", label: "São Paulo (UTC-3)" },
+  { value: "America/Manaus", label: "Manaus (UTC-4)" },
+  { value: "America/Cuiaba", label: "Cuiabá (UTC-4)" },
+  { value: "America/Belem", label: "Belém (UTC-3)" },
+  { value: "America/Fortaleza", label: "Fortaleza (UTC-3)" },
+  { value: "America/Recife", label: "Recife (UTC-3)" },
+  { value: "America/Bahia", label: "Bahia (UTC-3)" },
+  { value: "America/Rio_Branco", label: "Rio Branco (UTC-5)" },
+  { value: "America/Noronha", label: "Fernando de Noronha (UTC-2)" },
+  { value: "America/New_York", label: "Nova York (UTC-5)" },
+  { value: "Europe/Lisbon", label: "Lisboa (UTC+0)" },
 ];
 
 export function NotificationsSection({
@@ -91,10 +114,37 @@ export function NotificationsSection({
     }
   }
 
-  const inputClass =
-    "h-9 px-3 rounded-lg bg-slate-800/60 border border-slate-700 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-accent-cyan/40 focus:border-accent-cyan/40";
-  const selectClass =
-    "h-9 px-3 rounded-lg bg-slate-800/60 border border-slate-700 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-accent-cyan/40 appearance-none cursor-pointer";
+  const HOURS = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, "0"));
+  const MINUTES = ["00", "15", "30", "45"];
+
+  function TimeSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+    const [h, m] = value.split(":");
+    return (
+      <div className="flex items-center gap-1">
+        <Select value={h || "09"} onValueChange={(v) => onChange(`${v}:${m || "00"}`)}>
+          <SelectTrigger className="w-[68px] h-9">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent className="max-h-48">
+            {HOURS.map((hr) => (
+              <SelectItem key={hr} value={hr}>{hr}h</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <span className="text-slate-600 text-xs">:</span>
+        <Select value={m || "00"} onValueChange={(v) => onChange(`${h || "09"}:${v}`)}>
+          <SelectTrigger className="w-[68px] h-9">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {MINUTES.map((min) => (
+              <SelectItem key={min} value={min}>{min}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+    );
+  }
 
   return (
     <Card variant="default" className="space-y-6">
@@ -125,13 +175,16 @@ export function NotificationsSection({
               <div className="flex flex-wrap gap-2">
                 {REMINDER_DAY_OPTIONS.map((opt) => {
                   const isActive = form.calendar_reminder_days.includes(opt.value);
+                  const isHighlight = "highlight" in opt && opt.highlight;
                   return (
                     <button
                       key={opt.value}
                       type="button"
                       onClick={() => toggleReminderDay(opt.value)}
                       className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                        isActive
+                        isActive && isHighlight
+                          ? "bg-amber-500/20 text-amber-300 border border-amber-500/40 ring-1 ring-amber-500/20"
+                          : isActive
                           ? "bg-accent-cyan/20 text-accent-cyan border border-accent-cyan/30"
                           : "bg-slate-800/60 text-slate-400 border border-slate-700 hover:border-slate-600"
                       }`}
@@ -144,11 +197,9 @@ export function NotificationsSection({
             </div>
             <div className="flex items-center gap-3">
               <label className="text-xs font-medium text-slate-400">Horário</label>
-              <input
-                type="time"
+              <TimeSelect
                 value={form.calendar_reminder_time}
-                onChange={(e) => updateField("calendar_reminder_time", e.target.value)}
-                className={inputClass + " w-28"}
+                onChange={(v) => updateField("calendar_reminder_time", v)}
               />
             </div>
           </div>
@@ -169,11 +220,9 @@ export function NotificationsSection({
         {form.daily_summary_enabled && (
           <div className="flex items-center gap-3 pl-4 border-l-2 border-slate-800">
             <label className="text-xs font-medium text-slate-400">Horário</label>
-            <input
-              type="time"
+            <TimeSelect
               value={form.daily_summary_time}
-              onChange={(e) => updateField("daily_summary_time", e.target.value)}
-              className={inputClass + " w-28"}
+              onChange={(v) => updateField("daily_summary_time", v)}
             />
           </div>
         )}
@@ -188,23 +237,23 @@ export function NotificationsSection({
         {form.weekly_summary_enabled && (
           <div className="flex items-center gap-3 pl-4 border-l-2 border-slate-800 flex-wrap">
             <label className="text-xs font-medium text-slate-400">Dia</label>
-            <select
-              value={form.weekly_summary_day}
-              onChange={(e) => updateField("weekly_summary_day", Number(e.target.value))}
-              className={selectClass + " w-32"}
+            <Select
+              value={String(form.weekly_summary_day)}
+              onValueChange={(v) => updateField("weekly_summary_day", Number(v))}
             >
-              {WEEKDAYS.map((d) => (
-                <option key={d.value} value={d.value}>
-                  {d.label}
-                </option>
-              ))}
-            </select>
+              <SelectTrigger className="w-32 h-9">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {WEEKDAYS.map((d) => (
+                  <SelectItem key={d.value} value={String(d.value)}>{d.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <label className="text-xs font-medium text-slate-400">às</label>
-            <input
-              type="time"
+            <TimeSelect
               value={form.weekly_summary_time}
-              onChange={(e) => updateField("weekly_summary_time", e.target.value)}
-              className={inputClass + " w-28"}
+              onChange={(v) => updateField("weekly_summary_time", v)}
             />
           </div>
         )}
@@ -219,23 +268,23 @@ export function NotificationsSection({
         {form.monthly_summary_enabled && (
           <div className="flex items-center gap-3 pl-4 border-l-2 border-slate-800 flex-wrap">
             <label className="text-xs font-medium text-slate-400">Dia do mês</label>
-            <select
-              value={form.monthly_summary_day}
-              onChange={(e) => updateField("monthly_summary_day", Number(e.target.value))}
-              className={selectClass + " w-20"}
+            <Select
+              value={String(form.monthly_summary_day)}
+              onValueChange={(v) => updateField("monthly_summary_day", Number(v))}
             >
-              {Array.from({ length: 28 }, (_, i) => i + 1).map((d) => (
-                <option key={d} value={d}>
-                  {d}
-                </option>
-              ))}
-            </select>
+              <SelectTrigger className="w-20 h-9">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="max-h-48">
+                {Array.from({ length: 28 }, (_, i) => i + 1).map((d) => (
+                  <SelectItem key={d} value={String(d)}>{d}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <label className="text-xs font-medium text-slate-400">às</label>
-            <input
-              type="time"
+            <TimeSelect
               value={form.monthly_summary_time}
-              onChange={(e) => updateField("monthly_summary_time", e.target.value)}
-              className={inputClass + " w-28"}
+              onChange={(v) => updateField("monthly_summary_time", v)}
             />
           </div>
         )}
@@ -271,7 +320,7 @@ export function NotificationsSection({
       </div>
 
       {/* === HORÁRIO DE SILÊNCIO === */}
-      <div className="space-y-3">
+      <div className="space-y-3 pb-4 border-b border-slate-800">
         <h3 className="text-sm font-semibold text-slate-300">Horário de Silêncio</h3>
         <Switch
           checked={form.quiet_hours_enabled}
@@ -282,21 +331,41 @@ export function NotificationsSection({
         {form.quiet_hours_enabled && (
           <div className="flex items-center gap-3 pl-4 border-l-2 border-slate-800 flex-wrap">
             <label className="text-xs font-medium text-slate-400">Das</label>
-            <input
-              type="time"
+            <TimeSelect
               value={form.quiet_hours_start}
-              onChange={(e) => updateField("quiet_hours_start", e.target.value)}
-              className={inputClass + " w-28"}
+              onChange={(v) => updateField("quiet_hours_start", v)}
             />
             <label className="text-xs font-medium text-slate-400">até</label>
-            <input
-              type="time"
+            <TimeSelect
               value={form.quiet_hours_end}
-              onChange={(e) => updateField("quiet_hours_end", e.target.value)}
-              className={inputClass + " w-28"}
+              onChange={(v) => updateField("quiet_hours_end", v)}
             />
           </div>
         )}
+      </div>
+
+      {/* === FUSO HORÁRIO === */}
+      <div className="space-y-3">
+        <h3 className="text-sm font-semibold text-slate-300">Fuso Horário</h3>
+        <div className="flex items-center gap-3">
+          <Clock size={16} className="text-slate-400" />
+          <Select
+            value={form.timezone}
+            onValueChange={(v) => updateField("timezone", v)}
+          >
+            <SelectTrigger className="w-64 h-9">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent className="max-h-48">
+              {TIMEZONES.map((tz) => (
+                <SelectItem key={tz.value} value={tz.value}>{tz.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <p className="text-[11px] text-slate-500">
+          Todos os horários de notificação usam este fuso
+        </p>
       </div>
 
       {/* Salvar */}

@@ -108,6 +108,11 @@ export const ACTION_REQUIRED_FIELDS: Record<string, {
     important: ['deadline'],
     optional: ['assignee', 'priority', 'description', 'column'],
   },
+  create_reminder: {
+    required: ['reminder_text'],
+    important: ['reminder_time', 'reminder_recurrence'],
+    optional: ['reminder_date'],
+  },
 }
 
 /**
@@ -120,6 +125,9 @@ export const FOLLOWUP_QUESTIONS: Record<string, string> = {
   deadline: 'Tem prazo e responsável pra isso?',
   location: 'Presencial ou online?',
   assignee: 'Quem é o responsável?',
+  reminder_text: 'O que quer que eu te lembre?',
+  reminder_time: 'Que horas quer ser lembrado?',
+  reminder_recurrence: 'Isso é um lembrete único ou recorrente? (único / diário / semanal / mensal)',
 }
 
 /**
@@ -204,6 +212,20 @@ export function buildPartialSummary(
   if (action === 'create_card') {
     let summary = 'Entendi, vou criar a tarefa'
     if (entities.title) summary += ` "${entities.title}"`
+    return summary + '.'
+  }
+
+  if (action === 'create_reminder') {
+    let summary = 'Beleza, vou criar o lembrete'
+    if (entities.reminder_text) summary += `: "${entities.reminder_text}"`
+    if (entities.reminder_date) summary += ` pra ${entities.reminder_date}`
+    if (entities.reminder_time) summary += ` às ${entities.reminder_time}`
+    if (entities.reminder_recurrence) {
+      const recLabels: Record<string, string> = {
+        daily: 'todo dia', weekdays: 'dias úteis', weekly: 'toda semana', monthly: 'todo mês'
+      }
+      summary += ` (${recLabels[entities.reminder_recurrence as string] || entities.reminder_recurrence})`
+    }
     return summary + '.'
   }
 
