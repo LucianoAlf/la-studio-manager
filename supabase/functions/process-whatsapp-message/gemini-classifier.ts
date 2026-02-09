@@ -22,6 +22,10 @@ export type Intent =
   | 'create_card'
   | 'create_calendar'
   | 'create_reminder'
+  | 'update_reminder'
+  | 'cancel_reminder'
+  | 'update_calendar'
+  | 'cancel_calendar'
   | 'save_contact'
   | 'query_contact'
   | 'query_calendar'
@@ -67,6 +71,17 @@ export interface ExtractedEntities {
   reminder_time?: string
   reminder_text?: string
   reminder_recurrence?: 'daily' | 'weekdays' | 'weekly' | 'monthly' | null
+  reminder_search_text?: string   // Texto para buscar lembrete existente (update/cancel)
+  reminder_new_time?: string      // Novo horário para update_reminder
+  reminder_new_date?: string      // Nova data para update_reminder
+  reminder_new_recurrence?: 'daily' | 'weekdays' | 'weekly' | 'monthly' | null
+
+  // Calendar update/cancel
+  event_search_text?: string      // Texto para buscar evento existente (título, participante, dia)
+  event_new_date?: string         // Nova data para update_calendar
+  event_new_time?: string         // Novo horário para update_calendar
+  event_new_location?: string     // Novo local para update_calendar
+  event_new_title?: string        // Novo título para update_calendar
 
   // Contacts (agenda)
   contact_name?: string
@@ -232,20 +247,59 @@ Você é um classificador de intenções E consultor criativo. Sua função é:
    Gatilhos: "move o card", "muda prioridade", "atualiza", "marca como feito"
    Entidades: title (para buscar), column (destino), priority
 
-9. **save_contact** — Salvar contato na agenda
-   Gatilhos: "salva na agenda", "grava o contato", "anota o número", "salva esse número", "adiciona na agenda"
-   Entidades: contact_name, contact_phone, contact_type (fornecedor/aluno/cliente/parceiro/artista/outro), notes
+9. **update_reminder** — Alterar lembrete existente
+   Gatilhos: "muda aquele lembrete", "adia o lembrete", "altera o horário do lembrete", "muda pra 10h", "adia pra terça"
+   Entidades: reminder_search_text (texto para encontrar o lembrete), reminder_new_time (novo horário), reminder_new_date (nova data), reminder_new_recurrence (nova recorrência)
+   
+   Exemplos:
+   - "Muda aquele lembrete de segunda pra 10h" → reminder_search_text: "segunda", reminder_new_time: "10:00"
+   - "Adia o lembrete de revisar relatório pra terça" → reminder_search_text: "revisar relatório", reminder_new_date: "terça"
+   - "Muda o lembrete pra diário" → reminder_new_recurrence: "daily"
+   - "Aquele lembrete de 9h, muda pra 10h" → reminder_search_text: "9h", reminder_new_time: "10:00"
 
-10. **query_contact** — Consultar contato na agenda
+10. **cancel_reminder** — Cancelar/excluir lembrete existente
+    Gatilhos: "cancela aquele lembrete", "remove o lembrete", "exclui o lembrete", "não precisa mais daquele lembrete", "para de me lembrar"
+    Entidades: reminder_search_text (texto para encontrar o lembrete)
+    
+    Exemplos:
+    - "Cancela aquele lembrete de toda segunda" → reminder_search_text: "toda segunda"
+    - "Remove o lembrete de revisar relatório" → reminder_search_text: "revisar relatório"
+    - "Para de me lembrar de revisar o relatório" → reminder_search_text: "revisar relatório"
+
+11. **update_calendar** — Alterar evento/compromisso existente no calendário
+    Gatilhos: "muda a reunião", "adia o evento", "altera o horário da", "troca pra quinta", "muda o local", "reagenda", "empurra pra", "antecipa a reunião"
+    Entidades: event_search_text (título, participante ou dia para encontrar o evento), event_new_date (nova data), event_new_time (novo horário), event_new_location (novo local), event_new_title (novo título)
+    
+    Exemplos:
+    - "Muda a reunião de terça pra quinta às 15h" → event_search_text: "reunião terça", event_new_date: "quinta", event_new_time: "15:00"
+    - "Adia a gravação com John pra semana que vem" → event_search_text: "gravação John", event_new_date: "semana que vem"
+    - "Muda o local da reunião de amanhã pra LA Music Recreio" → event_search_text: "reunião amanhã", event_new_location: "LA Music Recreio"
+    - "Aquele planejamento de março, muda pra 14h" → event_search_text: "planejamento março", event_new_time: "14:00"
+    - "Reagenda a gravação de quinta pra sexta" → event_search_text: "gravação quinta", event_new_date: "sexta"
+
+12. **cancel_calendar** — Cancelar/excluir evento do calendário
+    Gatilhos: "cancela a reunião", "exclui o evento", "remove da agenda", "desmarca", "não vai ter mais"
+    Entidades: event_search_text (título, participante ou dia para encontrar o evento)
+    
+    Exemplos:
+    - "Cancela a reunião de terça" → event_search_text: "reunião terça"
+    - "Desmarca a gravação com John" → event_search_text: "gravação John"
+    - "Remove o planejamento de março da agenda" → event_search_text: "planejamento março"
+
+13. **save_contact** — Salvar contato na agenda
+    Gatilhos: "salva na agenda", "grava o contato", "anota o número", "salva esse número", "adiciona na agenda"
+    Entidades: contact_name, contact_phone, contact_type (fornecedor/aluno/cliente/parceiro/artista/outro), notes
+
+14. **query_contact** — Consultar contato na agenda
     Gatilhos: "qual o número do", "contato do", "telefone do", "quero falar com", "tem o número do"
     Entidades: contact_name, contact_type
 
-11. **general_chat** — Conversa livre OU resposta baseada no contexto
+15. **general_chat** — Conversa livre OU resposta baseada no contexto
     Gatilhos: saudações, perguntas gerais, brincadeiras, OU perguntas cuja resposta está no histórico da conversa
     ⚠️ Quando responder do contexto, inclua os dados relevantes no response_text (ex: "A reunião é na quarta às 10h")
     Entidades: nenhuma
 
-12. **help** — Pedir ajuda
+16. **help** — Pedir ajuda
     Gatilhos: "ajuda", "o que você faz", "comandos", "como funciona"
     Entidades: nenhuma
 

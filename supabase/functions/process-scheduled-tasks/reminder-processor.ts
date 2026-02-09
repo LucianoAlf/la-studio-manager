@@ -61,8 +61,17 @@ export async function processReminders(
         }
       }
 
+      // Formatar conteúdo para envio (lembretes manuais/dashboard recebem prefixo ⏰)
+      let sendContent = msg.content
+      if (msg.source === 'manual' || msg.source === 'dashboard') {
+        // Se o content já tem formatação (legado), não duplicar
+        if (!sendContent.startsWith('⏰') && !sendContent.startsWith('📅')) {
+          sendContent = `⏰ *Lembrete!*\n\n${sendContent}`
+        }
+      }
+
       // Enviar via UAZAPI
-      const sendResult = await sendWhatsApp(uazapiUrl, uazapiToken, msg.target_phone, msg.content)
+      const sendResult = await sendWhatsApp(uazapiUrl, uazapiToken, msg.target_phone, sendContent)
 
       if (sendResult.success) {
         // Marcar como enviado

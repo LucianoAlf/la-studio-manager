@@ -68,6 +68,18 @@ export async function executeConfirmedAction(
       case 'creating_reminder':
         return await executeCreateReminder(ctx)
 
+      case 'updating_reminder':
+        return await executeUpdateReminder(ctx)
+
+      case 'cancelling_reminder':
+        return await executeCancelReminder(ctx)
+
+      case 'updating_calendar':
+        return await executeUpdateCalendar(ctx)
+
+      case 'cancelling_calendar':
+        return await executeCancelCalendar(ctx)
+
       default:
         return {
           success: false,
@@ -333,8 +345,8 @@ async function executeCreateReminder(ctx: ExecutionContext): Promise<ExecutionRe
     }
   }
 
-  // 2. Montar conteúdo do lembrete
-  const reminderContent = `⏰ *Lembrete!*\n\n${entities.reminder_text || entities.title || 'Lembrete sem descrição'}`
+  // 2. Montar conteúdo do lembrete (texto limpo, sem formatação — formatação vai na hora de enviar)
+  const reminderText = String(entities.reminder_text || entities.title || 'Lembrete sem descrição')
 
   // 3. Resolver recorrência
   const recurrence = entities.reminder_recurrence || null
@@ -347,7 +359,7 @@ async function executeCreateReminder(ctx: ExecutionContext): Promise<ExecutionRe
       target_user_id: profileId,    // ← user_profiles.id (FK de scheduled_messages)
       target_phone: phone,
       message_type: 'text',
-      content: reminderContent,
+      content: reminderText,
       scheduled_for: scheduledFor.toISOString(),
       status: 'pending',
       source: 'manual',             // Criado pelo usuário via WhatsApp
@@ -733,4 +745,277 @@ function getDefaultDuration(calendarType?: string): number {
     meeting: 60,   // 1h
   }
   return map[calendarType || 'task'] || 60
+}
+
+// ============================================
+// UPDATE REMINDER
+// ============================================
+
+async function executeUpdateReminder(ctx: ExecutionContext): Promise<ExecutionResult> {
+  const { supabase } = ctx
+  const ents = ctx.entities as unknown as Record<string, unknown>
+  const reminderId = ents.reminder_id as string
+  const updates = ents.updates as Record<string, unknown> | undefined
+
+  if (!reminderId || !updates || Object.keys(updates).length === 0) {
+    return {
+      success: false,
+      message: '❌ Não consegui identificar o lembrete ou as alterações.',
+      error: 'Missing reminder_id or updates',
+    }
+  }
+
+  const { error } = await supabase
+    .from('whatsapp_scheduled_messages')
+    .update({
+      ...updates,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', reminderId)
+    .eq('status', 'pending')
+
+  if (error) {
+    console.error('[WA-03] Update reminder error:', error)
+    return {
+      success: false,
+      message: '❌ Erro ao alterar o lembrete. Tenta de novo?',
+      error: String(error),
+    }
+  }
+
+  const changeDesc = (ents.change_description as string) || 'alterações aplicadas'
+  const cleanContent = ((ents.reminder_content as string) || 'Lembrete')
+    .replace(/^⏰\s*\*Lembrete!?\*\s*\n?\n?/, '')
+    .replace(/^📅\s*\*Lembrete de evento\*\s*\n?\n?/, '')
+    .substring(0, 60)
+
+  console.log(`[WA-03] ✅ Reminder updated: ${reminderId}`)
+
+  return {
+    success: true,
+    message: `Pronto, alterei o lembrete! ✏️\n\n📝 *${cleanContent}*\n${changeDesc}`,
+    record_id: reminderId,
+  }
+}
+
+// ============================================
+// CANCEL REMINDER
+// ============================================
+
+async function executeCancelReminder(ctx: ExecutionContext): Promise<ExecutionResult> {
+  const { supabase } = ctx
+  const ents = ctx.entities as unknown as Record<string, unknown>
+  const reminderId = ents.reminder_id as string
+
+  if (!reminderId) {
+    return {
+      success: false,
+      message: '❌ Não consegui identificar o lembrete pra cancelar.',
+      error: 'Missing reminder_id',
+    }
+  }
+
+  const { error } = await supabase
+    .from('whatsapp_scheduled_messages')
+    .update({
+      status: 'cancelled',
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', reminderId)
+    .eq('status', 'pending')
+
+  if (error) {
+    console.error('[WA-03] Cancel reminder error:', error)
+    return {
+      success: false,
+      message: '❌ Erro ao cancelar o lembrete. Tenta de novo?',
+      error: String(error),
+    }
+  }
+
+  const cleanContent = ((ents.reminder_content as string) || 'Lembrete')
+    .replace(/^⏰\s*\*Lembrete!?\*\s*\n?\n?/, '')
+    .replace(/^📅\s*\*Lembrete de evento\*\s*\n?\n?/, '')
+    .substring(0, 60)
+
+  console.log(`[WA-03] ✅ Reminder cancelled: ${reminderId}`)
+
+  return {
+    success: true,
+    message: `Pronto, cancelei o lembrete *${cleanContent}*. 🗑️`,
+    record_id: reminderId,
+  }
+}
+
+// ============================================
+// WA-09: UPDATE CALENDAR EVENT
+// ============================================
+
+async function executeUpdateCalendar(ctx: ExecutionContext): Promise<ExecutionResult> {
+  const { supabase } = ctx
+  const ents = ctx.entities as Record<string, unknown>
+  const eventId = ents.event_id as string
+  const eventTitle = (ents.event_title as string) || 'Evento'
+
+  if (!eventId) {
+    return { success: false, message: '❌ Não encontrei o ID do evento pra alterar.', error: 'Missing event_id' }
+  }
+
+  // Buscar evento atual para calcular novos valores
+  const { data: currentEvent, error: fetchError } = await supabase
+    .from('calendar_items')
+    .select('id, title, start_time, end_time, location')
+    .eq('id', eventId)
+    .single()
+
+  if (fetchError || !currentEvent) {
+    return { success: false, message: '❌ Não encontrei o evento no banco.', error: fetchError?.message || 'Event not found' }
+  }
+
+  const updates: Record<string, unknown> = {}
+  const changeLines: string[] = []
+
+  // Novo título
+  if (ents.event_new_title) {
+    updates.title = ents.event_new_title
+    changeLines.push(`📝 Título: ${ents.event_new_title}`)
+  }
+
+  // Novo local
+  if (ents.event_new_location) {
+    updates.location = ents.event_new_location
+    changeLines.push(`📍 Local: ${ents.event_new_location}`)
+  }
+
+  // Nova data e/ou horário — precisa resolver datas relativas
+  const currentStart = new Date(currentEvent.start_time)
+  let newStart: Date | null = null
+
+  if (ents.event_new_date || ents.event_new_time) {
+    newStart = new Date(currentStart)
+
+    // Resolver nova data
+    if (ents.event_new_date) {
+      const dateStr = String(ents.event_new_date).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      const today = new Date()
+
+      const dayMap: Record<string, number> = {
+        'domingo': 0, 'segunda': 1, 'terca': 2, 'quarta': 3,
+        'quinta': 4, 'sexta': 5, 'sabado': 6,
+      }
+
+      if (dateStr.includes('amanha')) {
+        newStart.setFullYear(today.getFullYear(), today.getMonth(), today.getDate() + 1)
+      } else if (dateStr.includes('hoje')) {
+        newStart.setFullYear(today.getFullYear(), today.getMonth(), today.getDate())
+      } else if (dateStr.includes('semana que vem') || dateStr.includes('proxima semana')) {
+        newStart.setDate(currentStart.getDate() + 7)
+      } else {
+        // Tentar match por dia da semana
+        for (const [dayName, dayNum] of Object.entries(dayMap)) {
+          if (dateStr.includes(dayName)) {
+            const currentDay = today.getDay()
+            let daysAhead = dayNum - currentDay
+            if (daysAhead <= 0) daysAhead += 7
+            newStart.setFullYear(today.getFullYear(), today.getMonth(), today.getDate() + daysAhead)
+            break
+          }
+        }
+
+        // Tentar parse de data DD/MM
+        const dateMatch = dateStr.match(/(\d{1,2})[\/\-](\d{1,2})/)
+        if (dateMatch) {
+          const day = parseInt(dateMatch[1])
+          const month = parseInt(dateMatch[2]) - 1
+          newStart.setMonth(month, day)
+          if (newStart.getTime() < today.getTime()) {
+            newStart.setFullYear(newStart.getFullYear() + 1)
+          }
+        }
+      }
+    }
+
+    // Resolver novo horário
+    if (ents.event_new_time) {
+      const timeStr = String(ents.event_new_time)
+      const timeMatch = timeStr.match(/(\d{1,2})[:\s]*(\d{2})?/)
+      if (timeMatch) {
+        let hours = parseInt(timeMatch[1])
+        const minutes = parseInt(timeMatch[2] || '0')
+        // Horário comercial: se < 7, assumir PM
+        if (hours < 7 && hours > 0) hours += 12
+        newStart.setHours(hours, minutes, 0, 0)
+      }
+    }
+
+    updates.start_time = newStart.toISOString()
+
+    // Ajustar end_time mantendo a mesma duração
+    if (currentEvent.end_time) {
+      const currentEnd = new Date(currentEvent.end_time)
+      const durationMs = currentEnd.getTime() - currentStart.getTime()
+      updates.end_time = new Date(newStart.getTime() + durationMs).toISOString()
+    }
+
+    const newDateStr = newStart.toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit' })
+    const newTimeStr = newStart.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+    changeLines.push(`🗓️ ${newDateStr} às ${newTimeStr}`)
+  }
+
+  if (Object.keys(updates).length === 0) {
+    return { success: false, message: '⚠️ Não identifiquei o que alterar no evento. Pode especificar?', error: 'No updates' }
+  }
+
+  // Aplicar update
+  const { error: updateError } = await supabase
+    .from('calendar_items')
+    .update(updates)
+    .eq('id', eventId)
+
+  if (updateError) {
+    console.error(`[WA-09] Calendar update failed:`, updateError)
+    return { success: false, message: '❌ Erro ao alterar o evento.', error: updateError.message }
+  }
+
+  console.log(`[WA-09] ✅ Calendar event updated: ${eventId}`, updates)
+
+  return {
+    success: true,
+    message: `Pronto, alterei o evento! ✏️\n\n📅 *${eventTitle}*\n${changeLines.join('\n')}`,
+    record_id: eventId,
+  }
+}
+
+// ============================================
+// WA-09: CANCEL CALENDAR EVENT
+// ============================================
+
+async function executeCancelCalendar(ctx: ExecutionContext): Promise<ExecutionResult> {
+  const { supabase } = ctx
+  const ents = ctx.entities as Record<string, unknown>
+  const eventId = ents.event_id as string
+  const eventTitle = (ents.event_title as string) || 'Evento'
+
+  if (!eventId) {
+    return { success: false, message: '❌ Não encontrei o ID do evento pra cancelar.', error: 'Missing event_id' }
+  }
+
+  // Hard delete (mesmo padrão do frontend — RLS permite DELETE para authenticated)
+  const { error: deleteError } = await supabase
+    .from('calendar_items')
+    .delete()
+    .eq('id', eventId)
+
+  if (deleteError) {
+    console.error(`[WA-09] Calendar delete failed:`, deleteError)
+    return { success: false, message: '❌ Erro ao cancelar o evento.', error: deleteError.message }
+  }
+
+  console.log(`[WA-09] ✅ Calendar event deleted: ${eventId}`)
+
+  return {
+    success: true,
+    message: `Pronto, cancelei o evento *${eventTitle}*. 🗑️`,
+    record_id: eventId,
+  }
 }

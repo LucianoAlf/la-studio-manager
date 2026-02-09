@@ -207,7 +207,9 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
       console.log('[FOLLOWUP] Dados completos:', JSON.stringify(followUpResult.entities))
 
       // Salvar contexto de confirmação (mesmo fluxo do WA-02/03)
-      const contextType = pending.action === 'create_calendar' ? 'creating_calendar' : 'creating_card'
+      const contextType = pending.action === 'create_calendar' ? 'creating_calendar'
+        : pending.action === 'create_reminder' ? 'creating_reminder'
+        : 'creating_card'
       await saveConversationContext(supabase, userId, contextType, {
         step: 'awaiting_confirmation',
         entities: followUpResult.entities,
@@ -917,9 +919,71 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
     }
   }
 
-  // Combinar contextos: conversa ativa + DM history
+  // Carregar lembretes pendentes do usuário para contexto do NLP
+  let remindersContext = ''
+  if (supabase && userId) {
+    try {
+      const { data: pendingReminders } = await supabase
+        .from('whatsapp_scheduled_messages')
+        .select('content, scheduled_for, recurrence, source')
+        .eq('target_user_id', userId)
+        .eq('status', 'pending')
+        .in('source', ['manual', 'dashboard'])
+        .order('scheduled_for', { ascending: true })
+        .limit(10)
+
+      if (pendingReminders && pendingReminders.length > 0) {
+        const recLabels: Record<string, string> = { daily: 'todo dia', weekdays: 'dias úteis', weekly: 'toda semana', monthly: 'todo mês' }
+        const lines = pendingReminders.map((r: { content: string; scheduled_for: string; recurrence: string | null }) => {
+          const dt = new Date(r.scheduled_for)
+          const dateStr = dt.toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+          const rec = r.recurrence ? ` (${recLabels[r.recurrence] || r.recurrence})` : ' (único)'
+          return `- "${r.content}" → ${dateStr}${rec}`
+        })
+        remindersContext = `LEMBRETES PENDENTES DO USUÁRIO (dados reais do banco — use estes dados, NÃO invente):\n${lines.join('\n')}`
+      }
+    } catch (e) {
+      console.error('[WA-09] Erro ao carregar lembretes para contexto:', e)
+    }
+  }
+
+  // Carregar próximos eventos do calendário para contexto do NLP
+  let calendarContext = ''
+  if (supabase && userId) {
+    try {
+      const futureMonth = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+      const { data: upcomingEvents } = await supabase
+        .from('calendar_items')
+        .select('title, start_time, type, location, participants')
+        .eq('created_by', userId)
+        .gte('start_time', new Date().toISOString())
+        .lte('start_time', futureMonth)
+        .is('deleted_at', null)
+        .order('start_time', { ascending: true })
+        .limit(10)
+
+      if (upcomingEvents && upcomingEvents.length > 0) {
+        const typeEmoji: Record<string, string> = { event: '📅', delivery: '✅', creation: '🎨', task: '📋', meeting: '🤝' }
+        const lines = upcomingEvents.map((ev: { title: string; start_time: string; type: string; location: string | null; participants: string | null }) => {
+          const dt = new Date(ev.start_time)
+          const dateStr = dt.toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+          const emoji = typeEmoji[ev.type] || '📅'
+          const loc = ev.location ? ` | ${ev.location}` : ''
+          const part = ev.participants ? ` | com ${ev.participants}` : ''
+          return `- ${emoji} "${ev.title}" → ${dateStr}${loc}${part}`
+        })
+        calendarContext = `PRÓXIMOS EVENTOS DO CALENDÁRIO (dados reais do banco — use estes dados para update_calendar/cancel_calendar):\n${lines.join('\n')}`
+      }
+    } catch (e) {
+      console.error('[WA-09] Erro ao carregar eventos para contexto:', e)
+    }
+  }
+
+  // Combinar contextos: conversa ativa + DM history + lembretes + calendário
   let fullContext = conversationContext || ''
   if (dmContext) fullContext = fullContext ? `${fullContext}\n\n${dmContext}` : dmContext
+  if (remindersContext) fullContext = fullContext ? `${fullContext}\n\n${remindersContext}` : remindersContext
+  if (calendarContext) fullContext = fullContext ? `${fullContext}\n\n${calendarContext}` : calendarContext
 
   // ========================================
   // CLASSIFICAR MENSAGEM COM GEMINI
@@ -938,6 +1002,18 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
 
     case 'create_reminder':
       return handleCreateReminder(classification, firstName, supabase, userId)
+
+    case 'update_reminder':
+      return handleUpdateReminder(classification, firstName, supabase, userId)
+
+    case 'cancel_reminder':
+      return handleCancelReminder(classification, firstName, supabase, userId)
+
+    case 'update_calendar':
+      return handleUpdateCalendar(classification, firstName, supabase, userId)
+
+    case 'cancel_calendar':
+      return handleCancelCalendar(classification, firstName, supabase, userId)
 
     case 'query_calendar': {
       const qCtx = { supabase, profileId: userId, authUserId, userName: firstName, entities: classification.entities }
@@ -1303,6 +1379,549 @@ async function handleCreateReminder(
   return {
     text: parts.join('\n'),
     intent: classification.intent,
+    confidence: classification.confidence,
+  }
+}
+
+// ============================================
+// HANDLER: ALTERAR LEMBRETE EXISTENTE
+// ============================================
+
+// deno-lint-ignore no-explicit-any
+async function handleUpdateReminder(
+  classification: ClassificationResult,
+  userName: string,
+  supabase: any,
+  userId: string
+): Promise<MessageResponse> {
+  const { entities } = classification
+  const searchText = entities.reminder_search_text || entities.reminder_text || entities.raw_text || ''
+
+  // Buscar lembretes pendentes do usuário
+  const reminders = await findUserReminders(supabase, userId)
+
+  if (reminders.length === 0) {
+    return {
+      text: `Você não tem nenhum lembrete pendente pra alterar, ${userName}.`,
+      intent: 'update_reminder',
+      confidence: classification.confidence,
+    }
+  }
+
+  // Encontrar o lembrete mais relevante
+  const match = findBestReminderMatch(reminders, searchText)
+
+  if (!match) {
+    // Listar lembretes para o usuário escolher
+    const list = reminders.slice(0, 5).map((r: ReminderRow, i: number) => {
+      const dateStr = new Date(r.scheduled_for).toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+      const recLabel = r.recurrence ? ` (${RECURRENCE_LABELS_ROUTER[r.recurrence] || r.recurrence})` : ''
+      return `${i + 1}. ${r.content.substring(0, 60)} — ${dateStr}${recLabel}`
+    }).join('\n')
+
+    return {
+      text: `Não consegui identificar qual lembrete você quer alterar. Seus lembretes pendentes:\n\n${list}\n\nQual deles?`,
+      intent: 'update_reminder',
+      confidence: classification.confidence,
+    }
+  }
+
+  // Montar updates
+  const updates: Record<string, unknown> = {}
+  let changeDesc = ''
+
+  if (entities.reminder_new_time) {
+    // Resolver novo horário mantendo a data original
+    const original = new Date(match.scheduled_for)
+    const timeParts = entities.reminder_new_time.match(/(\d{1,2}):?(\d{2})?/)
+    if (timeParts) {
+      let hour = parseInt(timeParts[1])
+      const min = parseInt(timeParts[2] || '0')
+      if (hour < 7) hour += 12 // Horário comercial
+      original.setHours(hour, min, 0, 0)
+      updates.scheduled_for = original.toISOString()
+      changeDesc += `🕐 Horário: ${hour.toString().padStart(2, '0')}:${min.toString().padStart(2, '0')}\n`
+    }
+  }
+
+  if (entities.reminder_new_date) {
+    changeDesc += `📅 Data: ${entities.reminder_new_date}\n`
+    // Resolver data relativa
+    const now = new Date(Date.now() - 3 * 60 * 60000) // SP timezone
+    const dateStr = entities.reminder_new_date.toLowerCase()
+    const original = new Date(match.scheduled_for)
+
+    if (dateStr.includes('amanhã') || dateStr.includes('amanha')) {
+      const tomorrow = new Date(now)
+      tomorrow.setDate(tomorrow.getDate() + 1)
+      original.setFullYear(tomorrow.getFullYear(), tomorrow.getMonth(), tomorrow.getDate())
+      updates.scheduled_for = original.toISOString()
+    } else if (dateStr.includes('segunda') || dateStr.includes('terça') || dateStr.includes('terca') ||
+               dateStr.includes('quarta') || dateStr.includes('quinta') || dateStr.includes('sexta') ||
+               dateStr.includes('sábado') || dateStr.includes('sabado') || dateStr.includes('domingo')) {
+      const dayMap: Record<string, number> = {
+        domingo: 0, segunda: 1, terça: 2, terca: 2, quarta: 3,
+        quinta: 4, sexta: 5, sábado: 6, sabado: 6,
+      }
+      for (const [name, dayNum] of Object.entries(dayMap)) {
+        if (dateStr.includes(name)) {
+          const diff = (dayNum - now.getDay() + 7) % 7 || 7
+          const target = new Date(now)
+          target.setDate(target.getDate() + diff)
+          original.setFullYear(target.getFullYear(), target.getMonth(), target.getDate())
+          updates.scheduled_for = original.toISOString()
+          break
+        }
+      }
+    }
+  }
+
+  if (entities.reminder_new_recurrence !== undefined) {
+    updates.recurrence = entities.reminder_new_recurrence
+    const recLabels: Record<string, string> = {
+      daily: 'todo dia', weekdays: 'dias úteis', weekly: 'toda semana', monthly: 'todo mês',
+    }
+    changeDesc += `🔄 Recorrência: ${entities.reminder_new_recurrence ? recLabels[entities.reminder_new_recurrence] || entities.reminder_new_recurrence : 'único'}\n`
+  }
+
+  if (Object.keys(updates).length === 0) {
+    return {
+      text: `Achei o lembrete *${match.content.substring(0, 60)}*, mas não entendi o que quer mudar. Me diz o novo horário, data ou recorrência.`,
+      intent: 'update_reminder',
+      confidence: classification.confidence,
+    }
+  }
+
+  // Salvar contexto de confirmação
+  await saveConversationContext(supabase, userId, 'updating_reminder', {
+    step: 'awaiting_confirmation',
+    entities: {
+      reminder_id: match.id,
+      reminder_content: match.content.substring(0, 80),
+      updates,
+      change_description: changeDesc,
+    },
+    classified_at: new Date().toISOString(),
+  })
+
+  const cleanContent = match.content
+    .replace(/^⏰\s*\*Lembrete!?\*\s*\n?\n?/, '')
+    .replace(/^📅\s*\*Lembrete de evento\*\s*\n?\n?/, '')
+    .substring(0, 60)
+
+  return {
+    text: `Achei o lembrete: *${cleanContent}*\n\nAlterações:\n${changeDesc}\nConfirma? (sim/não)`,
+    intent: 'update_reminder',
+    confidence: classification.confidence,
+  }
+}
+
+// ============================================
+// HANDLER: CANCELAR LEMBRETE EXISTENTE
+// ============================================
+
+// deno-lint-ignore no-explicit-any
+async function handleCancelReminder(
+  classification: ClassificationResult,
+  userName: string,
+  supabase: any,
+  userId: string
+): Promise<MessageResponse> {
+  const { entities } = classification
+  const searchText = entities.reminder_search_text || entities.reminder_text || entities.raw_text || ''
+
+  // Buscar lembretes pendentes do usuário
+  const reminders = await findUserReminders(supabase, userId)
+
+  if (reminders.length === 0) {
+    return {
+      text: `Você não tem nenhum lembrete pendente pra cancelar, ${userName}.`,
+      intent: 'cancel_reminder',
+      confidence: classification.confidence,
+    }
+  }
+
+  // Encontrar o lembrete mais relevante
+  const match = findBestReminderMatch(reminders, searchText)
+
+  if (!match) {
+    const list = reminders.slice(0, 5).map((r: ReminderRow, i: number) => {
+      const dateStr = new Date(r.scheduled_for).toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+      const recLabel = r.recurrence ? ` (${RECURRENCE_LABELS_ROUTER[r.recurrence] || r.recurrence})` : ''
+      return `${i + 1}. ${r.content.substring(0, 60)} — ${dateStr}${recLabel}`
+    }).join('\n')
+
+    return {
+      text: `Não consegui identificar qual lembrete cancelar. Seus lembretes pendentes:\n\n${list}\n\nQual deles?`,
+      intent: 'cancel_reminder',
+      confidence: classification.confidence,
+    }
+  }
+
+  // Salvar contexto de confirmação
+  await saveConversationContext(supabase, userId, 'cancelling_reminder', {
+    step: 'awaiting_confirmation',
+    entities: {
+      reminder_id: match.id,
+      reminder_content: match.content.substring(0, 80),
+    },
+    classified_at: new Date().toISOString(),
+  })
+
+  const cleanContent = match.content
+    .replace(/^⏰\s*\*Lembrete!?\*\s*\n?\n?/, '')
+    .replace(/^📅\s*\*Lembrete de evento\*\s*\n?\n?/, '')
+    .substring(0, 60)
+
+  const recLabel = match.recurrence ? ` (${RECURRENCE_LABELS_ROUTER[match.recurrence] || match.recurrence})` : ' (único)'
+  const dateStr = new Date(match.scheduled_for).toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+
+  return {
+    text: `Achei o lembrete: *${cleanContent}*\n📅 ${dateStr}${recLabel}\n\nCancelo? (sim/não)`,
+    intent: 'cancel_reminder',
+    confidence: classification.confidence,
+  }
+}
+
+// ============================================
+// HELPERS: BUSCA DE LEMBRETES
+// ============================================
+
+interface ReminderRow {
+  id: string
+  content: string
+  scheduled_for: string
+  recurrence: string | null
+  source: string
+}
+
+const RECURRENCE_LABELS_ROUTER: Record<string, string> = {
+  daily: '🔄 todo dia',
+  weekdays: '🔄 dias úteis',
+  weekly: '🔄 toda semana',
+  monthly: '🔄 todo mês',
+}
+
+// deno-lint-ignore no-explicit-any
+async function findUserReminders(supabase: any, userId: string): Promise<ReminderRow[]> {
+  const { data } = await supabase
+    .from('whatsapp_scheduled_messages')
+    .select('id, content, scheduled_for, recurrence, source')
+    .eq('target_user_id', userId)
+    .eq('status', 'pending')
+    .in('source', ['manual', 'dashboard'])
+    .order('scheduled_for', { ascending: true })
+    .limit(20)
+
+  return data || []
+}
+
+function findBestReminderMatch(reminders: ReminderRow[], searchText: string): ReminderRow | null {
+  if (!searchText || reminders.length === 0) {
+    // Se só tem 1 lembrete, retorna ele
+    return reminders.length === 1 ? reminders[0] : null
+  }
+
+  const search = searchText.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+
+  let bestMatch: ReminderRow | null = null
+  let bestScore = 0
+
+  for (const r of reminders) {
+    let score = 0
+    const content = r.content.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    const scheduledDate = new Date(r.scheduled_for)
+
+    // Match por conteúdo (palavras em comum)
+    const searchWords = search.split(/\s+/).filter(w => w.length > 2)
+    for (const word of searchWords) {
+      if (content.includes(word)) score += 3
+    }
+
+    // Match por recorrência mencionada
+    if (search.includes('segunda') && scheduledDate.getDay() === 1) score += 2
+    if (search.includes('terca') && scheduledDate.getDay() === 2) score += 2
+    if (search.includes('quarta') && scheduledDate.getDay() === 3) score += 2
+    if (search.includes('quinta') && scheduledDate.getDay() === 4) score += 2
+    if (search.includes('sexta') && scheduledDate.getDay() === 5) score += 2
+
+    if (search.includes('diario') || search.includes('todo dia')) {
+      if (r.recurrence === 'daily') score += 3
+    }
+    if (search.includes('semanal') || search.includes('toda semana') || search.includes('toda segunda')) {
+      if (r.recurrence === 'weekly') score += 3
+    }
+    if (search.includes('mensal') || search.includes('todo mes')) {
+      if (r.recurrence === 'monthly') score += 3
+    }
+
+    // Match por horário mencionado
+    const timeMatch = search.match(/(\d{1,2})\s*(?:h|hora|:)/)
+    if (timeMatch) {
+      const searchHour = parseInt(timeMatch[1])
+      const reminderHour = scheduledDate.getHours()
+      if (searchHour === reminderHour || (searchHour < 7 && searchHour + 12 === reminderHour)) score += 2
+    }
+
+    if (score > bestScore) {
+      bestScore = score
+      bestMatch = r
+    }
+  }
+
+  // Threshold mínimo para considerar match
+  return bestScore >= 2 ? bestMatch : (reminders.length === 1 ? reminders[0] : null)
+}
+
+// ============================================
+// WA-09: UPDATE/CANCEL CALENDAR EVENT
+// ============================================
+
+interface CalendarRow {
+  id: string
+  title: string
+  start_time: string
+  end_time: string | null
+  type: string
+  location: string | null
+  participants: string | null
+  created_by: string
+}
+
+const CALENDAR_TYPE_EMOJI: Record<string, string> = {
+  event: '📅', delivery: '✅', creation: '🎨', task: '📋', meeting: '🤝',
+}
+
+// deno-lint-ignore no-explicit-any
+async function findUserCalendarEvents(supabase: any, userId: string): Promise<CalendarRow[]> {
+  // Buscar eventos futuros e recentes (últimos 7 dias + próximos 30 dias)
+  const pastWeek = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
+  const futureMonth = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+
+  const { data } = await supabase
+    .from('calendar_items')
+    .select('id, title, start_time, end_time, type, location, participants, created_by')
+    .eq('created_by', userId)
+    .gte('start_time', pastWeek)
+    .lte('start_time', futureMonth)
+    .is('deleted_at', null)
+    .order('start_time', { ascending: true })
+    .limit(30)
+
+  return data || []
+}
+
+function findBestCalendarMatch(events: CalendarRow[], searchText: string): CalendarRow | null {
+  if (!searchText || events.length === 0) {
+    return events.length === 1 ? events[0] : null
+  }
+
+  const search = searchText.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+
+  let bestMatch: CalendarRow | null = null
+  let bestScore = 0
+
+  for (const ev of events) {
+    let score = 0
+    const title = ev.title.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    const eventDate = new Date(ev.start_time)
+    const participants = (ev.participants || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+
+    // Match por título (palavras em comum)
+    const searchWords = search.split(/\s+/).filter(w => w.length > 2)
+    for (const word of searchWords) {
+      if (title.includes(word)) score += 4
+      if (participants.includes(word)) score += 3
+    }
+
+    // Match por tipo de evento
+    if (search.includes('reuniao') || search.includes('reunião')) {
+      if (ev.type === 'meeting') score += 2
+    }
+    if (search.includes('gravacao') || search.includes('gravação')) {
+      if (ev.type === 'creation' || title.includes('gravação') || title.includes('gravacao')) score += 3
+    }
+    if (search.includes('entrega') || search.includes('delivery')) {
+      if (ev.type === 'delivery') score += 2
+    }
+
+    // Match por dia da semana
+    const dayNames: Record<string, number> = {
+      'domingo': 0, 'segunda': 1, 'terca': 2, 'quarta': 3,
+      'quinta': 4, 'sexta': 5, 'sabado': 6,
+    }
+    for (const [dayName, dayNum] of Object.entries(dayNames)) {
+      if (search.includes(dayName) && eventDate.getDay() === dayNum) score += 3
+    }
+
+    // Match por data relativa
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    const eventDay = new Date(eventDate)
+    eventDay.setHours(0, 0, 0, 0)
+    const diffDays = Math.round((eventDay.getTime() - today.getTime()) / (24 * 60 * 60 * 1000))
+
+    if (search.includes('hoje') && diffDays === 0) score += 3
+    if (search.includes('amanha') && diffDays === 1) score += 3
+    if ((search.includes('semana que vem') || search.includes('proxima semana')) && diffDays >= 7 && diffDays <= 14) score += 2
+
+    // Match por horário mencionado
+    const timeMatch = search.match(/(\d{1,2})\s*(?:h|hora|:)/)
+    if (timeMatch) {
+      const searchHour = parseInt(timeMatch[1])
+      const eventHour = eventDate.getHours()
+      if (searchHour === eventHour || (searchHour < 7 && searchHour + 12 === eventHour)) score += 2
+    }
+
+    // Match por participante mencionado
+    if (search.includes('john') && participants.includes('john')) score += 4
+    if (search.includes('jereh') && participants.includes('jereh')) score += 4
+    if (search.includes('rayan') && participants.includes('rayan')) score += 4
+
+    // Priorizar eventos futuros sobre passados
+    if (eventDate.getTime() > Date.now()) score += 1
+
+    if (score > bestScore) {
+      bestScore = score
+      bestMatch = ev
+    }
+  }
+
+  return bestScore >= 2 ? bestMatch : (events.length === 1 ? events[0] : null)
+}
+
+function formatCalendarEventSummary(ev: CalendarRow): string {
+  const emoji = CALENDAR_TYPE_EMOJI[ev.type] || '📅'
+  const dt = new Date(ev.start_time)
+  const dateStr = dt.toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+  const locationLine = ev.location ? `\n📍 ${ev.location}` : ''
+  const participantsLine = ev.participants ? `\n👥 ${ev.participants}` : ''
+  return `${emoji} *${ev.title}*\n🗓️ ${dateStr}${locationLine}${participantsLine}`
+}
+
+// deno-lint-ignore no-explicit-any
+async function handleUpdateCalendar(
+  classification: ClassificationResult,
+  userName: string,
+  supabase: any,
+  userId: string,
+): Promise<{ text: string; intent: string; confidence: number }> {
+  const entities = classification.entities as Record<string, unknown>
+  const searchText = String(entities.event_search_text || entities.title || '')
+
+  // Buscar eventos do usuário
+  const events = await findUserCalendarEvents(supabase, userId)
+
+  if (events.length === 0) {
+    return {
+      text: `Não encontrei nenhum evento seu na agenda pra alterar, ${userName}.`,
+      intent: 'update_calendar',
+      confidence: classification.confidence,
+    }
+  }
+
+  // Encontrar o evento mais relevante
+  const match = findBestCalendarMatch(events, searchText)
+
+  if (!match) {
+    const list = events.filter(e => new Date(e.start_time).getTime() > Date.now()).slice(0, 5).map((ev: CalendarRow, i: number) => {
+      const emoji = CALENDAR_TYPE_EMOJI[ev.type] || '📅'
+      const dt = new Date(ev.start_time)
+      const dateStr = dt.toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+      return `${i + 1}. ${emoji} ${ev.title} — ${dateStr}`
+    }).join('\n')
+
+    return {
+      text: `Não consegui identificar qual evento alterar. Seus próximos eventos:\n\n${list}\n\nQual deles?`,
+      intent: 'update_calendar',
+      confidence: classification.confidence,
+    }
+  }
+
+  // Montar descrição das mudanças
+  const changes: string[] = []
+  if (entities.event_new_date) changes.push(`📅 Nova data: ${entities.event_new_date}`)
+  if (entities.event_new_time) changes.push(`🕐 Novo horário: ${entities.event_new_time}`)
+  if (entities.event_new_location) changes.push(`📍 Novo local: ${entities.event_new_location}`)
+  if (entities.event_new_title) changes.push(`📝 Novo título: ${entities.event_new_title}`)
+  const changeDesc = changes.length > 0 ? changes.join('\n') : '(sem alterações especificadas)'
+
+  // Salvar contexto de confirmação
+  await saveConversationContext(supabase, userId, 'updating_calendar', {
+    step: 'awaiting_confirmation',
+    entities: {
+      event_id: match.id,
+      event_title: match.title,
+      event_start_time: match.start_time,
+      event_new_date: entities.event_new_date || null,
+      event_new_time: entities.event_new_time || null,
+      event_new_location: entities.event_new_location || null,
+      event_new_title: entities.event_new_title || null,
+      change_description: changeDesc,
+    },
+    classified_at: new Date().toISOString(),
+  })
+
+  return {
+    text: `Achei o evento:\n${formatCalendarEventSummary(match)}\n\nAlterações:\n${changeDesc}\n\nConfirma? (sim/não)`,
+    intent: 'update_calendar',
+    confidence: classification.confidence,
+  }
+}
+
+// deno-lint-ignore no-explicit-any
+async function handleCancelCalendar(
+  classification: ClassificationResult,
+  userName: string,
+  supabase: any,
+  userId: string,
+): Promise<{ text: string; intent: string; confidence: number }> {
+  const entities = classification.entities as Record<string, unknown>
+  const searchText = String(entities.event_search_text || entities.title || '')
+
+  // Buscar eventos do usuário
+  const events = await findUserCalendarEvents(supabase, userId)
+
+  if (events.length === 0) {
+    return {
+      text: `Não encontrei nenhum evento seu na agenda pra cancelar, ${userName}.`,
+      intent: 'cancel_calendar',
+      confidence: classification.confidence,
+    }
+  }
+
+  // Encontrar o evento mais relevante
+  const match = findBestCalendarMatch(events, searchText)
+
+  if (!match) {
+    const list = events.filter(e => new Date(e.start_time).getTime() > Date.now()).slice(0, 5).map((ev: CalendarRow, i: number) => {
+      const emoji = CALENDAR_TYPE_EMOJI[ev.type] || '📅'
+      const dt = new Date(ev.start_time)
+      const dateStr = dt.toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+      return `${i + 1}. ${emoji} ${ev.title} — ${dateStr}`
+    }).join('\n')
+
+    return {
+      text: `Não consegui identificar qual evento cancelar. Seus próximos eventos:\n\n${list}\n\nQual deles?`,
+      intent: 'cancel_calendar',
+      confidence: classification.confidence,
+    }
+  }
+
+  // Salvar contexto de confirmação
+  await saveConversationContext(supabase, userId, 'cancelling_calendar', {
+    step: 'awaiting_confirmation',
+    entities: {
+      event_id: match.id,
+      event_title: match.title,
+      event_start_time: match.start_time,
+    },
+    classified_at: new Date().toISOString(),
+  })
+
+  return {
+    text: `Achei o evento:\n${formatCalendarEventSummary(match)}\n\nCancelo? (sim/não)`,
+    intent: 'cancel_calendar',
     confidence: classification.confidence,
   }
 }
@@ -1930,6 +2549,19 @@ function buildConfirmationMessage(action: string, entities: Record<string, unkno
     if (entities.assigned_to) parts.push(`👤 ${entities.assigned_to}`)
     if (entities.deadline || entities.date) parts.push(`📅 Prazo: ${entities.deadline || entities.date}`)
     if (entities.content_type) parts.push(`🎬 ${entities.content_type}`)
+  } else if (action === 'create_reminder') {
+    parts.push('⏰ *' + (entities.reminder_text || 'Lembrete') + '*')
+    if (entities.reminder_date) parts.push(`📅 ${entities.reminder_date}`)
+    if (entities.reminder_time) parts.push(`🕐 ${entities.reminder_time}`)
+    if (entities.reminder_recurrence) {
+      const recLabels: Record<string, string> = {
+        daily: '🔄 Todo dia', weekdays: '🔄 Dias úteis (seg-sex)',
+        weekly: '🔄 Toda semana', monthly: '🔄 Todo mês',
+      }
+      parts.push(recLabels[entities.reminder_recurrence as string] || `🔄 ${entities.reminder_recurrence}`)
+    } else {
+      parts.push('📌 Lembrete único')
+    }
   }
 
   parts.push('\nConfirma? (sim/não)')
