@@ -23,7 +23,7 @@ import { processRealtimeAlerts } from './realtime-alerts.ts'
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
 const SUPABASE_SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 const UAZAPI_SERVER_URL = Deno.env.get('UAZAPI_SERVER_URL') || 'https://lamusic.uazapi.com'
-const UAZAPI_TOKEN = Deno.env.get('UAZAPI_TOKEN') || 'b9ca8a2c-ec93-4ff7-8805-6fa634949282'
+const UAZAPI_TOKEN = Deno.env.get('UAZAPI_TOKEN')!
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',

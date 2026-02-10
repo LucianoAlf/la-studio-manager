@@ -1002,6 +1002,7 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
   // ========================================
   // ROTEAR POR INTENÇÃO
   // ========================================
+  console.log(`[WA-ROUTE-V69] intent=${classification.intent}, text="${parsed.text?.substring(0, 60)}", userId=${userId}, authUserId=${authUserId}`)
   switch (classification.intent) {
     case 'create_card':
       return handleCreateCard(classification, firstName, supabase, userId)
@@ -1693,8 +1694,7 @@ interface CalendarRow {
   end_time: string | null
   type: string
   location: string | null
-  participants: string | null
-  created_by: string
+  responsible_user_id: string
 }
 
 const CALENDAR_TYPE_EMOJI: Record<string, string> = {
@@ -1713,13 +1713,18 @@ async function findUserCalendarEvents(supabase: any, authUserId: string): Promis
   // Usar authUserId (auth.users.id) para filtrar corretamente
   const { data, error } = await supabase
     .from('calendar_items')
-    .select('id, title, start_time, end_time, type, location, participants, responsible_user_id')
+    .select('id, title, start_time, end_time, type, location, responsible_user_id')
     .eq('responsible_user_id', authUserId)
     .gte('start_time', pastWeek)
     .lte('start_time', futureMonth)
     .is('deleted_at', null)
     .order('start_time', { ascending: true })
     .limit(30)
+
+  if (error) {
+    console.error(`[WA-09] findUserCalendarEvents ERROR:`, error)
+  }
+  console.log(`[WA-09] findUserCalendarEvents result: ${data?.length || 0} eventos`)
 
   return data || []
 }
@@ -1738,13 +1743,13 @@ function findBestCalendarMatch(events: CalendarRow[], searchText: string): Calen
     let score = 0
     const title = ev.title.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     const eventDate = new Date(ev.start_time)
-    const participants = (ev.participants || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    // participants não existe como coluna — buscar no título (nomes de participantes geralmente estão no título)
 
     // Match por título (palavras em comum)
     const searchWords = search.split(/\s+/).filter(w => w.length > 2)
     for (const word of searchWords) {
       if (title.includes(word)) score += 4
-      if (participants.includes(word)) score += 3
+      // participantes podem estar no título do evento (ex: 'Reunião com Jereh')
     }
 
     // Match por tipo de evento
@@ -1786,10 +1791,10 @@ function findBestCalendarMatch(events: CalendarRow[], searchText: string): Calen
       if (searchHour === eventHour || (searchHour < 7 && searchHour + 12 === eventHour)) score += 2
     }
 
-    // Match por participante mencionado
-    if (search.includes('john') && participants.includes('john')) score += 4
-    if (search.includes('jereh') && participants.includes('jereh')) score += 4
-    if (search.includes('rayan') && participants.includes('rayan')) score += 4
+    // Match por participante mencionado (nomes geralmente estão no título)
+    if (search.includes('john') && title.includes('john')) score += 4
+    if (search.includes('jereh') && title.includes('jereh')) score += 4
+    if (search.includes('rayan') && title.includes('rayan')) score += 4
 
     // Priorizar eventos futuros sobre passados
     if (eventDate.getTime() > Date.now()) score += 1
@@ -1808,8 +1813,7 @@ function formatCalendarEventSummary(ev: CalendarRow): string {
   const dt = new Date(ev.start_time)
   const dateStr = dt.toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
   const locationLine = ev.location ? `\n📍 ${ev.location}` : ''
-  const participantsLine = ev.participants ? `\n👥 ${ev.participants}` : ''
-  return `${emoji} *${ev.title}*\n🗓️ ${dateStr}${locationLine}${participantsLine}`
+  return `${emoji} *${ev.title}*\n🗓️ ${dateStr}${locationLine}`
 }
 
 // deno-lint-ignore no-explicit-any

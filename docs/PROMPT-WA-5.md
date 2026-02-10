@@ -12,7 +12,7 @@
 
 ### WA-01 a WA-04 — Stack Atual ✅
 - **Edge Function:** `process-whatsapp-message` (v15) — recebe mensagens, classifica, executa, consulta
-- **UAZAPI:** `https://lamusic.uazapi.com` | Token: `b9ca8a2c-ec93-4ff7-8805-6fa634949282`
+- **UAZAPI:** `https://lamusic.uazapi.com` | Token: `[UAZAPI_TOKEN - ver env vars]`
 - **Envio:** `POST /send/text` com headers `{ token, Content-Type: application/json }` e body `{ number, text, delay, linkPreview }`
 - **Memória:** 3 tabelas (`agent_memory_episodes`, `agent_memory_facts`, `agent_memory_team`) + RPCs
 - **RPCs existentes:** `get_agent_memory_context()`, `save_memory_episode()`, `learn_or_reinforce_fact()`, `cleanup_old_episodes()`, `decay_stale_facts()`, `get_cards_count_by_column()`
@@ -51,7 +51,7 @@ CREATE TABLE whatsapp_scheduled_messages (
 SUPABASE_URL              = https://rhxqwraqpabgecgojytj.supabase.co
 SUPABASE_SERVICE_ROLE_KEY = (já configurada)
 UAZAPI_SERVER_URL         = https://lamusic.uazapi.com
-UAZAPI_TOKEN              = b9ca8a2c-ec93-4ff7-8805-6fa634949282
+UAZAPI_TOKEN              = [UAZAPI_TOKEN - ver env vars]
 ```
 
 ### ⚠️ DOIS IDs — Lembrete
@@ -283,7 +283,7 @@ import { processWeeklySummary } from './weekly-summary.ts'
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
 const SUPABASE_SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 const UAZAPI_SERVER_URL = Deno.env.get('UAZAPI_SERVER_URL') || 'https://lamusic.uazapi.com'
-const UAZAPI_TOKEN = Deno.env.get('UAZAPI_TOKEN') || 'b9ca8a2c-ec93-4ff7-8805-6fa634949282'
+const UAZAPI_TOKEN = Deno.env.get('UAZAPI_TOKEN') || '[UAZAPI_TOKEN - ver env vars]'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -1257,7 +1257,7 @@ export async function resolveUserNames(
 A Edge Function herda as env vars do projeto. Se elas já estão configuradas para `process-whatsapp-message`, a nova função vai ter acesso automático. Caso contrário:
 ```bash
 supabase secrets set UAZAPI_SERVER_URL=https://lamusic.uazapi.com
-supabase secrets set UAZAPI_TOKEN=b9ca8a2c-ec93-4ff7-8805-6fa634949282
+supabase secrets set UAZAPI_TOKEN=[UAZAPI_TOKEN - ver env vars]
 ```
 
 ---

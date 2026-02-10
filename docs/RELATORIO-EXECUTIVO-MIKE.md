@@ -294,7 +294,7 @@ la-studio-manager/
 |-------|-------|
 | **Provedor** | UAZAPI (API WhatsApp não-oficial) |
 | **Server URL** | `https://lamusic.uazapi.com` |
-| **Instance Token** | `b9ca8a2c-ec93-4ff7-8805-6fa634949282` |
+| **Instance Token** | `[UAZAPI_TOKEN - ver env vars]` |
 | **Número conectado** | `5521989784688` (número do bot Mike) |
 | **Status** | ✅ Connected |
 | **Webhook ID** | `r46efae1d89f709` |
@@ -1328,7 +1328,7 @@ Mike: [Salva contato automaticamente] + [Envia convite DM para Pedro]
 | `GEMINI_API_KEY` | Google Gemini API (classificador NLP) |
 | `OPENAI_API_KEY` | OpenAI GPT-4.1 (fallback) + GPT-4o Vision (imagem) |
 | `UAZAPI_SERVER_URL` | `https://lamusic.uazapi.com` |
-| `UAZAPI_TOKEN` | `b9ca8a2c-ec93-4ff7-8805-6fa634949282` |
+| `UAZAPI_TOKEN` | `[UAZAPI_TOKEN - ver env vars]` |
 
 ### 16.3 Variáveis de Ambiente do Frontend (.env.local)
 
