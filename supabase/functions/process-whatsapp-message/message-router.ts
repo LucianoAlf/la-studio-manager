@@ -15,7 +15,7 @@ import { analyzeImage } from './image-handler.ts'
 import { getPendingAction, clearPendingAction, savePendingAction, processFollowUpResponse, smartProcessFollowUp } from './followup-handler.ts'
 import type { PendingAction } from './followup-handler.ts'
 import { generateFollowUp, getMissingFields, buildPartialSummary } from './mike-personality.ts'
-import { getEventConfirmation, processParticipantResponse, notifyParticipants, parseParticipantNames, findParticipantByName, getPendingParticipantPhone, processPhoneResponse, savePendingParticipantPhone, getPendingSaveContact, processSaveContactResponse, saveContact, queryContacts } from './participant-notifier.ts'
+import { getEventConfirmation, processParticipantResponse, notifyParticipants, notifyParticipantsOfChange, parseParticipantNames, findParticipantByName, getPendingParticipantPhone, processPhoneResponse, savePendingParticipantPhone, getPendingSaveContact, processSaveContactResponse, saveContact, queryContacts } from './participant-notifier.ts'
 import type { PendingParticipantPhone } from './participant-notifier.ts'
 import { sendTextMessage } from './send-message.ts'
 import type { ClassificationResult } from './gemini-classifier.ts'
@@ -794,6 +794,36 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
               const names = notified.map(r => r.participantName).join(', ')
               result.message += `\nNotifiquei ${names} pelo WhatsApp.`
             }
+          }
+        }
+
+        // ========================================
+        // WA-09.2: NOTIFICAR PARTICIPANTES APÓS ALTERAR/CANCELAR EVENTO
+        // Extrai nomes do título do evento e envia DM avisando da mudança
+        // ========================================
+        if (result.success && (activeContext.context_type === 'updating_calendar' || activeContext.context_type === 'cancelling_calendar')) {
+          try {
+            const eventTitle = (ents.event_title as string) || ''
+            const eventDate = ents.event_start_time
+              ? new Date(ents.event_start_time as string).toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+              : ''
+            const changeType = activeContext.context_type === 'updating_calendar' ? 'update' : 'cancel'
+            const changeDescription = (ents.change_description as string) || 'Alterações aplicadas.'
+
+            const { notifiedNames } = await notifyParticipantsOfChange(supabase, params.uazapiUrl, params.uazapiToken, {
+              eventTitle,
+              eventDate,
+              changeType,
+              changeDescription,
+              creatorName: firstName,
+              creatorUserId: userId,
+            })
+
+            if (notifiedNames.length > 0) {
+              result.message += `\nAvisei ${notifiedNames.join(', ')} sobre ${changeType === 'update' ? 'a alteração' : 'o cancelamento'}.`
+            }
+          } catch (e) {
+            console.error('[NOTIFY-CHANGE] Erro ao notificar participantes:', e)
           }
         }
 

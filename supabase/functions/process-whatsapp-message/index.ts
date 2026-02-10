@@ -463,6 +463,23 @@ serve(async (req: Request) => {
       })
     }
 
+    // --- DEDUPLICAÇÃO DM: ignorar webhook duplicado ---
+    if (parsed.messageId) {
+      const { data: alreadyProcessed } = await supabase
+        .from('whatsapp_messages')
+        .select('id')
+        .eq('uazapi_message_id', parsed.messageId)
+        .eq('is_group_message', false)
+        .maybeSingle()
+
+      if (alreadyProcessed) {
+        console.log(`[WA] DM ${parsed.messageId} já processada, ignorando duplicata`)
+        return new Response(JSON.stringify({ success: true, status: 'dm_deduplicated' }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
+      }
+    }
+
     // 4. Salvar mensagem no banco (status: pending)
     // user_id aqui é profile_id (PK de user_profiles)
     const { data: savedMessage, error: saveError } = await supabase

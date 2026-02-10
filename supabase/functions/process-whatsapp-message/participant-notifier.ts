@@ -977,3 +977,106 @@ export async function processSaveContactResponse(
     handled: true,
   }
 }
+
+// =============================================================================
+// WA-09.2: NOTIFICAR PARTICIPANTES SOBRE ALTERAÇÃO/CANCELAMENTO DE EVENTO
+// =============================================================================
+
+/**
+ * Extrai nomes de participantes do título do evento.
+ * Ex: "Reunião com o Jereh" → ["Jereh"]
+ * Ex: "Reunião com John, Rayan e Jereh" → ["John", "Rayan", "Jereh"]
+ */
+function extractParticipantNamesFromTitle(title: string): string[] {
+  // Padrão: "... com [nomes]"
+  const comMatch = title.match(/com\s+(?:o\s+|a\s+)?(.+)/i)
+  if (!comMatch) return []
+
+  const namesStr = comMatch[1]
+    .replace(/\s+e\s+/gi, ', ')
+    .replace(/\s*,\s*/g, ', ')
+
+  return namesStr
+    .split(', ')
+    .map(n => n.trim())
+    .filter(n => n.length > 1)
+}
+
+/**
+ * Notifica participantes sobre alteração ou cancelamento de um evento.
+ * Busca participantes pelo nome no título do evento e envia DM.
+ */
+export async function notifyParticipantsOfChange(
+  // deno-lint-ignore no-explicit-any
+  supabase: any,
+  serverUrl: string,
+  token: string,
+  params: {
+    eventTitle: string
+    eventDate: string
+    changeType: 'update' | 'cancel'
+    changeDescription: string
+    creatorName: string
+    creatorUserId: string
+  }
+): Promise<{ notifiedNames: string[] }> {
+  const names = extractParticipantNamesFromTitle(params.eventTitle)
+  if (names.length === 0) {
+    console.log(`[NOTIFY-CHANGE] Nenhum participante encontrado no título: "${params.eventTitle}"`)
+    return { notifiedNames: [] }
+  }
+
+  console.log(`[NOTIFY-CHANGE] Participantes extraídos do título: ${names.join(', ')}`)
+
+  const notifiedNames: string[] = []
+
+  for (const name of names) {
+    const participant = await findParticipantByName(supabase, name)
+
+    if (!participant) {
+      console.log(`[NOTIFY-CHANGE] ${name} não encontrado no sistema`)
+      continue
+    }
+
+    // Não notificar o próprio criador
+    if (participant.id === params.creatorUserId) {
+      console.log(`[NOTIFY-CHANGE] ${name} é o próprio criador, pulando`)
+      continue
+    }
+
+    if (!participant.phoneNumber) {
+      console.log(`[NOTIFY-CHANGE] ${name} não tem telefone cadastrado`)
+      continue
+    }
+
+    // Montar mensagem
+    let msg: string
+    if (params.changeType === 'cancel') {
+      msg = `Fala ${participant.displayName}! O ${params.creatorName} cancelou o evento:`
+      msg += `\n\n❌ *${params.eventTitle}*`
+      msg += `\n📅 ${params.eventDate}`
+      msg += `\n\nO evento foi removido da agenda.`
+    } else {
+      msg = `Fala ${participant.displayName}! O ${params.creatorName} alterou o evento:`
+      msg += `\n\n📝 *${params.eventTitle}*`
+      msg += `\n📅 ${params.eventDate}`
+      msg += `\n\n${params.changeDescription}`
+    }
+
+    const sendResult = await sendTextMessage({
+      serverUrl,
+      token,
+      to: participant.phoneNumber,
+      text: msg,
+    })
+
+    if (sendResult.success) {
+      console.log(`[NOTIFY-CHANGE] ✅ ${participant.displayName} notificado`)
+      notifiedNames.push(participant.displayName)
+    } else {
+      console.error(`[NOTIFY-CHANGE] ❌ Falha ao notificar ${participant.displayName}:`, sendResult.error)
+    }
+  }
+
+  return { notifiedNames }
+}
