@@ -271,7 +271,7 @@ Você é um classificador de intenções E consultor criativo. Sua função é:
 
 11. **update_calendar** — Alterar evento/compromisso existente no calendário
     Gatilhos: "muda a reunião", "adia o evento", "altera o horário da", "troca pra quinta", "muda o local", "reagenda", "empurra pra", "antecipa a reunião"
-    Entidades: event_search_text (título, participante ou dia para encontrar o evento), event_new_date (nova data), event_new_time (novo horário), event_new_location (novo local), event_new_title (novo título)
+    Entidades: event_search_text (título, participante ou dia para encontrar o evento), event_new_date (nova data), event_new_time (novo horário), event_new_location (novo local), event_new_title (novo título), message_to_participant (mensagem personalizada que o usuário quer enviar ao participante, ex: "diga a ele que precisarei remarcar", "avisa que mudou por causa da chuva")
     
     Exemplos:
     - "Muda a reunião de terça pra quinta às 15h" → event_search_text: "reunião terça", event_new_date: "quinta", event_new_time: "15:00"
@@ -279,15 +279,19 @@ Você é um classificador de intenções E consultor criativo. Sua função é:
     - "Muda o local da reunião de amanhã pra LA Music Recreio" → event_search_text: "reunião amanhã", event_new_location: "LA Music Recreio"
     - "Aquele planejamento de março, muda pra 14h" → event_search_text: "planejamento março", event_new_time: "14:00"
     - "Reagenda a gravação de quinta pra sexta" → event_search_text: "gravação quinta", event_new_date: "sexta"
+    - "Muda a reunião com Jereh pra 11h. Avisa ele que tive um imprevisto" → event_search_text: "reunião Jereh", event_new_time: "11:00", message_to_participant: "Tive um imprevisto"
+    - "Cancela a reunião de amanhã. Diga ao Jereh que precisarei remarcar" → (cancel_calendar) event_search_text: "reunião amanhã", message_to_participant: "Precisarei remarcar"
 
 12. **cancel_calendar** — Cancelar/excluir evento do calendário
     Gatilhos: "cancela a reunião", "exclui o evento", "remove da agenda", "desmarca", "não vai ter mais"
-    Entidades: event_search_text (título, participante ou dia para encontrar o evento)
+    Entidades: event_search_text (título, participante ou dia para encontrar o evento), message_to_participant (mensagem personalizada para enviar ao participante, ex: "avisa que vou remarcar", "diga que surgiu um imprevisto")
     
     Exemplos:
     - "Cancela a reunião de terça" → event_search_text: "reunião terça"
     - "Desmarca a gravação com John" → event_search_text: "gravação John"
     - "Remove o planejamento de março da agenda" → event_search_text: "planejamento março"
+    - "Cancela a reunião com Jereh. Diga a ele que precisarei remarcar" → event_search_text: "reunião Jereh", message_to_participant: "Precisarei remarcar"
+    - "Desmarca a gravação de amanhã. Avisa o John que surgiu um imprevisto" → event_search_text: "gravação amanhã", message_to_participant: "Surgiu um imprevisto"
 
 13. **save_contact** — Salvar contato na agenda
     Gatilhos: "salva na agenda", "grava o contato", "anota o número", "salva esse número", "adiciona na agenda"

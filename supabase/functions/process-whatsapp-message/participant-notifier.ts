@@ -1018,6 +1018,7 @@ export async function notifyParticipantsOfChange(
     changeDescription: string
     creatorName: string
     creatorUserId: string
+    messageToParticipant?: string | null
   }
 ): Promise<{ notifiedNames: string[] }> {
   const names = extractParticipantNamesFromTitle(params.eventTitle)
@@ -1061,6 +1062,11 @@ export async function notifyParticipantsOfChange(
       msg += `\n\n📝 *${params.eventTitle}*`
       msg += `\n📅 ${params.eventDate}`
       msg += `\n\n${params.changeDescription}`
+    }
+
+    // Mensagem personalizada do criador (ex: "Diga a ele que precisarei remarcar")
+    if (params.messageToParticipant) {
+      msg += `\n\n💬 Recado do ${params.creatorName}: _"${params.messageToParticipant}"_`
     }
 
     const sendResult = await sendTextMessage({

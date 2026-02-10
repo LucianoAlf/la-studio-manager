@@ -810,6 +810,8 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
             const changeType = activeContext.context_type === 'updating_calendar' ? 'update' : 'cancel'
             const changeDescription = (ents.change_description as string) || 'Alterações aplicadas.'
 
+            const messageToParticipant = (ents.message_to_participant as string) || null
+
             const { notifiedNames } = await notifyParticipantsOfChange(supabase, params.uazapiUrl, params.uazapiToken, {
               eventTitle,
               eventDate,
@@ -817,6 +819,7 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
               changeDescription,
               creatorName: firstName,
               creatorUserId: userId,
+              messageToParticipant,
             })
 
             if (notifiedNames.length > 0) {
@@ -1912,6 +1915,7 @@ async function handleUpdateCalendar(
       event_new_location: entities.event_new_location || null,
       event_new_title: entities.event_new_title || null,
       change_description: changeDesc,
+      message_to_participant: entities.message_to_participant || null,
     },
     classified_at: new Date().toISOString(),
   })
@@ -1970,6 +1974,7 @@ async function handleCancelCalendar(
       event_id: match.id,
       event_title: match.title,
       event_start_time: match.start_time,
+      message_to_participant: entities.message_to_participant || null,
     },
     classified_at: new Date().toISOString(),
   })
