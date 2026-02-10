@@ -1,9 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-// Rotas públicas que não precisam de autenticação
-const PUBLIC_ROUTES = ["/login", "/api/auth"];
-
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });
 
@@ -28,25 +25,8 @@ export async function updateSession(request: NextRequest) {
     }
   );
 
-  // Refresh da sessão e verificar autenticação
-  const { data: { user } } = await supabase.auth.getUser();
-
-  const pathname = request.nextUrl.pathname;
-  const isPublicRoute = PUBLIC_ROUTES.some((route) => pathname.startsWith(route));
-
-  // Não autenticado tentando acessar rota protegida → redirecionar para /login
-  if (!user && !isPublicRoute) {
-    const loginUrl = request.nextUrl.clone();
-    loginUrl.pathname = "/login";
-    return NextResponse.redirect(loginUrl);
-  }
-
-  // Já autenticado tentando acessar /login → redirecionar para /
-  if (user && pathname === "/login") {
-    const homeUrl = request.nextUrl.clone();
-    homeUrl.pathname = "/";
-    return NextResponse.redirect(homeUrl);
-  }
+  // Apenas refresh da sessão (sem redirecionamentos - proteção é client-side)
+  await supabase.auth.getUser();
 
   return supabaseResponse;
 }

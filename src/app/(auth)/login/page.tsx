@@ -1,14 +1,15 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { Envelope, Lock, ArrowRight, CheckCircle } from "@phosphor-icons/react";
 import { createClient } from "@/lib/supabase/client";
-import Image from "next/image";
 
 const AUTH_TOKEN_KEY = "la-studio-auth-token";
 const AUTH_REFRESH_KEY = "la-studio-auth-refresh";
 
 export default function LoginPage() {
+  const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -16,21 +17,17 @@ export default function LoginPage() {
   const [resetMode, setResetMode] = useState(false);
   const [resetSent, setResetSent] = useState(false);
 
-  // Verificar se já está logado
+  // Verificar se já está logado (navegação client-side para evitar conflito com middleware)
   useEffect(() => {
     async function check() {
-      // Verificar localStorage primeiro (fallback para Simple Browser)
-      if (localStorage.getItem(AUTH_TOKEN_KEY)) {
-        window.location.replace("/");
-        return;
-      }
-      // Verificar sessão Supabase (cookies)
       const supabase = createClient();
       const { data: { user } } = await supabase.auth.getUser();
-      if (user) window.location.replace("/");
+      if (user) {
+        router.replace("/");
+      }
     }
     check();
-  }, []);
+  }, [router]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -54,7 +51,9 @@ export default function LoginPage() {
       localStorage.setItem(AUTH_TOKEN_KEY, data.session.access_token);
       localStorage.setItem(AUTH_REFRESH_KEY, data.session.refresh_token);
 
-      window.location.replace("/");
+      // Navegação client-side (SPA) — evita que o middleware intercepte antes dos cookies serem propagados
+      router.replace("/");
+      router.refresh();
     } catch {
       setError("Erro de conexão. Tente novamente.");
       setLoading(false);
@@ -96,13 +95,12 @@ export default function LoginPage() {
         {/* Logo */}
         <div className="mb-10 flex flex-col items-center">
           <div className="mb-4 flex h-16 w-16 items-center justify-center">
-            <Image
+            <img
               src="/images/logos/logo-LA-colapsed.png"
               alt="LA Studio"
               width={64}
               height={64}
               className="object-contain"
-              priority
             />
           </div>
           <h1 className="text-3xl font-bold tracking-tight text-white">
