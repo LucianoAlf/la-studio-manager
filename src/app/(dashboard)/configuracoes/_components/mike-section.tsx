@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Robot, SpinnerGap, FloppyDisk, Plus, Trash } from "@phosphor-icons/react";
+import { Robot, SpinnerGap, FloppyDisk, Plus, Trash, Power } from "@phosphor-icons/react";
 import type { MikeConfig } from "@/lib/types/settings";
 import { updateMikeConfig } from "@/lib/queries/settings";
 import { toast } from "sonner";
@@ -14,6 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/shadcn/select";
+import { Switch } from "@/components/ui/switch";
 
 interface MikeSectionProps {
   config: MikeConfig;
@@ -50,6 +51,7 @@ export function MikeSection({ config, isAdmin, onConfigUpdated }: MikeSectionPro
     fallback_ai_model: config.fallback_ai_model,
     max_output_tokens: config.max_output_tokens,
     bot_phone_number: config.bot_phone_number,
+    is_enabled: config.is_enabled ?? true,
   });
 
   // Estado para novo grupo
@@ -143,6 +145,27 @@ export function MikeSection({ config, isAdmin, onConfigUpdated }: MikeSectionPro
           <h2 className="text-lg font-semibold text-slate-100">Mike (WhatsApp)</h2>
           <p className="text-xs text-slate-500">Configurações globais do agente IA</p>
         </div>
+      </div>
+
+      {/* === TOGGLE GLOBAL === */}
+      <div className="flex items-center justify-between py-3 px-4 rounded-xl bg-slate-800/40 border border-slate-800">
+        <div className="flex items-center gap-3">
+          <Power size={18} weight="bold" className={form.is_enabled ? "text-emerald-400" : "text-slate-500"} />
+          <div>
+            <span className="text-sm font-medium text-slate-200">
+              {form.is_enabled ? "Mike ativo" : "Mike desativado"}
+            </span>
+            <p className="text-[11px] text-slate-500">
+              {form.is_enabled
+                ? "Respondendo mensagens no WhatsApp"
+                : "Ignorando todas as mensagens recebidas"}
+            </p>
+          </div>
+        </div>
+        <Switch
+          checked={form.is_enabled}
+          onCheckedChange={(checked) => setForm((prev) => ({ ...prev, is_enabled: checked }))}
+        />
       </div>
 
       {/* === GRUPOS HABILITADOS === */}
@@ -283,7 +306,7 @@ export function MikeSection({ config, isAdmin, onConfigUpdated }: MikeSectionPro
       {/* === SESSÃO DE GRUPO === */}
       <div className="space-y-3 pb-4 border-b border-slate-800">
         <h3 className="text-sm font-semibold text-slate-300">Sessão de Grupo</h3>
-        <div className="grid gap-4 sm:grid-cols-3">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <div className="space-y-1.5">
             <label className="text-xs font-medium text-slate-400">Timeout (min)</label>
             <input
@@ -324,6 +347,22 @@ export function MikeSection({ config, isAdmin, onConfigUpdated }: MikeSectionPro
                 setForm((prev) => ({
                   ...prev,
                   group_memory_max_messages: Number(e.target.value),
+                }))
+              }
+              className={inputClass + " w-full"}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-slate-400">Retenção (dias)</label>
+            <input
+              type="number"
+              min={1}
+              max={30}
+              value={form.group_memory_retention_days}
+              onChange={(e) =>
+                setForm((prev) => ({
+                  ...prev,
+                  group_memory_retention_days: Number(e.target.value),
                 }))
               }
               className={inputClass + " w-full"}

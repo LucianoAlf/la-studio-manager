@@ -8,9 +8,9 @@ import {
   containsMikeName,
   isDismissPhrase,
   removeMikeName,
-  GROUP_SESSION_TIMEOUT_MINUTES,
-  ENABLED_GROUPS,
-  AGENT_TRIGGER_NAMES,
+  getSessionTimeout,
+  getEnabledGroups,
+  getTriggerNames,
 } from './group-config.ts'
 
 // =============================================================================
@@ -64,7 +64,7 @@ export async function getGroupSession(
   const now = Date.now()
   const diffMinutes = (now - lastInteraction) / (1000 * 60)
 
-  if (diffMinutes > GROUP_SESSION_TIMEOUT_MINUTES) {
+  if (diffMinutes > getSessionTimeout()) {
     console.log(`[GROUP] Sessão expirada para ${sessionData.senderName} (${diffMinutes.toFixed(1)} min)`)
     await clearGroupSession(supabase, userId)
     return null
@@ -89,7 +89,7 @@ export async function saveGroupSession(
       context_type: 'group_session',
       context_data: sessionData,
       is_active: true,
-      expires_at: new Date(Date.now() + GROUP_SESSION_TIMEOUT_MINUTES * 60 * 1000).toISOString(),
+      expires_at: new Date(Date.now() + getSessionTimeout() * 60 * 1000).toISOString(),
       updated_at: new Date().toISOString(),
     }, {
       onConflict: 'user_id,context_type',
@@ -162,7 +162,7 @@ function isCallingAnotherPerson(text: string): boolean {
     if (match) {
       const calledName = match[1].trim()
       // Se o nome chamado é o Mike → NÃO é outra pessoa
-      const isMike = AGENT_TRIGGER_NAMES.some(n => calledName === n.toLowerCase())
+      const isMike = getTriggerNames().some((n: string) => calledName === n.toLowerCase())
       if (!isMike && calledName.length >= 2) {
         console.log(`[GROUP] Detectou chamada a outra pessoa: "${calledName}" (não é Mike)`)
         return true
@@ -197,7 +197,7 @@ export async function handleGroupMessage(
   senderName: string,
   userId: string | null,
 ): Promise<GroupHandlerResult> {
-  const groupName = ENABLED_GROUPS[groupJid] || groupJid
+  const groupName = getEnabledGroups()[groupJid] || groupJid
 
   // 1. Grupo não habilitado
   if (!isGroupEnabled(groupJid)) {

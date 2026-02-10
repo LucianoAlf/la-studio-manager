@@ -19,6 +19,11 @@ const DEFAULT_MEMORY_HOURS_BACK = 4
 const DEFAULT_MEMORY_MAX_MESSAGES = 50
 const DEFAULT_MEMORY_RETENTION_DAYS = 7
 const DEFAULT_BOT_PHONE = '5521989784688'
+const DEFAULT_PERSONALITY_TONE = 'casual_profissional'
+const DEFAULT_PERSONALITY_EMOJI_LEVEL = 'moderado'
+const DEFAULT_AI_MODEL = 'gemini-2.5-flash-preview-05-20'
+const DEFAULT_FALLBACK_AI_MODEL = 'gpt-4.1'
+const DEFAULT_MAX_OUTPUT_TOKENS = 4096
 
 // =============================================================================
 // CACHE — Carregado do banco uma vez por invocação da Edge Function
@@ -32,6 +37,12 @@ interface MikeConfigCache {
   group_memory_max_messages: number
   group_memory_retention_days: number
   bot_phone_number: string
+  personality_tone: string
+  personality_emoji_level: string
+  default_ai_model: string
+  fallback_ai_model: string
+  max_output_tokens: number
+  is_enabled: boolean
 }
 
 let _configCache: MikeConfigCache | null = null
@@ -47,7 +58,7 @@ export async function loadMikeConfig(supabase: any): Promise<MikeConfigCache> {
   try {
     const { data, error } = await supabase
       .from('mike_config')
-      .select('enabled_groups, agent_trigger_names, group_session_timeout_minutes, group_memory_hours_back, group_memory_max_messages, group_memory_retention_days, bot_phone_number')
+      .select('enabled_groups, agent_trigger_names, group_session_timeout_minutes, group_memory_hours_back, group_memory_max_messages, group_memory_retention_days, bot_phone_number, personality_tone, personality_emoji_level, default_ai_model, fallback_ai_model, max_output_tokens, is_enabled')
       .limit(1)
       .single()
 
@@ -61,6 +72,12 @@ export async function loadMikeConfig(supabase: any): Promise<MikeConfigCache> {
         group_memory_max_messages: DEFAULT_MEMORY_MAX_MESSAGES,
         group_memory_retention_days: DEFAULT_MEMORY_RETENTION_DAYS,
         bot_phone_number: DEFAULT_BOT_PHONE,
+        personality_tone: DEFAULT_PERSONALITY_TONE,
+        personality_emoji_level: DEFAULT_PERSONALITY_EMOJI_LEVEL,
+        default_ai_model: DEFAULT_AI_MODEL,
+        fallback_ai_model: DEFAULT_FALLBACK_AI_MODEL,
+        max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
+        is_enabled: true,
       }
     } else {
       _configCache = {
@@ -71,6 +88,12 @@ export async function loadMikeConfig(supabase: any): Promise<MikeConfigCache> {
         group_memory_max_messages: data.group_memory_max_messages ?? DEFAULT_MEMORY_MAX_MESSAGES,
         group_memory_retention_days: data.group_memory_retention_days ?? DEFAULT_MEMORY_RETENTION_DAYS,
         bot_phone_number: data.bot_phone_number ?? DEFAULT_BOT_PHONE,
+        personality_tone: data.personality_tone ?? DEFAULT_PERSONALITY_TONE,
+        personality_emoji_level: data.personality_emoji_level ?? DEFAULT_PERSONALITY_EMOJI_LEVEL,
+        default_ai_model: data.default_ai_model ?? DEFAULT_AI_MODEL,
+        fallback_ai_model: data.fallback_ai_model ?? DEFAULT_FALLBACK_AI_MODEL,
+        max_output_tokens: data.max_output_tokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
+        is_enabled: data.is_enabled ?? true,
       }
       console.log(`[GROUP-CONFIG] mike_config carregado: ${Object.keys(_configCache.enabled_groups).length} grupos, ${_configCache.agent_trigger_names.length} triggers`)
     }
@@ -84,6 +107,12 @@ export async function loadMikeConfig(supabase: any): Promise<MikeConfigCache> {
       group_memory_max_messages: DEFAULT_MEMORY_MAX_MESSAGES,
       group_memory_retention_days: DEFAULT_MEMORY_RETENTION_DAYS,
       bot_phone_number: DEFAULT_BOT_PHONE,
+      personality_tone: DEFAULT_PERSONALITY_TONE,
+      personality_emoji_level: DEFAULT_PERSONALITY_EMOJI_LEVEL,
+      default_ai_model: DEFAULT_AI_MODEL,
+      fallback_ai_model: DEFAULT_FALLBACK_AI_MODEL,
+      max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
+      is_enabled: true,
     }
   }
 
@@ -103,6 +132,12 @@ function getConfig(): MikeConfigCache {
     group_memory_max_messages: DEFAULT_MEMORY_MAX_MESSAGES,
     group_memory_retention_days: DEFAULT_MEMORY_RETENTION_DAYS,
     bot_phone_number: DEFAULT_BOT_PHONE,
+    personality_tone: DEFAULT_PERSONALITY_TONE,
+    personality_emoji_level: DEFAULT_PERSONALITY_EMOJI_LEVEL,
+    default_ai_model: DEFAULT_AI_MODEL,
+    fallback_ai_model: DEFAULT_FALLBACK_AI_MODEL,
+    max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
+    is_enabled: true,
   }
 }
 
@@ -143,6 +178,7 @@ function buildDismissPhrases(): string[] {
     'valeu', 'obrigado', 'obrigada', 'brigado', 'brigada',
     'tchau', 'falou', 'pode parar', 'para', 'ok', 'beleza',
     'tmj', 'tamo junto', 'era isso', 'so isso', 'só isso',
+    'vlw', 'flw', 'blz', 'fechou',
   ]
   const phrases: string[] = []
   for (const template of templates) {
@@ -153,6 +189,12 @@ function buildDismissPhrases(): string[] {
   return phrases
 }
 
+/** Getter dinâmico — retorna frases de dispensa baseadas nos trigger names do cache */
+export function getDismissPhrases(): string[] {
+  return buildDismissPhrases()
+}
+
+/** Alias estático para compatibilidade (usa defaults) */
 export const DISMISS_PHRASES: string[] = buildDismissPhrases()
 
 /** Timeout da sessão de grupo em minutos. */
@@ -203,7 +245,7 @@ export function containsMikeName(text: string): boolean {
   if (!text) return false
   const lower = text.toLowerCase().trim()
 
-  for (const name of AGENT_TRIGGER_NAMES) {
+  for (const name of getTriggerNames()) {
     const regex = new RegExp(`\\b${name}\\b`, 'i')
     if (!regex.test(lower)) continue
 
@@ -231,7 +273,7 @@ export function isDismissPhrase(text: string): boolean {
   const lower = text.toLowerCase().trim()
     .replace(/[.,!?;:]+$/g, '') // remover pontuação final
     .trim()
-  return DISMISS_PHRASES.includes(lower)
+  return getDismissPhrases().includes(lower)
 }
 
 /**
@@ -242,7 +284,7 @@ export function isDismissPhrase(text: string): boolean {
 export function removeMikeName(text: string): string {
   if (!text) return ''
   let cleaned = text
-  for (const name of AGENT_TRIGGER_NAMES) {
+  for (const name of getTriggerNames()) {
     const regex = new RegExp(`\\b${name}\\b[,!.\\s]*`, 'gi')
     cleaned = cleaned.replace(regex, ' ')
   }
@@ -257,3 +299,33 @@ export function getBotPhoneNumber(): string {
 
 /** Alias para compatibilidade */
 export const BOT_PHONE_NUMBER = DEFAULT_BOT_PHONE
+
+/** Getter dinâmico — retorna modelo de IA principal */
+export function getDefaultAiModel(): string {
+  return getConfig().default_ai_model
+}
+
+/** Getter dinâmico — retorna modelo de IA fallback */
+export function getFallbackAiModel(): string {
+  return getConfig().fallback_ai_model
+}
+
+/** Getter dinâmico — retorna max output tokens */
+export function getMaxOutputTokens(): number {
+  return getConfig().max_output_tokens
+}
+
+/** Getter dinâmico — retorna tom de personalidade */
+export function getPersonalityTone(): string {
+  return getConfig().personality_tone
+}
+
+/** Getter dinâmico — retorna nível de emojis */
+export function getPersonalityEmojiLevel(): string {
+  return getConfig().personality_emoji_level
+}
+
+/** Getter dinâmico — retorna se o Mike está habilitado globalmente */
+export function isMikeEnabled(): boolean {
+  return getConfig().is_enabled
+}

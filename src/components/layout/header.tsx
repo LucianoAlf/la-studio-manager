@@ -1,7 +1,5 @@
 "use client";
 
-import { MagnifyingGlass, Bell } from "@phosphor-icons/react";
-
 interface HeaderProps {
   title: string;
   subtitle?: string;
@@ -23,21 +21,6 @@ export function Header({ title, subtitle, children }: HeaderProps) {
       </div>
 
       <div className="flex items-center gap-3">
-        {/* Search */}
-        <div className="flex h-10 items-center gap-2 rounded-xl border border-slate-700 bg-slate-900 px-4">
-          <MagnifyingGlass size={16} className="text-slate-500" />
-          <input
-            placeholder="Buscar..."
-            className="w-48 bg-transparent text-sm text-slate-200 outline-none placeholder:text-slate-500"
-          />
-        </div>
-
-        {/* Notifications */}
-        <button className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-700 bg-slate-900 text-slate-400 transition-colors hover:text-white hover:border-accent-cyan">
-          <Bell size={18} weight="duotone" />
-        </button>
-
-        {/* Actions from parent */}
         {children}
       </div>
     </header>

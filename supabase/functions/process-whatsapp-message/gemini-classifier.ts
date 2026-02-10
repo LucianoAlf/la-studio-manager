@@ -5,6 +5,7 @@
  */
 
 import { getLaMusicKnowledgeCondensed } from './mike-knowledge-base.ts'
+import { getDefaultAiModel, getFallbackAiModel, getMaxOutputTokens } from './group-config.ts'
 
 // ============================================
 // TIPOS
@@ -514,7 +515,7 @@ function formatResponseText(text: string): string {
 async function tryGemini(apiKey: string, userMessage: string, systemPrompt: string): Promise<ClassificationResult | null> {
   try {
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${getDefaultAiModel()}:generateContent`,
       {
         method: 'POST',
         headers: {
@@ -534,7 +535,7 @@ async function tryGemini(apiKey: string, userMessage: string, systemPrompt: stri
           generationConfig: {
             responseMimeType: 'application/json',
             temperature: 0.3,
-            maxOutputTokens: 4096,
+            maxOutputTokens: getMaxOutputTokens(),
           }
         })
       }
@@ -609,9 +610,9 @@ async function tryOpenAI(apiKey: string, userMessage: string, systemPrompt: stri
         'Authorization': `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: 'gpt-4.1',
+        model: getFallbackAiModel(),
         temperature: 0.1,
-        max_tokens: 4096,
+        max_tokens: getMaxOutputTokens(),
         response_format: { type: 'json_object' },
         messages: [
           { role: 'system', content: systemPrompt },

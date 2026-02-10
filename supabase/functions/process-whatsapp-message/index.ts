@@ -8,7 +8,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { parseWebhookPayload, normalizePhoneNumber, corsHeaders } from './utils.ts'
 import { routeMessage } from './message-router.ts'
 import { sendTextMessage } from './send-message.ts'
-import { isGroupEnabled, containsMikeName, BOT_PHONE_NUMBER, loadMikeConfig } from './group-config.ts'
+import { isGroupEnabled, containsMikeName, getBotPhoneNumber, isMikeEnabled, loadMikeConfig } from './group-config.ts'
 import { handleGroupMessage } from './group-handler.ts'
 import { saveGroupMessage, saveMikeResponse, getGroupContextSummary } from './group-memory.ts'
 import { transcribeAudio } from './audio-handler.ts'
@@ -38,6 +38,14 @@ serve(async (req: Request) => {
     // WA-07: Carregar mike_config do banco (cache por invocação)
     await loadMikeConfig(supabase)
 
+    // WA-07.1: Check global — se Mike está desabilitado, ignorar tudo
+    if (!isMikeEnabled()) {
+      console.log('[WA] Mike está desabilitado globalmente via mike_config.is_enabled')
+      return new Response(JSON.stringify({ success: true, status: 'mike_disabled' }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      })
+    }
+
     const parsed = parseWebhookPayload(body)
     if (!parsed) {
       console.log('[WA] Ignored: not a processable message')
@@ -66,7 +74,7 @@ serve(async (req: Request) => {
       const senderName = parsed.pushName || senderPhone
 
       // Ignorar mensagens do próprio bot
-      if (senderPhone === BOT_PHONE_NUMBER) {
+      if (senderPhone === getBotPhoneNumber()) {
         console.log('[GROUP] Ignorando mensagem do próprio bot')
         return new Response(JSON.stringify({ success: true, status: 'bot_self_message' }), {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }

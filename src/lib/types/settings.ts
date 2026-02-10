@@ -75,6 +75,9 @@ export interface MikeConfig {
   // Bot
   bot_phone_number: string;
 
+  // Toggle global
+  is_enabled: boolean;
+
   created_at: string;
   updated_at: string;
 }
