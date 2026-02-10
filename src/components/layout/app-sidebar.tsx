@@ -1,13 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { CaretLeft, CaretRight, User, Gear, SignOut } from "@phosphor-icons/react";
+import { CaretLeft, CaretRight, User, SignOut } from "@phosphor-icons/react";
 import Image from "next/image";
 import { cn } from "@/lib/utils";
 import { SIDEBAR_NAV } from "@/lib/constants";
-import { createClient } from "@/lib/supabase/client";
 import { logout } from "@/lib/auth/logout";
 import {
   DropdownMenu,
@@ -25,37 +23,19 @@ interface UserInfo {
   role: string;
 }
 
-export function AppSidebar({ expanded, onToggle }: { expanded: boolean; onToggle: () => void }) {
+export function AppSidebar({ 
+  expanded, 
+  onToggle, 
+  userInfo 
+}: { 
+  expanded: boolean; 
+  onToggle: () => void;
+  userInfo: UserInfo | null;
+}) {
   const pathname = usePathname();
-  const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
 
-  useEffect(() => {
-    async function loadUser() {
-      try {
-        const supabase = createClient();
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) return;
-
-        const { data: profile } = await supabase
-          .from("user_profiles")
-          .select("display_name, full_name, avatar_url, role")
-          .eq("user_id", user.id)
-          .maybeSingle();
-
-        if (profile) {
-          setUserInfo({
-            displayName: (profile as any).display_name || (profile as any).full_name || "Usuário",
-            fullName: (profile as any).full_name || "Usuário",
-            avatarUrl: (profile as any).avatar_url || null,
-            role: (profile as any).role || "usuario",
-          });
-        }
-      } catch {
-        // Silencioso — sidebar funciona sem avatar
-      }
-    }
-    loadUser();
-  }, []);
+  // UserInfo agora vem via props do layout (que já carregou corretamente)
+  // Removido o useEffect que buscava internamente - causava "Carregando..." infinito no Simple Browser
 
   const initials = userInfo
     ? userInfo.displayName.split(" ").map((n) => n[0]).join("").substring(0, 2).toUpperCase()
@@ -181,12 +161,6 @@ export function AppSidebar({ expanded, onToggle }: { expanded: boolean; onToggle
                 <DropdownMenuItem>
                   <User size={16} weight="duotone" />
                   Meu Perfil
-                </DropdownMenuItem>
-              </Link>
-              <Link href="/configuracoes">
-                <DropdownMenuItem>
-                  <Gear size={16} weight="duotone" />
-                  Configurações
                 </DropdownMenuItem>
               </Link>
               <DropdownMenuSeparator />

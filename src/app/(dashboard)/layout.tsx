@@ -7,6 +7,14 @@ import { ensureUserProfile } from "@/lib/supabase/ensure-profile";
 import { createClient } from "@/lib/supabase/client";
 import { Toaster } from "@/components/ui/shadcn/sonner";
 
+interface UserInfo {
+  id: string;
+  displayName: string;
+  fullName: string;
+  avatarUrl: string | null;
+  role: string;
+}
+
 export default function DashboardLayout({
   children,
 }: {
@@ -14,6 +22,7 @@ export default function DashboardLayout({
 }) {
   const router = useRouter();
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
+  const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
   const [sidebarExpanded, setSidebarExpanded] = useState(true);
   const authCheckedRef = useRef(false);
 
@@ -38,6 +47,24 @@ export default function DashboardLayout({
           localStorage.setItem("la-studio-auth-refresh", data.session.refresh_token);
           authCheckedRef.current = true;
           setIsAuthenticated(true);
+          
+          // Buscar perfil completo do usuário
+          const { data: profile } = await supabase
+            .from("user_profiles")
+            .select("id, display_name, full_name, avatar_url, role")
+            .eq("user_id", data.session.user.id)
+            .maybeSingle();
+            
+          if (profile) {
+            setUserInfo({
+              id: (profile as any).id,
+              displayName: (profile as any).display_name || (profile as any).full_name || "Usuário",
+              fullName: (profile as any).full_name || "Usuário",
+              avatarUrl: (profile as any).avatar_url || null,
+              role: (profile as any).role || "usuario",
+            });
+          }
+          
           ensureUserProfile();
           return;
         }
@@ -54,6 +81,24 @@ export default function DashboardLayout({
       } else {
         authCheckedRef.current = true;
         setIsAuthenticated(true);
+        
+        // Buscar perfil completo do usuário
+        const { data: profile } = await supabase
+          .from("user_profiles")
+          .select("id, display_name, full_name, avatar_url, role")
+          .eq("user_id", user.id)
+          .maybeSingle();
+          
+        if (profile) {
+          setUserInfo({
+            id: (profile as any).id,
+            displayName: (profile as any).display_name || (profile as any).full_name || "Usuário",
+            fullName: (profile as any).full_name || "Usuário",
+            avatarUrl: (profile as any).avatar_url || null,
+            role: (profile as any).role || "usuario",
+          });
+        }
+        
         ensureUserProfile();
       }
     };
@@ -72,7 +117,11 @@ export default function DashboardLayout({
 
   return (
     <div className="flex h-screen overflow-hidden bg-slate-950 text-slate-50">
-      <AppSidebar expanded={sidebarExpanded} onToggle={() => setSidebarExpanded((v) => !v)} />
+      <AppSidebar 
+        expanded={sidebarExpanded} 
+        onToggle={() => setSidebarExpanded((v) => !v)} 
+        userInfo={userInfo}
+      />
       {/* Main content with margin for fixed sidebar */}
       <main
         className="flex flex-1 flex-col min-h-0 overflow-hidden transition-[margin] duration-200"
