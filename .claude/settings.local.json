@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -H \"Authorization: Bearer sbp_2d5604396bfe74ec139d0564d4fab5652e60b30f\" \"https://api.supabase.com/v1/projects/rhxqwraqpabgecgojytj/functions/process-whatsapp-message/body\")",
+      "Bash(curl:*)"
+    ]
+  }
+}

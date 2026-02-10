@@ -185,11 +185,14 @@ Você é um classificador de intenções E consultor criativo. Sua função é:
 
 ### REGRAS DE CLASSIFICAÇÃO
 
-- **Perguntas sobre eventos/reuniões/agenda** → SEMPRE classifique como query_calendar (o sistema vai buscar no banco)
+- **Perguntas sobre eventos/reuniões/agenda/compromissos/calendário** → SEMPRE classifique como query_calendar (o sistema vai buscar no banco com filtro de data correto). NUNCA responda sobre agenda/calendário como general_chat, mesmo que os eventos estejam visíveis no contexto.
 - **Perguntas sobre cards/tarefas/kanban** → SEMPRE classifique como query_cards
 - **Pedidos para criar algo** → Classifique como create_card / create_calendar / create_reminder
+- **Pedidos para alterar/adiar evento** → SEMPRE classifique como update_calendar
+- **Pedidos para cancelar/excluir evento** → SEMPRE classifique como cancel_calendar
 - **Saudações, conversa livre, agradecimentos, pedidos de opinião, brainstorm, ideias** → general_chat
 - Na DÚVIDA entre general_chat e query_*, prefira query_* (é melhor consultar o banco do que inventar)
+- ⚠️ REGRA ABSOLUTA: Consultas sobre "agenda de hoje", "compromissos de amanhã", "o que tem essa semana", "meus eventos", "minhas reuniões" → SEMPRE query_calendar. O contexto de calendário no prompt é apenas para referência de update/cancel, NUNCA para responder consultas.
 
 ## INTENÇÕES POSSÍVEIS
 
@@ -294,9 +297,9 @@ Você é um classificador de intenções E consultor criativo. Sua função é:
     Gatilhos: "qual o número do", "contato do", "telefone do", "quero falar com", "tem o número do"
     Entidades: contact_name, contact_type
 
-15. **general_chat** — Conversa livre OU resposta baseada no contexto
-    Gatilhos: saudações, perguntas gerais, brincadeiras, OU perguntas cuja resposta está no histórico da conversa
-    ⚠️ Quando responder do contexto, inclua os dados relevantes no response_text (ex: "A reunião é na quarta às 10h")
+15. **general_chat** — Conversa livre, brainstorm, opinião
+    Gatilhos: saudações, perguntas gerais, brincadeiras, pedidos de opinião, brainstorm de conteúdo
+    ⚠️ NUNCA use general_chat para perguntas sobre agenda, calendário, eventos, reuniões ou compromissos — essas são SEMPRE query_calendar
     Entidades: nenhuma
 
 16. **help** — Pedir ajuda
@@ -412,7 +415,7 @@ export async function classifyMessage(
 
   let userMessage = `Mensagem do usuário "${userName}": "${text}"`
   if (conversationContext) {
-    userMessage = `CONTEXTO DA CONVERSA (use para responder perguntas contextuais — se a resposta está aqui, responda como general_chat):\n${conversationContext}\n\n${userMessage}`
+    userMessage = `CONTEXTO DE REFERÊNCIA (dados reais do sistema — NÃO use para responder perguntas sobre agenda/calendário/compromissos/eventos/reuniões. Essas perguntas devem SEMPRE ser classificadas como query_calendar para busca filtrada no banco):\n${conversationContext}\n\n${userMessage}`
   }
 
   // WA-04: Injetar memória do agente (vai ANTES do userMessage para contexto de background)

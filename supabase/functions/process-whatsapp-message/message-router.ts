@@ -258,6 +258,13 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
     .limit(1)
     .maybeSingle()
 
+  // DEBUG: Logar contexto encontrado
+  if (activeContext) {
+    console.log(`[DEBUG] Contexto ativo encontrado: ${activeContext.context_type}, step: ${activeContext.context_data?.step}`)
+  } else {
+    console.log(`[DEBUG] Nenhum contexto ativo encontrado para user ${userId}`)
+  }
+
   // ========================================
   // WA-06.9: PARTICIPANTE RECUSOU — criador decide se mantém evento
   // ========================================
@@ -609,10 +616,12 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
   }
 
   if (activeContext?.context_data?.step === 'awaiting_confirmation') {
+    console.log(`[DEBUG] Processando awaiting_confirmation para ${activeContext.context_type}`)
     const lower = parsed.text.toLowerCase().trim().replace(/[.,!?;:]+$/g, '').trim()
 
     // --- CONFIRMOU: SIM → executar ação real (WA-03) ---
     if (['sim', 's', 'yes', 'y', 'confirma', 'confirmo', 'ok', 'pode', 'pode criar', 'manda', 'bora', 'isso'].includes(lower)) {
+      console.log(`[DEBUG] Confirmação detectada: "${lower}". Executando ${activeContext.context_type}`)
 
       const ents = activeContext.context_data?.entities || {}
 
@@ -972,7 +981,7 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
           const part = ev.participants ? ` | com ${ev.participants}` : ''
           return `- ${emoji} "${ev.title}" → ${dateStr}${loc}${part}`
         })
-        calendarContext = `PRÓXIMOS EVENTOS DO CALENDÁRIO (dados reais do banco — use estes dados para update_calendar/cancel_calendar):\n${lines.join('\n')}`
+        calendarContext = `REFERÊNCIA DE EVENTOS (APENAS para identificar eventos em update_calendar/cancel_calendar — NUNCA use para responder consultas de agenda, que devem ir para query_calendar):\n${lines.join('\n')}`
       }
     } catch (e) {
       console.error('[WA-09] Erro ao carregar eventos para contexto:', e)
@@ -1010,10 +1019,10 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
       return handleCancelReminder(classification, firstName, supabase, userId)
 
     case 'update_calendar':
-      return handleUpdateCalendar(classification, firstName, supabase, userId)
+      return handleUpdateCalendar(classification, firstName, supabase, authUserId, userId)
 
     case 'cancel_calendar':
-      return handleCancelCalendar(classification, firstName, supabase, userId)
+      return handleCancelCalendar(classification, firstName, supabase, authUserId, userId)
 
     case 'query_calendar': {
       const qCtx = { supabase, profileId: userId, authUserId, userName: firstName, entities: classification.entities }
@@ -1693,15 +1702,19 @@ const CALENDAR_TYPE_EMOJI: Record<string, string> = {
 }
 
 // deno-lint-ignore no-explicit-any
-async function findUserCalendarEvents(supabase: any, userId: string): Promise<CalendarRow[]> {
+async function findUserCalendarEvents(supabase: any, authUserId: string): Promise<CalendarRow[]> {
   // Buscar eventos futuros e recentes (últimos 7 dias + próximos 30 dias)
   const pastWeek = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
   const futureMonth = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
 
-  const { data } = await supabase
+  console.log(`[WA-09] findUserCalendarEvents: authUserId=${authUserId}, range=${pastWeek} to ${futureMonth}`)
+
+  // BUGFIX WA-09.1: responsible_user_id referencia auth.users.id, não user_profiles.id
+  // Usar authUserId (auth.users.id) para filtrar corretamente
+  const { data, error } = await supabase
     .from('calendar_items')
-    .select('id, title, start_time, end_time, type, location, participants, created_by')
-    .eq('created_by', userId)
+    .select('id, title, start_time, end_time, type, location, participants, responsible_user_id')
+    .eq('responsible_user_id', authUserId)
     .gte('start_time', pastWeek)
     .lte('start_time', futureMonth)
     .is('deleted_at', null)
@@ -1804,15 +1817,22 @@ async function handleUpdateCalendar(
   classification: ClassificationResult,
   userName: string,
   supabase: any,
-  userId: string,
+  authUserId: string,
+  profileId: string,
 ): Promise<{ text: string; intent: string; confidence: number }> {
   const entities = classification.entities as Record<string, unknown>
   const searchText = String(entities.event_search_text || entities.title || '')
 
-  // Buscar eventos do usuário
-  const events = await findUserCalendarEvents(supabase, userId)
+  // DEBUG WA-09.1: Log dos parâmetros
+  console.log(`[WA-09] handleUpdateCalendar: authUserId=${authUserId}, profileId=${profileId}, searchText="${searchText}"`)
+
+  // Buscar eventos do usuário (responsible_user_id = auth.users.id)
+  const events = await findUserCalendarEvents(supabase, authUserId)
+
+  console.log(`[WA-09] findUserCalendarEvents retornou ${events.length} eventos`)
 
   if (events.length === 0) {
+    console.log(`[WA-09] Nenhum evento encontrado para authUserId=${authUserId}`)
     return {
       text: `Não encontrei nenhum evento seu na agenda pra alterar, ${userName}.`,
       intent: 'update_calendar',
@@ -1846,8 +1866,8 @@ async function handleUpdateCalendar(
   if (entities.event_new_title) changes.push(`📝 Novo título: ${entities.event_new_title}`)
   const changeDesc = changes.length > 0 ? changes.join('\n') : '(sem alterações especificadas)'
 
-  // Salvar contexto de confirmação
-  await saveConversationContext(supabase, userId, 'updating_calendar', {
+  // Salvar contexto de confirmação (usa profileId para whatsapp_conversation_context)
+  await saveConversationContext(supabase, profileId, 'updating_calendar', {
     step: 'awaiting_confirmation',
     entities: {
       event_id: match.id,
@@ -1874,13 +1894,14 @@ async function handleCancelCalendar(
   classification: ClassificationResult,
   userName: string,
   supabase: any,
-  userId: string,
+  authUserId: string,
+  profileId: string,
 ): Promise<{ text: string; intent: string; confidence: number }> {
   const entities = classification.entities as Record<string, unknown>
   const searchText = String(entities.event_search_text || entities.title || '')
 
-  // Buscar eventos do usuário
-  const events = await findUserCalendarEvents(supabase, userId)
+  // Buscar eventos do usuário (responsible_user_id = auth.users.id)
+  const events = await findUserCalendarEvents(supabase, authUserId)
 
   if (events.length === 0) {
     return {
@@ -1908,8 +1929,8 @@ async function handleCancelCalendar(
     }
   }
 
-  // Salvar contexto de confirmação
-  await saveConversationContext(supabase, userId, 'cancelling_calendar', {
+  // Salvar contexto de confirmação (usa profileId para whatsapp_conversation_context)
+  await saveConversationContext(supabase, profileId, 'cancelling_calendar', {
     step: 'awaiting_confirmation',
     entities: {
       event_id: match.id,
@@ -2408,6 +2429,97 @@ async function routeClassifiedMessage(
       return handleCreateCalendar(classification, firstName, supabase, userId)
     case 'create_reminder':
       return handleCreateReminder(classification, firstName, supabase, userId)
+
+    // WA-10 FIX: Intents faltantes no fluxo de áudio
+    case 'update_reminder':
+      return handleUpdateReminder(classification, firstName, supabase, userId)
+    case 'cancel_reminder':
+      return handleCancelReminder(classification, firstName, supabase, userId)
+    case 'update_calendar':
+      return handleUpdateCalendar(classification, firstName, supabase, authUserId, userId)
+    case 'cancel_calendar':
+      return handleCancelCalendar(classification, firstName, supabase, authUserId, userId)
+    case 'update_card':
+      return {
+        text: classification.response_text || `✏️ Vou atualizar o card, ${firstName}. (Em breve!)`,
+        intent: classification.intent || 'update_card',
+        confidence: classification.confidence,
+      }
+
+    // WA-10 FIX: Salvar contato (áudio)
+    case 'save_contact': {
+      const contactName = classification.entities.contact_name as string
+      const contactPhone = classification.entities.contact_phone as string
+      const contactType = (classification.entities.contact_type as string) || 'outro'
+      const contactNotes = classification.entities.notes as string | undefined
+
+      if (!contactName || !contactPhone) {
+        return {
+          text: `Preciso do nome e número pra salvar na agenda, ${firstName}. Ex: "Salva na agenda Jereh, 5521985525984, fornecedor"`,
+          intent: 'save_contact',
+          confidence: classification.confidence,
+        }
+      }
+
+      const result = await saveContact(supabase, {
+        name: contactName,
+        phone: contactPhone,
+        contactType,
+        notes: contactNotes,
+        createdBy: authUserId,
+      })
+
+      if (result.success) {
+        const typeLabel = contactType !== 'outro' ? ` como *${contactType}*` : ''
+        return {
+          text: `Salvei ${contactName}${typeLabel} na agenda! 📇\nQuando precisar, é só perguntar: "Mike, qual o número do ${contactName}?"`,
+          intent: 'save_contact',
+          confidence: 1.0,
+        }
+      }
+
+      return {
+        text: `Não consegui salvar: ${result.error}`,
+        intent: 'save_contact',
+        confidence: 1.0,
+      }
+    }
+
+    // WA-10 FIX: Consultar contato (áudio)
+    case 'query_contact': {
+      const searchName = (classification.entities.contact_name as string) || params.parsed?.text || ''
+      const contacts = await queryContacts(supabase, searchName)
+
+      if (contacts.length === 0) {
+        return {
+          text: `Não encontrei "${searchName}" na agenda, ${firstName}. Quer que eu salve um contato novo?`,
+          intent: 'query_contact',
+          confidence: 1.0,
+        }
+      }
+
+      if (contacts.length === 1) {
+        const c = contacts[0]
+        const typeLabel = c.contactType !== 'outro' ? ` (${c.contactType})` : ''
+        return {
+          text: `📇 *${c.name}*${typeLabel}\n📱 ${c.phone}${c.notes ? `\n📝 ${c.notes}` : ''}`,
+          intent: 'query_contact',
+          confidence: 1.0,
+        }
+      }
+
+      const list = contacts.slice(0, 5).map(c => {
+        const typeLabel = c.contactType !== 'outro' ? ` (${c.contactType})` : ''
+        return `• *${c.name}*${typeLabel} — ${c.phone}`
+      }).join('\n')
+
+      return {
+        text: `Encontrei ${contacts.length} contatos:\n\n${list}`,
+        intent: 'query_contact',
+        confidence: 1.0,
+      }
+    }
+
     case 'query_calendar': {
       const qCtx = { supabase, profileId: userId, authUserId, userName: firstName, entities: classification.entities }
       const result = await handleQueryCalendar(qCtx)

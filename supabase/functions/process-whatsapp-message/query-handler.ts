@@ -181,7 +181,12 @@ export async function handleQueryCalendar(ctx: QueryContext): Promise<QueryResul
   const queryTitle = entities.query_title as string | undefined
   const queryParticipant = entities.query_participant as string | undefined
   const querySelf = !!entities.query_self
-  const isSpecificQuery = !!(queryTitle || queryParticipant || querySelf)
+  const queryPeriod = entities.query_period as string | undefined
+
+  // BUGFIX: quando tem query_self + query_period juntos (ex: "minha agenda de hoje"),
+  // priorizar o caminho de PERÍODO para que a data seja filtrada corretamente.
+  // Sem query_period (ex: "meus eventos"), continua no caminho específico.
+  const isSpecificQuery = !!(queryTitle || queryParticipant || (querySelf && !queryPeriod))
 
   if (isSpecificQuery) {
     console.log(`[WA-04] Query calendar ESPECÍFICA: title="${queryTitle}", participant="${queryParticipant}", self=${querySelf}`)
@@ -276,7 +281,7 @@ export async function handleQueryCalendar(ctx: QueryContext): Promise<QueryResul
   const period = entities.query_period || 'today'
   const { start, end } = getDateRange(period)
 
-  console.log(`[WA-04] Query calendar: period=${period}, range=${start.toISOString()} → ${end.toISOString()}`)
+  console.log(`[WA-04] Query calendar: period=${period}, range=${start.toISOString()} → ${end.toISOString()}, querySelf=${querySelf}`)
 
   // Buscar itens SEM join de responsible (FK → auth.users, não user_profiles)
   let query = supabase
@@ -288,6 +293,11 @@ export async function handleQueryCalendar(ctx: QueryContext): Promise<QueryResul
     .lte('start_time', end.toISOString())
     .order('start_time', { ascending: true })
     .limit(20)
+
+  // BUGFIX: "minha agenda de hoje" → filtrar por data + responsável
+  if (querySelf) {
+    query = query.eq('responsible_user_id', ctx.authUserId)
+  }
 
   // Filtro por tipo se especificado
   if (entities.query_filter) {
