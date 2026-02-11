@@ -21,12 +21,12 @@ import {
 
 // --- Navigation ---
 export const SIDEBAR_NAV = [
-  { label: "Dashboard", href: "/", icon: SquaresFour },
+  // { label: "Dashboard", href: "/", icon: SquaresFour },  // oculto — v1
   { label: "Projetos", href: "/projetos", icon: Kanban },
   { label: "Calendário", href: "/calendario", icon: CalendarDots },
-  { label: "Agentes IA", href: "/agentes", icon: Robot },
-  { label: "Ativos", href: "/ativos", icon: Images },
-  { label: "Relatórios", href: "/relatorios", icon: ChartBar },
+  // { label: "Agentes IA", href: "/agentes", icon: Robot },  // oculto — v1
+  // { label: "Ativos", href: "/ativos", icon: Images },  // oculto — v1
+  // { label: "Relatórios", href: "/relatorios", icon: ChartBar },  // oculto — v1
   { label: "Configurações", href: "/configuracoes", icon: Gear },
 ] as const;
 

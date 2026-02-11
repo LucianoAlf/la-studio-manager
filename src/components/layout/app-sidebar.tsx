@@ -75,10 +75,7 @@ export function AppSidebar({
       {/* Nav Items */}
       <nav className="flex flex-1 flex-col gap-0.5 px-3 py-3">
         {SIDEBAR_NAV.map((item) => {
-          const isActive =
-            item.href === "/"
-              ? pathname === "/"
-              : pathname.startsWith(item.href);
+          const isActive = pathname.startsWith(item.href);
           const IconComponent = item.icon;
 
           return (
