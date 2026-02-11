@@ -33,10 +33,14 @@ export async function updateSession(request: NextRequest) {
 
   const pathname = request.nextUrl.pathname;
   const isPublicRoute = PUBLIC_ROUTES.some((route) => pathname.startsWith(route));
-  const isProduction = process.env.NODE_ENV === "production";
+  
+  // IMPORTANTE: Em desenvolvimento (Simple Browser), NÃO fazemos redirect aqui
+  // A proteção de rotas é feita client-side no layout.tsx
+  // Em produção, o middleware redireciona para /login se não autenticado
+  const isVercel = request.headers.get('host')?.includes('vercel.app');
+  const isProduction = process.env.NODE_ENV === "production" || isVercel;
 
-  // Redirecionar para /login se não autenticado em rota protegida (apenas em produção)
-  // Em dev, a proteção é client-side (layout.tsx) para evitar problemas com Simple Browser
+  // Redirecionar para /login se não autenticado em rota protegida (apenas em produção/Vercel)
   if (isProduction && !user && !isPublicRoute) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
