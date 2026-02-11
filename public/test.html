@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Teste Simple Browser</title>
+    <style>
+        body { font-family: sans-serif; padding: 40px; background: #1a1a2e; color: white; }
+        h1 { color: #00f2ea; }
+    </style>
+</head>
+<body>
+    <h1>✅ Teste Simple Browser</h1>
+    <p>Se você está vendo isso, o Simple Browser funciona com HTML estático.</p>
+    <p>Data/Hora: <span id="time"></span></p>
+    <script>
+        document.getElementById('time').textContent = new Date().toLocaleString();
+        console.log('JavaScript funcionou!');
+    </script>
+</body>
+</html>

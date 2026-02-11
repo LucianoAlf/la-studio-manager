@@ -60,11 +60,15 @@ export function UserProvider({ children }: { children: ReactNode }) {
 
       if (storedToken) {
         const storedRefresh = localStorage.getItem("la-studio-auth-refresh") || "";
-        const { data: sessionData } = await supabase.auth.setSession({
+        const { data: sessionData, error: sessionError } = await supabase.auth.setSession({
           access_token: storedToken,
           refresh_token: storedRefresh,
         });
-        if (sessionData.session?.user) {
+        if (sessionError || !sessionData.session?.user) {
+          // Token expirado/inválido — limpar localStorage
+          localStorage.removeItem("la-studio-auth-token");
+          localStorage.removeItem("la-studio-auth-refresh");
+        } else {
           authUser = sessionData.session.user;
           email = sessionData.session.user.email ?? null;
           // Atualizar tokens se renovados
@@ -76,8 +80,11 @@ export function UserProvider({ children }: { children: ReactNode }) {
       // Se não conseguiu via localStorage, tenta via cookies
       if (!authUser) {
         const { data: { user }, error: authError } = await supabase.auth.getUser();
-        if (authError) {
-          throw new Error(`Auth error: ${authError.message}`);
+        if (authError || !user) {
+          // Sessão expirada, token inválido, etc. → tratar como não autenticado
+          setUser(null);
+          setError("Não autenticado");
+          return;
         }
         authUser = user;
         email = user?.email || null;
