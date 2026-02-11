@@ -21,13 +21,13 @@ import {
 
 // --- Navigation ---
 export const SIDEBAR_NAV = [
-  // { label: "Dashboard", href: "/", icon: SquaresFour },  // oculto — v1
-  { label: "Projetos", href: "/projetos", icon: Kanban },
-  { label: "Calendário", href: "/calendario", icon: CalendarDots },
-  // { label: "Agentes IA", href: "/agentes", icon: Robot },  // oculto — v1
-  // { label: "Ativos", href: "/ativos", icon: Images },  // oculto — v1
-  // { label: "Relatórios", href: "/relatorios", icon: ChartBar },  // oculto — v1
-  { label: "Configurações", href: "/configuracoes", icon: Gear },
+  { label: "Dashboard", href: "/", icon: SquaresFour, disabled: true },
+  { label: "Projetos", href: "/projetos", icon: Kanban, disabled: false },
+  { label: "Calendário", href: "/calendario", icon: CalendarDots, disabled: false },
+  { label: "Agentes IA", href: "/agentes", icon: Robot, disabled: true },
+  { label: "Ativos", href: "/ativos", icon: Images, disabled: true },
+  { label: "Relatórios", href: "/relatorios", icon: ChartBar, disabled: true },
+  { label: "Configurações", href: "/configuracoes", icon: Gear, disabled: false },
 ] as const;
 
 // --- Kanban Columns ---

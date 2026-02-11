@@ -75,8 +75,41 @@ export function AppSidebar({
       {/* Nav Items */}
       <nav className="flex flex-1 flex-col gap-0.5 px-3 py-3">
         {SIDEBAR_NAV.map((item) => {
-          const isActive = pathname.startsWith(item.href);
+          const href = item.href as string;
+          const isActive = !item.disabled && (
+            href === "/" ? pathname === "/" : pathname.startsWith(href)
+          );
           const IconComponent = item.icon;
+
+          // Itens desabilitados: visual apagado, não clicável
+          if (item.disabled) {
+            return (
+              <div
+                key={item.href}
+                className={cn(
+                  "cursor-not-allowed select-none opacity-40",
+                  expanded
+                    ? "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl"
+                    : "w-full flex items-center justify-center py-2.5 rounded-xl"
+                )}
+                title="Em breve"
+              >
+                <IconComponent
+                  size={20}
+                  weight="duotone"
+                  className="flex-shrink-0 text-gray-500"
+                />
+                {expanded && (
+                  <span className="text-sm font-medium text-gray-500 flex-1">{item.label}</span>
+                )}
+                {expanded && (
+                  <span className="text-[9px] font-semibold uppercase tracking-wider text-gray-600 bg-gray-800/50 px-1.5 py-0.5 rounded">
+                    em breve
+                  </span>
+                )}
+              </div>
+            );
+          }
 
           return (
             <Link
