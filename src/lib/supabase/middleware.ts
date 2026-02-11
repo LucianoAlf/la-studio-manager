@@ -33,16 +33,18 @@ export async function updateSession(request: NextRequest) {
 
   const pathname = request.nextUrl.pathname;
   const isPublicRoute = PUBLIC_ROUTES.some((route) => pathname.startsWith(route));
+  const isProduction = process.env.NODE_ENV === "production";
 
-  // Redirecionar para /login se não autenticado em rota protegida
-  if (!user && !isPublicRoute) {
+  // Redirecionar para /login se não autenticado em rota protegida (apenas em produção)
+  // Em dev, a proteção é client-side (layout.tsx) para evitar problemas com Simple Browser
+  if (isProduction && !user && !isPublicRoute) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     return NextResponse.redirect(url);
   }
 
   // Redirecionar para / se autenticado e tentando acessar /login
-  if (user && pathname === "/login") {
+  if (isProduction && user && pathname === "/login") {
     const url = request.nextUrl.clone();
     url.pathname = "/";
     return NextResponse.redirect(url);
