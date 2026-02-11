@@ -686,35 +686,41 @@ export function TeamSection({
             </Badge>
           )}
 
-          {/* Ações (admin only, não pode editar a si mesmo) */}
-          {isAdmin && !isCurrentUser && (
+          {/* Ações: editar (próprio perfil ou admin), desativar/reativar (outros apenas) */}
+          {(isCurrentUser || isAdmin) && (
             <div className="flex items-center gap-1">
               <button
                 type="button"
                 onClick={() => setEditingMember(member)}
-                title="Editar"
+                title={isCurrentUser ? "Editar meu perfil" : "Editar"}
                 className="p-1.5 rounded-lg text-slate-500 hover:text-slate-200 hover:bg-slate-800 transition-colors"
               >
                 <PencilSimple size={14} />
               </button>
-              {member.is_active ? (
-                <button
-                  type="button"
-                  onClick={() => setConfirmAction({ type: "deactivate", member })}
-                  title="Desativar"
-                  className="p-1.5 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
-                >
-                  <UserMinus size={14} />
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setConfirmAction({ type: "reactivate", member })}
-                  title="Reativar"
-                  className="p-1.5 rounded-lg text-slate-500 hover:text-emerald-400 hover:bg-emerald-500/10 transition-colors"
-                >
-                  <UserPlusIcon size={14} />
-                </button>
+              
+              {/* Só permite desativar/reativar se for admin E não for o próprio usuário */}
+              {isAdmin && !isCurrentUser && (
+                <>
+                  {member.is_active ? (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmAction({ type: "deactivate", member })}
+                      title="Desativar"
+                      className="p-1.5 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                    >
+                      <UserMinus size={14} />
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmAction({ type: "reactivate", member })}
+                      title="Reativar"
+                      className="p-1.5 rounded-lg text-slate-500 hover:text-emerald-400 hover:bg-emerald-500/10 transition-colors"
+                    >
+                      <UserPlusIcon size={14} />
+                    </button>
+                  )}
+                </>
               )}
             </div>
           )}

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
+import dynamic from "next/dynamic";
 import { Header } from "@/components/layout/header";
 import { CaretLeft, CaretRight, Plus, X, Funnel, Trash } from "@phosphor-icons/react";
 import { cn } from "@/lib/utils";
@@ -11,9 +12,14 @@ import { getCurrentUserProfile, getAllUsers } from "@/lib/queries/users";
 import { TYPE_COLORS, TYPE_EMOJIS, getDateRange, getUserDisplay, PLATFORM_COLORS } from "@/lib/utils/calendar-helpers";
 import type { CalendarItem, CalendarItemType, CalendarItemConnection, CalendarItemComment, UserProfile } from "@/lib/types/database";
 import type { CalendarFilters } from "@/types/filters";
-import { CalendarItemModal } from "@/components/calendar/CalendarItemModal";
 import { useRealtimeSubscription } from "@/hooks/useRealtimeSubscription";
 import { toast } from "sonner";
+
+// Lazy load do modal (só carrega quando abre)
+const CalendarItemModal = dynamic(
+  () => import("@/components/calendar/CalendarItemModal").then(mod => mod.CalendarItemModal),
+  { ssr: false }
+);
 
 // ============================================================
 // TIPOS LOCAIS

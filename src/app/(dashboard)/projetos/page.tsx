@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import dynamic from "next/dynamic";
 import { Header } from "@/components/layout/header";
 import {
   SquaresFour,
@@ -61,10 +62,15 @@ import {
 } from "@/lib/utils/kanban-helpers";
 import type { KanbanColumn as KanbanColumnType, KanbanCard as KanbanCardType, UserProfile } from "@/lib/types/database";
 import type { KanbanFilters } from "@/types/filters";
-import { KanbanCardModal } from "@/components/kanban/KanbanCardModal";
 import { useRealtimeSubscription } from "@/hooks/useRealtimeSubscription";
 import { Select, SelectContent, SelectItem as ShadSelectItem, SelectTrigger, SelectValue } from "@/components/ui/shadcn/select";
 import { Funnel, X, MagnifyingGlass } from "@phosphor-icons/react";
+
+// Lazy load do modal (só carrega quando abre)
+const KanbanCardModal = dynamic(
+  () => import("@/components/kanban/KanbanCardModal").then(mod => mod.KanbanCardModal),
+  { ssr: false }
+);
 
 // ============================================================
 // TABS

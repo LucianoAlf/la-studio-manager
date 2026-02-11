@@ -53,7 +53,7 @@ export async function getProfileByUserId(userId: string): Promise<UserProfileExt
 }
 
 /**
- * Tenta buscar perfil via auth, fallback para primeiro perfil ativo.
+ * Tenta buscar perfil via auth, fallback para localStorage ou primeiro perfil ativo.
  * Retorna também o email do auth.users se disponível.
  */
 export async function getMyProfile(): Promise<UserProfileExtended | null> {
@@ -70,12 +70,32 @@ export async function getMyProfile(): Promise<UserProfileExtended | null> {
     // Auth falhou (ex: iframe sem cookies) — continuar para fallback
   }
 
-  // Fallback: primeiro perfil ativo (para dev/iframe)
-  return getFirstActiveProfile();
+  // Fallback: tentar restaurar sessão do localStorage (Simple Browser)
+  const storedToken = localStorage.getItem("la-studio-auth-token");
+  if (storedToken) {
+    try {
+      const storedRefresh = localStorage.getItem("la-studio-auth-refresh") || "";
+      const { data } = await supabase.auth.setSession({
+        access_token: storedToken,
+        refresh_token: storedRefresh,
+      });
+      if (data.session?.user) {
+        const profile = await getProfileByUserId(data.session.user.id);
+        if (profile) return profile;
+      }
+    } catch {
+      // Fallthrough para último recurso
+    }
+  }
+
+  // Em produção: não retornar perfil aleatório — retornar null
+  console.warn("[getMyProfile] Não foi possível identificar o usuário autenticado.");
+  return null;
 }
 
 /**
  * Busca perfil + email do auth (quando disponível).
+ * Fallback: usa localStorage para identificar usuário no Simple Browser.
  */
 export async function getMyProfileWithEmail(): Promise<{ profile: UserProfileExtended | null; email: string | null }> {
   const supabase = getSupabase();
@@ -93,9 +113,28 @@ export async function getMyProfileWithEmail(): Promise<{ profile: UserProfileExt
     // Auth falhou (ex: iframe sem cookies) — continuar para fallback
   }
 
-  // Fallback: primeiro perfil ativo (para dev/iframe)
-  const profile = await getFirstActiveProfile();
-  return { profile, email };
+  // Fallback: tentar restaurar sessão do localStorage (Simple Browser)
+  const storedToken = localStorage.getItem("la-studio-auth-token");
+  if (storedToken) {
+    try {
+      const storedRefresh = localStorage.getItem("la-studio-auth-refresh") || "";
+      const { data } = await supabase.auth.setSession({
+        access_token: storedToken,
+        refresh_token: storedRefresh,
+      });
+      if (data.session?.user) {
+        email = data.session.user.email || null;
+        const profile = await getProfileByUserId(data.session.user.id);
+        if (profile) return { profile, email };
+      }
+    } catch {
+      // Fallthrough para último recurso
+    }
+  }
+
+  // Em produção: não retornar perfil aleatório — retornar null
+  console.warn("[getMyProfileWithEmail] Não foi possível identificar o usuário autenticado.");
+  return { profile: null, email };
 }
 
 export async function updateMyProfile(

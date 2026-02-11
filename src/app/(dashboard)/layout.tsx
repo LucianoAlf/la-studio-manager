@@ -1,113 +1,29 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
-import { useRouter } from "next/navigation";
 import { AppSidebar } from "@/components/layout/app-sidebar";
-import { ensureUserProfile } from "@/lib/supabase/ensure-profile";
-import { createClient } from "@/lib/supabase/client";
+import { UserProvider, useUser } from "@/contexts/user-context";
 import { Toaster } from "@/components/ui/shadcn/sonner";
+import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 
-interface UserInfo {
-  id: string;
-  displayName: string;
-  fullName: string;
-  avatarUrl: string | null;
-  role: string;
-}
-
-export default function DashboardLayout({
+// Componente interno que usa o contexto
+function DashboardContent({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const { user, loading, error } = useUser();
   const router = useRouter();
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
-  const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
   const [sidebarExpanded, setSidebarExpanded] = useState(true);
-  const authCheckedRef = useRef(false);
 
   useEffect(() => {
-    // Evitar re-verificação de auth em navegações subsequentes
-    if (authCheckedRef.current) return;
+    if (!loading && error === "Não autenticado") {
+      router.replace("/login");
+    }
+  }, [loading, error, router]);
 
-    const checkAuth = async () => {
-      const supabase = createClient();
-
-      // Restaurar sessão do localStorage (fallback para browsers que não persistem cookies)
-      const storedToken = localStorage.getItem("la-studio-auth-token");
-      if (storedToken) {
-        const storedRefresh = localStorage.getItem("la-studio-auth-refresh") || "";
-        const { data } = await supabase.auth.setSession({
-          access_token: storedToken,
-          refresh_token: storedRefresh,
-        });
-        // Atualizar tokens se foram renovados
-        if (data.session) {
-          localStorage.setItem("la-studio-auth-token", data.session.access_token);
-          localStorage.setItem("la-studio-auth-refresh", data.session.refresh_token);
-          authCheckedRef.current = true;
-          setIsAuthenticated(true);
-          
-          // Buscar perfil completo do usuário
-          const { data: profile } = await supabase
-            .from("user_profiles")
-            .select("id, display_name, full_name, avatar_url, role")
-            .eq("user_id", data.session.user.id)
-            .maybeSingle();
-            
-          if (profile) {
-            setUserInfo({
-              id: (profile as any).id,
-              displayName: (profile as any).display_name || (profile as any).full_name || "Usuário",
-              fullName: (profile as any).full_name || "Usuário",
-              avatarUrl: (profile as any).avatar_url || null,
-              role: (profile as any).role || "usuario",
-            });
-          }
-          
-          ensureUserProfile();
-          return;
-        }
-        // Token expirado e não renovável — limpar e redirecionar
-        localStorage.removeItem("la-studio-auth-token");
-        localStorage.removeItem("la-studio-auth-refresh");
-      }
-
-      // Verificar sessão via cookies (browser normal)
-      const { data: { user } } = await supabase.auth.getUser();
-
-      if (!user) {
-        router.replace("/login");
-      } else {
-        authCheckedRef.current = true;
-        setIsAuthenticated(true);
-        
-        // Buscar perfil completo do usuário
-        const { data: profile } = await supabase
-          .from("user_profiles")
-          .select("id, display_name, full_name, avatar_url, role")
-          .eq("user_id", user.id)
-          .maybeSingle();
-          
-        if (profile) {
-          setUserInfo({
-            id: (profile as any).id,
-            displayName: (profile as any).display_name || (profile as any).full_name || "Usuário",
-            fullName: (profile as any).full_name || "Usuário",
-            avatarUrl: (profile as any).avatar_url || null,
-            role: (profile as any).role || "usuario",
-          });
-        }
-        
-        ensureUserProfile();
-      }
-    };
-
-    checkAuth();
-  }, [router]);
-
-  // Tela de loading enquanto verifica auth (apenas no primeiro acesso)
-  if (isAuthenticated === null) {
+  // Tela de loading enquanto verifica auth
+  if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-950">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-accent-cyan border-t-transparent" />
@@ -115,11 +31,22 @@ export default function DashboardLayout({
     );
   }
 
+  if (!user) {
+    return null; // Redirecionando...
+  }
+
+  const userInfo = {
+    displayName: user.profile.display_name || user.profile.full_name || "Usuário",
+    fullName: user.profile.full_name || "Usuário",
+    avatarUrl: user.profile.avatar_url || null,
+    role: user.profile.role || "usuario",
+  };
+
   return (
     <div className="flex h-screen overflow-hidden bg-slate-950 text-slate-50">
       <AppSidebar 
-        expanded={sidebarExpanded} 
-        onToggle={() => setSidebarExpanded((v) => !v)} 
+        expanded={sidebarExpanded}
+        onToggle={() => setSidebarExpanded(v => !v)}
         userInfo={userInfo}
       />
       {/* Main content with margin for fixed sidebar */}
@@ -131,5 +58,18 @@ export default function DashboardLayout({
       </main>
       <Toaster />
     </div>
+  );
+}
+
+// Layout principal com Provider
+export default function DashboardLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <UserProvider>
+      <DashboardContent>{children}</DashboardContent>
+    </UserProvider>
   );
 }
