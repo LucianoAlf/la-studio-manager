@@ -4,14 +4,14 @@
 // =============================================================================
 //
 // Fluxo:
-// 1. Evento criado com participante(s) → buscar no user_profiles por nome
-// 2. Se encontrou + tem phone via whatsapp_connections → enviar mensagem via UAZAPI
+// 1. Evento criado com participante(s) → buscar em contacts (fonte única de verdade)
+// 2. Se encontrou + tem phone → enviar mensagem via UAZAPI
 // 3. Salvar contexto de confirmação pendente para o participante
 // 4. Quando participante responde → notificar o criador
 //
 // Campos reais do banco:
-// - user_profiles: id, full_name, display_name, phone
-// - whatsapp_connections: user_id, phone_number (sem +), is_active
+// - contacts: id, name, phone, contact_type, user_profile_id (fonte única de verdade)
+// - user_profiles: id, full_name, user_id (dados do perfil)
 // - whatsapp_conversation_context: user_id, context_type, context_data, is_active
 // =============================================================================
 

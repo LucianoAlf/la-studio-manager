@@ -155,11 +155,10 @@ async function executeCreateCard(ctx: ExecutionContext): Promise<ExecutionResult
   if (entities.assigned_to) {
     const assigneeName = String(entities.assigned_to).trim()
     // Buscar usuário pelo nome (case-insensitive, parcial)
-    // id = user_profiles.id (FK de whatsapp_connections)
-    // user_id = auth.users.id (FK de kanban_cards)
+    // id = user_profiles.id, user_id = auth.users.id (FK de kanban_cards)
     const { data: assignee } = await supabase
       .from('user_profiles')
-      .select('id, user_id, full_name, phone')
+      .select('id, user_id, full_name')
       .eq('is_active', true)
       .ilike('full_name', `%${assigneeName}%`)
       .limit(1)
@@ -229,28 +228,17 @@ async function executeCreateCard(ctx: ExecutionContext): Promise<ExecutionResult
   let notifiedResponsible = false
   if (responsibleUserId !== authUserId) {
     try {
-      // Resolver telefone: user_profiles.phone (tela Equipe) é a fonte primária
-      // whatsapp_connections é fallback (pode estar desatualizado)
+      // Buscar telefone em contacts (fonte única de verdade)
       console.log(`[WA-03] Buscando telefone do responsável: profileId=${responsibleProfileId}`)
-      const { data: profileData } = await supabase
-        .from('user_profiles')
+      const { data: contactData } = await supabase
+        .from('contacts')
         .select('phone')
-        .eq('id', responsibleProfileId)
-        .single()
+        .eq('user_profile_id', responsibleProfileId)
+        .is('deleted_at', null)
+        .limit(1)
+        .maybeSingle()
 
-      let responsiblePhone = profileData?.phone ? profileData.phone.replace(/[\s+\-()]/g, '') : null
-
-      if (!responsiblePhone) {
-        const { data: conn } = await supabase
-          .from('whatsapp_connections')
-          .select('phone_number')
-          .eq('user_id', responsibleProfileId)
-          .eq('is_active', true)
-          .limit(1)
-          .maybeSingle()
-        responsiblePhone = conn?.phone_number || null
-      }
-
+      const responsiblePhone = contactData?.phone || null
       console.log(`[WA-03] Telefone resolvido: ${responsiblePhone || 'nenhum'}`)
 
       if (responsiblePhone && ctx.uazapiUrl && ctx.uazapiToken) {

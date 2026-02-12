@@ -49,7 +49,7 @@ async function resolveUserNames(
 
   const { data: profiles, error } = await supabase
     .from('user_profiles')
-    .select('user_id, full_name')
+    .select('user_id, full_name, display_name')
     .in('user_id', uniqueIds)
 
   if (error || !profiles) {
@@ -60,7 +60,7 @@ async function resolveUserNames(
   // deno-lint-ignore no-explicit-any
   for (const p of profiles as any[]) {
     if (p.user_id && p.full_name) {
-      nameMap[p.user_id] = p.full_name
+      nameMap[p.user_id] = p.display_name || p.full_name.split(' ')[0]
     }
   }
 
@@ -147,13 +147,16 @@ function formatDateTimeBR(date: Date | string): string {
   const d = typeof date === 'string' ? new Date(date) : date
   const sp = new Date(d.getTime() - 3 * 60 * 60000)
   const days = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb']
-  return `${days[sp.getUTCDay()]} ${sp.getUTCDate().toString().padStart(2, '0')}/${(sp.getUTCMonth() + 1).toString().padStart(2, '0')} ${sp.getUTCHours().toString().padStart(2, '0')}:${sp.getUTCMinutes().toString().padStart(2, '0')}`
+  const months = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez']
+  const time = `${sp.getUTCHours().toString().padStart(2, '0')}:${sp.getUTCMinutes().toString().padStart(2, '0')}`
+  return `${days[sp.getUTCDay()]} ${sp.getUTCDate().toString().padStart(2, '0')}/${months[sp.getUTCMonth()]} às ${time}`
 }
 
 function formatDateOnlyBR(date: Date | string): string {
   const d = typeof date === 'string' ? new Date(date) : date
   const sp = new Date(d.getTime() - 3 * 60 * 60000)
-  return `${sp.getUTCDate().toString().padStart(2, '0')}/${(sp.getUTCMonth() + 1).toString().padStart(2, '0')}`
+  const months = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez']
+  return `${sp.getUTCDate().toString().padStart(2, '0')}/${months[sp.getUTCMonth()]}`
 }
 
 function getPeriodLabel(period: string): string {
@@ -162,6 +165,13 @@ function getPeriodLabel(period: string): string {
 
 function getPriorityEmoji(p: string): string {
   return ({ urgent: '🔴', high: '🟠', medium: '🟡', low: '⚪' } as Record<string, string>)[p] || '🟡'
+}
+
+// Retorna tag de prioridade só para urgente/alta (não polui cards normais)
+function getPriorityTag(p: string): string {
+  if (p === 'urgent') return '\n   🔥 Urgente'
+  if (p === 'high') return '\n   🔥 Prioridade alta'
+  return ''
 }
 
 function getCalendarTypeEmoji(t: string): string {
@@ -250,26 +260,25 @@ export async function handleQueryCalendar(ctx: QueryContext): Promise<QueryResul
       const emoji = getCalendarTypeEmoji(item.type)
       const time = item.all_day ? 'Dia inteiro' : formatDateTimeBR(item.start_time)
       const responsible = item.responsible_user_id ? nameMap[item.responsible_user_id] : null
-      const responsibleText = responsible ? `\n👤 Responsável: ${responsible}` : ''
-      const locationText = item.location ? `\n📍 Local: ${item.location}` : ''
-      const brandText = item.metadata?.brand ? `\n🏷️ Marca: ${item.metadata.brand}` : ''
+      const responsibleText = responsible ? `\n👤 ${responsible}` : ''
+      const locationText = item.location ? `\n📍 ${item.location}` : ''
+      const brandText = item.metadata?.brand ? `\n🏷️ ${item.metadata.brand}` : ''
       return {
-        text: `${emoji} *${item.title}*\n📅 ${time}${locationText}${brandText}${responsibleText}`,
+        text: `${emoji} *${item.title}*\n� ${time}${locationText}${brandText}${responsibleText}`,
         resultCount: 1, queryType: 'query_calendar',
       }
     }
 
     // Múltiplos resultados — listar todos
-    const header = `📅 Encontrei ${items.length} eventos ${searchDesc}:\n`
+    const header = `📅 *${items.length} eventos ${searchDesc}*\n\n`
 
     // deno-lint-ignore no-explicit-any
     const lines = items.map((item: any, i: number) => {
-      const emoji = getCalendarTypeEmoji(item.type)
-      const time = item.all_day ? '🕐 Dia inteiro' : formatDateTimeBR(item.start_time)
+      const time = item.all_day ? 'Dia inteiro' : formatDateTimeBR(item.start_time)
       const responsible = item.responsible_user_id ? nameMap[item.responsible_user_id] : null
-      const responsibleText = responsible ? ` → ${responsible}` : ''
+      const responsibleText = responsible ? ` · ${responsible}` : ''
       const locationText = item.location ? `\n   📍 ${item.location}` : ''
-      return `${i + 1}. ${emoji} *${item.title}*\n   ${time}${responsibleText}${locationText}`
+      return `${i + 1}. *${item.title}*\n   🕐 ${time}${responsibleText}${locationText}`
     })
 
     return { text: header + lines.join('\n\n'), resultCount: items.length, queryType: 'query_calendar' }
@@ -326,16 +335,15 @@ export async function handleQueryCalendar(ctx: QueryContext): Promise<QueryResul
   const responsibleIds = items.map((i: any) => i.responsible_user_id).filter(Boolean)
   const nameMap = await resolveUserNames(supabase, responsibleIds)
 
-  const header = `📅 *Agenda ${getPeriodLabel(period)}* (${items.length} ${items.length === 1 ? 'item' : 'itens'}):\n`
+  const header = `📅 *Agenda ${getPeriodLabel(period)}* (${items.length} ${items.length === 1 ? 'item' : 'itens'})\n\n`
 
   // deno-lint-ignore no-explicit-any
   const lines = items.map((item: any, i: number) => {
-    const emoji = getCalendarTypeEmoji(item.type)
-    const time = item.all_day ? '🕐 Dia inteiro' : formatDateTimeBR(item.start_time)
+    const time = item.all_day ? 'Dia inteiro' : formatDateTimeBR(item.start_time)
     const responsible = item.responsible_user_id ? nameMap[item.responsible_user_id] : null
-    const responsibleText = responsible ? ` → ${responsible}` : ''
-    const statusEmoji = item.status === 'completed' ? ' ✅' : item.status === 'in_progress' ? ' 🔄' : ''
-    return `${i + 1}. ${emoji} *${item.title}*${statusEmoji}\n   ${time}${responsibleText}`
+    const responsibleText = responsible ? ` · ${responsible}` : ''
+    const statusTag = item.status === 'completed' ? '\n   ✅ Concluído' : item.status === 'in_progress' ? '\n   🔄 Em andamento' : ''
+    return `${i + 1}. *${item.title}*\n   🕐 ${time}${responsibleText}${statusTag}`
   })
 
   return { text: header + lines.join('\n\n'), resultCount: items.length, queryType: 'query_calendar' }
@@ -435,16 +443,16 @@ export async function handleQueryCards(ctx: QueryContext): Promise<QueryResult> 
     ? `prioridade ${entities.priority}`
     : entities.column ? `coluna ${entities.column}` : 'ativos'
 
-  const header = `📋 *Cards ${filterLabel}* (${cards.length}):\n`
+  const header = `📋 *Cards ${filterLabel}* (${cards.length})\n\n`
 
   // deno-lint-ignore no-explicit-any
   const lines = cards.map((card: any, i: number) => {
-    const emoji = getPriorityEmoji(card.priority)
     const colName = card.column?.name || '?'
     const responsible = card.responsible_user_id ? nameMap[card.responsible_user_id] : null
-    const dueText = card.due_date ? `\n   📅 ${formatDateOnlyBR(card.due_date)}` : ''
-    const responsibleText = responsible ? ` → ${responsible}` : ''
-    return `${i + 1}. ${emoji} *${card.title}*\n   📍 ${colName}${responsibleText}${dueText}`
+    const responsibleText = responsible ? ` · ${responsible}` : ''
+    const dueText = card.due_date ? `\n   📅 Entrega: ${formatDateOnlyBR(card.due_date)}` : ''
+    const priorityTag = getPriorityTag(card.priority)
+    return `${i + 1}. *${card.title}*\n   � ${colName}${responsibleText}${dueText}${priorityTag}`
   })
 
   return { text: header + lines.join('\n\n'), resultCount: cards.length, queryType: 'query_cards' }
@@ -460,77 +468,64 @@ export async function handleQueryProjects(ctx: QueryContext): Promise<QueryResul
 
   console.log(`[WA-04] Query projects`)
 
+  // Buscar cards ativos com coluna e responsável
+  const { data: cards, error: cardError } = await supabase
+    .from('kanban_cards')
+    .select('id, title, priority, due_date, responsible_user_id, column_id')
+    .is('deleted_at', null)
+    .order('created_at', { ascending: false })
+    .limit(20)
+
+  if (cardError || !cards || cards.length === 0) {
+    return { text: `Nenhum card cadastrado no momento, ${userName}.`, resultCount: 0, queryType: 'query_projects' }
+  }
+
   // Buscar colunas
-  const { data: columns, error: colError } = await supabase
+  const { data: columns } = await supabase
     .from('kanban_columns')
     .select('id, name, slug, position')
     .order('position', { ascending: true })
 
-  if (colError || !columns) {
-    return { text: `❌ Erro ao consultar projeto, ${userName}.`, resultCount: 0, queryType: 'query_projects' }
-  }
-
-  // Uma única query via RPC em vez de N queries sequenciais
-  const { data: cardCounts, error: countError } = await supabase.rpc('get_cards_count_by_column')
-
-  const countMap: Record<string, number> = {}
-  if (!countError && cardCounts) {
+  // deno-lint-ignore no-explicit-any
+  const colMap: Record<string, { name: string; slug: string }> = {}
+  if (columns) {
     // deno-lint-ignore no-explicit-any
-    for (const row of cardCounts as any[]) {
-      countMap[row.column_id] = Number(row.card_count)
+    for (const col of columns as any[]) {
+      colMap[col.id] = { name: col.name, slug: col.slug }
     }
   }
 
-  let totalCards = 0
+  // Resolver nomes dos responsáveis
   // deno-lint-ignore no-explicit-any
-  const counts = columns.map((col: any) => {
-    const c = countMap[col.id] || 0
-    totalCards += c
-    return { name: col.name, count: c, slug: col.slug }
+  const authUserIds = cards.map((c: any) => c.responsible_user_id).filter(Boolean)
+  const nameMap = await resolveUserNames(supabase, authUserIds)
+
+  // Filtrar cards ativos (excluir published/archived)
+  // deno-lint-ignore no-explicit-any
+  const activeCards = cards.filter((c: any) => {
+    const col = colMap[c.column_id]
+    return col && !['published', 'archived'].includes(col.slug)
   })
 
-  // Cards urgentes (1 query)
-  const { count: urgentCount } = await supabase
-    .from('kanban_cards')
-    .select('id', { count: 'exact', head: true })
-    .eq('priority', 'urgent')
-    .is('deleted_at', null)
+  const totalActive = activeCards.length
 
-  // Cards com prazo vencido (excluindo published/archived)
-  // deno-lint-ignore no-explicit-any
-  const finishedIds = columns
-    .filter((c: any) => ['published', 'archived'].includes(c.slug))
-    .map((c: any) => c.id)
-
-  let overdueQuery = supabase
-    .from('kanban_cards')
-    .select('id', { count: 'exact', head: true })
-    .lt('due_date', new Date().toISOString())
-    .is('deleted_at', null)
-
-  for (const fId of finishedIds) {
-    overdueQuery = overdueQuery.neq('column_id', fId)
+  if (totalActive === 0) {
+    return { text: `Todos os cards estão publicados ou arquivados, ${userName}. Nenhum ativo no momento.`, resultCount: 0, queryType: 'query_projects' }
   }
-  const { count: overdueCount } = await overdueQuery
 
-  // Formatar
-  const header = `📊 *Status do Projeto* (${totalCards} cards total):\n`
-
+  // Formatar lista de cards
+  const header = `📋 *Cards ativos (${totalActive})*\n\n`
   // deno-lint-ignore no-explicit-any
-  const colLines = counts
-    .filter((c: any) => c.count > 0)
-    .map((c: any) => {
-      const bar = '█'.repeat(Math.min(c.count, 10)) + (c.count > 10 ? '…' : '')
-      return `  ${c.name}: ${c.count} ${bar}`
-    })
+  const cardLines = activeCards.map((c: any, i: number) => {
+    const col = colMap[c.column_id]
+    const colName = col?.name || '?'
+    const responsible = c.responsible_user_id ? (nameMap[c.responsible_user_id] || '?') : '—'
+    const dueText = c.due_date ? `\n   📅 Entrega: ${formatDateOnlyBR(c.due_date)}` : ''
+    const priorityTag = getPriorityTag(c.priority)
+    return `${i + 1}. *${c.title}*\n   📌 ${colName} · ${responsible}${dueText}${priorityTag}`
+  })
 
-  const alerts: string[] = []
-  if (urgentCount && urgentCount > 0) alerts.push(`🔴 ${urgentCount} card(s) urgente(s)`)
-  if (overdueCount && overdueCount > 0) alerts.push(`⚠️ ${overdueCount} card(s) com prazo vencido`)
-
-  const alertSection = alerts.length > 0 ? `\n\n*Alertas:*\n${alerts.join('\n')}` : ''
-
-  return { text: header + colLines.join('\n') + alertSection, resultCount: totalCards, queryType: 'query_projects' }
+  return { text: header + cardLines.join('\n\n'), resultCount: totalActive, queryType: 'query_projects' }
 }
 
 // ============================================
@@ -584,20 +579,20 @@ export async function handleGenerateReport(ctx: QueryContext): Promise<QueryResu
   const totalEvents = events?.length ?? 0
   const newCardsCount = newCards?.length ?? 0
 
-  const header = `📈 *Resumo ${getPeriodLabel(period)}*\n`
+  const header = `� *Resumo ${getPeriodLabel(period)}*\n\n`
 
   const sections = [
-    `📋 *Cards criados:* ${newCardsCount}`,
-    `✅ *Cards publicados:* ${publishedCount}`,
-    `📅 *Eventos:* ${totalEvents} (${completedEvents} concluído${completedEvents !== 1 ? 's' : ''})`,
+    `📋 Cards criados: ${newCardsCount}`,
+    `✅ Publicados: ${publishedCount}`,
+    `📅 Eventos: ${totalEvents} (${completedEvents} concluído${completedEvents !== 1 ? 's' : ''})`,
   ]
 
   if (newCards && newCards.length > 0) {
     // deno-lint-ignore no-explicit-any
     const topCards = newCards.slice(0, 5).map((c: any, i: number) =>
-      `   ${i + 1}. ${getPriorityEmoji(c.priority)} ${c.title} → ${c.column?.name || '?'}`
+      `${i + 1}. ${c.title} · ${c.column?.name || '?'}`
     ).join('\n')
-    sections.push(`\n📝 *Últimos cards criados:*\n${topCards}`)
+    sections.push(`\n📝 *Últimos cards:*\n${topCards}`)
   }
 
   return { text: header + sections.join('\n'), resultCount: newCardsCount + totalEvents, queryType: 'generate_report' }

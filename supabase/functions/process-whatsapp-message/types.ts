@@ -57,6 +57,7 @@ export interface UserInfo {
   profile_id: string      // PK de user_profiles → usar em tabelas whatsapp_*
   auth_user_id: string    // FK auth.users → usar em kanban_cards, calendar_items, etc.
   full_name: string
+  display_name: string | null  // Nome de exibição (ex: "Alf" em vez de "Luciano")
   avatar_url: string | null
   role: string
   phone_number: string

@@ -142,7 +142,7 @@ export async function updateMyProfile(
   updates: Partial<
     Pick<
       UserProfileExtended,
-      "full_name" | "display_name" | "phone" | "avatar_url" | "bio" | "specializations"
+      "full_name" | "display_name" | "avatar_url" | "bio" | "specializations"
     >
   >
 ): Promise<UserProfileExtended | null> {
@@ -156,6 +156,48 @@ export async function updateMyProfile(
 
   if (error) throw new Error(error.message);
   return data as unknown as UserProfileExtended;
+}
+
+/**
+ * Atualiza o telefone do usuário em contacts (fonte única de verdade).
+ */
+export async function updateContactPhone(
+  profileId: string,
+  phone: string | null
+): Promise<void> {
+  const supabase = getSupabase();
+  let normalizedPhone = phone ? phone.replace(/[\s+\-()]/g, '') : null;
+  if (normalizedPhone && normalizedPhone.length <= 11 && !normalizedPhone.startsWith('55')) {
+    normalizedPhone = '55' + normalizedPhone;
+  }
+
+  const { data: existing } = await supabase
+    .from("contacts")
+    .select("id")
+    .eq("user_profile_id", profileId)
+    .is("deleted_at", null)
+    .limit(1)
+    .maybeSingle();
+
+  if (existing) {
+    const { error } = await supabase
+      .from("contacts")
+      .update({ phone: normalizedPhone, updated_at: new Date().toISOString() } as never)
+      .eq("id", (existing as { id: string }).id);
+    if (error) throw new Error(error.message);
+  } else if (normalizedPhone) {
+    const { error } = await supabase
+      .from("contacts")
+      .insert({
+        name: "Usuário",
+        phone: normalizedPhone,
+        contact_type: "user",
+        user_profile_id: profileId,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      } as never);
+    if (error) throw new Error(error.message);
+  }
 }
 
 // ============================================================
@@ -410,17 +452,17 @@ export async function createDashboardReminder(
 ): Promise<ScheduledReminder> {
   const supabase = getSupabase();
 
-  // Buscar telefone do usuário
-  const { data: connData } = await supabase
-    .from("whatsapp_connections")
-    .select("phone_number")
-    .eq("user_id", profileId)
-    .eq("is_active", true)
+  // Buscar telefone do usuário via contacts (fonte única de verdade)
+  const { data: contactData } = await supabase
+    .from("contacts")
+    .select("phone")
+    .eq("user_profile_id", profileId)
+    .is("deleted_at", null)
     .single();
 
-  const conn = connData as { phone_number: string } | null;
-  if (!conn?.phone_number) {
-    throw new Error("Nenhum WhatsApp conectado. Conecte seu número primeiro.");
+  const conn = contactData as { phone: string } | null;
+  if (!conn?.phone) {
+    throw new Error("Nenhum telefone cadastrado. Adicione na tela de Equipe.");
   }
 
   const { data, error } = await supabase
@@ -428,7 +470,7 @@ export async function createDashboardReminder(
     .insert({
       target_type: "user",
       target_user_id: profileId,
-      target_phone: conn.phone_number,
+      target_phone: conn.phone,
       message_type: "text",
       content: `⏰ *Lembrete*\n\n${params.content}`,
       scheduled_for: params.scheduledFor,

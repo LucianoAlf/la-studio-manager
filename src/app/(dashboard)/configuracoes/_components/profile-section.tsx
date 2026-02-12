@@ -5,7 +5,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { SpinnerGap, User, FloppyDisk, Eye, EyeSlash, Key, EnvelopeSimple, CaretDown } from "@phosphor-icons/react";
 import type { UserProfileExtended } from "@/lib/types/settings";
-import { updateMyProfile } from "@/lib/queries/settings";
+import { updateMyProfile, updateContactPhone } from "@/lib/queries/settings";
 import { AvatarUpload } from "@/components/ui/avatar-upload";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
@@ -71,10 +71,13 @@ export function ProfileSection({ profile, email, onProfileUpdated }: ProfileSect
       const updated = await updateMyProfile(profile.id, {
         full_name: form.full_name,
         display_name: form.display_name || null,
-        phone: form.phone || null,
         bio: form.bio || null,
         specializations: form.specializations,
       });
+      // Salvar telefone em contacts (fonte única de verdade)
+      if (form.phone !== (profile.phone || "")) {
+        await updateContactPhone(profile.id, form.phone || null);
+      }
       if (updated) {
         onProfileUpdated(updated);
         toast.success("Perfil atualizado com sucesso!");

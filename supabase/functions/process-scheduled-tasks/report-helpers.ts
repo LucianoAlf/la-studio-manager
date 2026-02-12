@@ -173,18 +173,19 @@ export async function resolveUserNames(
 // ============================================
 
 /**
- * Busca telefone do usuário via whatsapp_connections.
+ * Busca telefone do usuário via contacts (fonte única de verdade).
  * Centralizado aqui para evitar duplicação em daily-digest e weekly-summary.
  */
 export async function getUserPhone(supabase: any, profileId: string): Promise<string | null> {
   const { data } = await supabase
-    .from('whatsapp_connections')
-    .select('phone_number')
-    .eq('user_id', profileId)
-    .eq('is_active', true)
+    .from('contacts')
+    .select('phone')
+    .eq('user_profile_id', profileId)
+    .is('deleted_at', null)
+    .limit(1)
     .single()
 
-  return data?.phone_number || null
+  return data?.phone || null
 }
 
 

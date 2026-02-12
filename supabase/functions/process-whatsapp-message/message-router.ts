@@ -23,7 +23,7 @@ import type { RouteMessageParams, MessageResponse } from './types.ts'
 
 export async function routeMessage(params: RouteMessageParams): Promise<MessageResponse> {
   const { supabase, user, parsed } = params
-  const firstName = user.full_name.split(' ')[0]
+  const firstName = user.display_name || user.full_name.split(' ')[0]
   const userId = user.profile_id
   const authUserId = user.auth_user_id
   const phone = parsed.from
@@ -1233,57 +1233,25 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
         return { text: `Quem você quer que eu notifique, ${firstName}?`, intent: 'notify_user_missing_target', confidence: 0.9 }
       }
 
-      // 1. Buscar na equipe (user_profiles)
-      const { data: targetProfile } = await supabase
-        .from('user_profiles')
-        .select('id, user_id, full_name, phone')
-        .eq('is_active', true)
-        .ilike('full_name', `%${notifyTarget.trim()}%`)
+      // Buscar em contacts (fonte única de verdade — equipe + agenda)
+      const { data: targetContact } = await supabase
+        .from('contacts')
+        .select('id, name, phone, contact_type, user_profile_id')
+        .ilike('name', `%${notifyTarget.trim()}%`)
+        .is('deleted_at', null)
         .limit(1)
         .maybeSingle()
 
-      // 2. Se não achou na equipe, buscar na agenda (contacts)
-      let targetName = ''
-      let targetPhone: string | null = null
-
-      if (targetProfile) {
-        targetName = targetProfile.full_name
-        // Cadeia de resolução: user_profiles.phone → whatsapp_connections → contacts.phone
-        targetPhone = targetProfile.phone ? targetProfile.phone.replace(/[\s+\-()]/g, '') : null
-
-        if (!targetPhone) {
-          const { data: conn } = await supabase
-            .from('whatsapp_connections').select('phone_number')
-            .eq('user_id', targetProfile.id).eq('is_active', true).limit(1).maybeSingle()
-          targetPhone = conn?.phone_number || null
-        }
-        if (!targetPhone) {
-          const { data: contact } = await supabase
-            .from('contacts').select('phone')
-            .eq('user_profile_id', targetProfile.id).is('deleted_at', null).limit(1).maybeSingle()
-          targetPhone = contact?.phone || null
-        }
-      } else {
-        // Não é membro da equipe — buscar direto na agenda
-        const { data: contact } = await supabase
-          .from('contacts').select('id, name, phone')
-          .ilike('name', `%${notifyTarget.trim()}%`)
-          .is('deleted_at', null).limit(1).maybeSingle()
-
-        if (contact) {
-          targetName = contact.name
-          targetPhone = contact.phone || null
-        }
+      if (!targetContact) {
+        return { text: `Não encontrei "${notifyTarget}" na agenda. Confere o nome.`, intent: 'notify_user_not_found', confidence: 1.0 }
+      }
+      if (!targetContact.phone) {
+        return { text: `${targetContact.name} não tem telefone cadastrado.`, intent: 'notify_user_no_phone', confidence: 1.0 }
       }
 
-      if (!targetName) {
-        return { text: `Não encontrei "${notifyTarget}" nem na equipe nem na agenda. Confere o nome.`, intent: 'notify_user_not_found', confidence: 1.0 }
-      }
-      if (!targetPhone) {
-        return { text: `${targetName} não tem telefone cadastrado. Adiciona na tela de Equipe ou na agenda.`, intent: 'notify_user_no_phone', confidence: 1.0 }
-      }
-
-      console.log(`[WA-NOTIFY] Telefone resolvido para ${targetName}: ${targetPhone} (fonte: ${targetProfile ? 'equipe' : 'agenda'})`)
+      const targetName = targetContact.name
+      const targetPhone = targetContact.phone
+      console.log(`[WA-NOTIFY] Telefone resolvido para ${targetName}: ${targetPhone} (tipo: ${targetContact.contact_type})`)
 
       // Buscar card relacionado se mencionado
       let cardInfo = ''
@@ -2726,51 +2694,24 @@ async function routeClassifiedMessage(
         return { text: `Quem você quer que eu notifique, ${firstName}?`, intent: 'notify_user_missing_target', confidence: 0.9 }
       }
 
-      // 1. Buscar na equipe (user_profiles)
-      const { data: targetProfile } = await supabase
-        .from('user_profiles')
-        .select('id, user_id, full_name, phone')
-        .eq('is_active', true)
-        .ilike('full_name', `%${notifyTarget.trim()}%`)
+      // Buscar em contacts (fonte única de verdade — equipe + agenda)
+      const { data: targetContact } = await supabase
+        .from('contacts')
+        .select('id, name, phone, contact_type')
+        .ilike('name', `%${notifyTarget.trim()}%`)
+        .is('deleted_at', null)
         .limit(1)
         .maybeSingle()
 
-      // 2. Resolver nome e telefone: equipe → whatsapp_connections → agenda
-      let targetName = ''
-      let targetPhone: string | null = null
-
-      if (targetProfile) {
-        targetName = targetProfile.full_name
-        targetPhone = targetProfile.phone ? targetProfile.phone.replace(/[\s+\-()]/g, '') : null
-        if (!targetPhone) {
-          const { data: conn } = await supabase
-            .from('whatsapp_connections').select('phone_number')
-            .eq('user_id', targetProfile.id).eq('is_active', true).limit(1).maybeSingle()
-          targetPhone = conn?.phone_number || null
-        }
-        if (!targetPhone) {
-          const { data: contact } = await supabase
-            .from('contacts').select('phone')
-            .eq('user_profile_id', targetProfile.id).is('deleted_at', null).limit(1).maybeSingle()
-          targetPhone = contact?.phone || null
-        }
-      } else {
-        const { data: contact } = await supabase
-          .from('contacts').select('id, name, phone')
-          .ilike('name', `%${notifyTarget.trim()}%`)
-          .is('deleted_at', null).limit(1).maybeSingle()
-        if (contact) {
-          targetName = contact.name
-          targetPhone = contact.phone || null
-        }
+      if (!targetContact) {
+        return { text: `Não encontrei "${notifyTarget}" na agenda.`, intent: 'notify_user_not_found', confidence: 1.0 }
+      }
+      if (!targetContact.phone) {
+        return { text: `${targetContact.name} não tem telefone cadastrado.`, intent: 'notify_user_no_phone', confidence: 1.0 }
       }
 
-      if (!targetName) {
-        return { text: `Não encontrei "${notifyTarget}" nem na equipe nem na agenda.`, intent: 'notify_user_not_found', confidence: 1.0 }
-      }
-      if (!targetPhone) {
-        return { text: `${targetName} não tem telefone cadastrado.`, intent: 'notify_user_no_phone', confidence: 1.0 }
-      }
+      const targetName = targetContact.name
+      const targetPhone = targetContact.phone
 
       let cardInfo = ''
       if (cardTitle || notifyMessage) {
@@ -2922,9 +2863,10 @@ function buildConfirmationMessage(action: string, entities: Record<string, unkno
   const parts: string[] = []
 
   if (action === 'create_calendar') {
-    parts.push('📝 *' + (entities.title || 'Evento') + '*')
+    parts.push('📅 *Criar evento?*\n')
+    parts.push(`📌 ${entities.title || 'Evento'}`)
     if (entities.date) {
-      let dateLine = `📅 ${entities.date}`
+      let dateLine = `🕐 ${entities.date}`
       if (entities.time) dateLine += ` às ${entities.time}`
       parts.push(dateLine)
     }
@@ -2932,14 +2874,16 @@ function buildConfirmationMessage(action: string, entities: Record<string, unkno
     if (entities.participants) parts.push(`👤 ${entities.participants}`)
     if (entities.duration_minutes) parts.push(`⏱️ ${entities.duration_minutes} min`)
   } else if (action === 'create_card') {
-    parts.push('📝 *' + (entities.title || 'Tarefa') + '*')
-    if (entities.priority === 'urgent') parts.push('🔴 Urgente')
-    else if (entities.priority === 'high') parts.push('🟠 Alta prioridade')
+    parts.push('📋 *Criar card?*\n')
+    parts.push(`📌 ${entities.title || 'Tarefa'}`)
     if (entities.assigned_to) parts.push(`👤 ${entities.assigned_to}`)
     if (entities.deadline || entities.date) parts.push(`📅 Prazo: ${entities.deadline || entities.date}`)
     if (entities.content_type) parts.push(`🎬 ${entities.content_type}`)
+    if (entities.priority === 'urgent') parts.push('🔥 Urgente')
+    else if (entities.priority === 'high') parts.push('🔥 Prioridade alta')
   } else if (action === 'create_reminder') {
-    parts.push('⏰ *' + (entities.reminder_text || 'Lembrete') + '*')
+    parts.push('⏰ *Criar lembrete?*\n')
+    parts.push(`📌 ${entities.reminder_text || 'Lembrete'}`)
     if (entities.reminder_date) parts.push(`📅 ${entities.reminder_date}`)
     if (entities.reminder_time) parts.push(`🕐 ${entities.reminder_time}`)
     if (entities.reminder_recurrence) {
@@ -2963,7 +2907,7 @@ function buildConfirmationMessage(action: string, entities: Record<string, unkno
 
 function formatPriority(p: string): string {
   const map: Record<string, string> = {
-    urgent: '🔴 Urgente', high: '🟠 Alta', medium: '🟡 Média', low: '⚪ Baixa',
+    urgent: '🔥 Urgente', high: '🔥 Alta', medium: 'Média', low: 'Baixa',
   }
   return map[p] || p
 }

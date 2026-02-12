@@ -183,8 +183,10 @@ serve(async (req: Request) => {
         .single()
 
       // --- PASSO 4: Decidir se responde (group-handler) ---
+      // Usar display_name do banco quando disponível (ex: "Alf" em vez de "Luciano")
+      const displayName = user?.display_name || user?.full_name?.split(' ')[0] || senderName
       const groupResult = await handleGroupMessage(
-        supabase, groupText, groupJid, senderPhone, senderName, userId
+        supabase, groupText, groupJid, senderPhone, displayName, userId
       )
 
       if (!groupResult.shouldRespond) {

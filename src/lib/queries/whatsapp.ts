@@ -4,35 +4,6 @@
 
 import { createClient } from '@/lib/supabase/client'
 
-// ----- Connections -----
-
-export const getWhatsAppConnections = async () => {
-  const supabase = createClient()
-  return supabase
-    .from('whatsapp_connections')
-    .select(`
-      *,
-      user:user_profiles(id, full_name, avatar_url, role)
-    `)
-    .eq('is_active', true)
-    .order('created_at', { ascending: true })
-}
-
-export const connectWhatsAppUser = async (userId: string, phoneNumber: string, displayName?: string) => {
-  const supabase = createClient()
-  return supabase
-    .from('whatsapp_connections')
-    .upsert({
-      user_id: userId,
-      phone_number: phoneNumber,
-      phone_jid: `${phoneNumber}@s.whatsapp.net`,
-      display_name: displayName,
-      is_active: true,
-    } as never, { onConflict: 'user_id' })
-    .select()
-    .single()
-}
-
 // ----- Messages (para futura página de histórico) -----
 
 export const getWhatsAppMessages = async (filters?: {

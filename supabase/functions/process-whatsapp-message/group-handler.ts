@@ -152,6 +152,19 @@ function isCallingAnotherPerson(text: string): boolean {
   if (!text) return false
   const lower = text.toLowerCase().trim()
 
+  // Palavras comuns que NÃO são nomes de pessoas
+  const commonWords = new Set([
+    'sim', 'não', 'nao', 'ok', 'beleza', 'blz', 'bom', 'boa', 'bem', 'mal',
+    'mas', 'pois', 'então', 'entao', 'tipo', 'cara', 'mano', 'pow', 'pô',
+    'legal', 'show', 'top', 'massa', 'dahora', 'verdade', 'claro', 'certo',
+    'errado', 'isso', 'aquilo', 'esse', 'essa', 'este', 'esta', 'aqui', 'ali',
+    'bora', 'vamos', 'pode', 'pronto', 'feito', 'tudo', 'nada', 'algo',
+    'obrigado', 'obrigada', 'valeu', 'brigado', 'brigada', 'tmj', 'vlw',
+    'ah', 'ahh', 'eita', 'uai', 'ué', 'hum', 'hmm', 'aham', 'uhum',
+    'pera', 'perai', 'calma', 'espera', 'olha', 'veja', 'enfim', 'anyway',
+    'aliás', 'alias', 'inclusive', 'porém', 'porem', 'contudo', 'todavia',
+  ])
+
   // Padrões de chamada direta:
   // 1. "Fala X", "Oi X", "E aí X", "Opa X" (saudação + nome)
   // 2. "Yuri, ..." (nome seguido de vírgula — dirigindo-se a alguém)
@@ -164,6 +177,8 @@ function isCallingAnotherPerson(text: string): boolean {
     const match = lower.match(pattern)
     if (match) {
       const calledName = match[1].trim()
+      // Ignorar palavras comuns que não são nomes
+      if (commonWords.has(calledName)) continue
       // Se o nome chamado é o Mike → NÃO é outra pessoa
       const isMike = getTriggerNames().some((n: string) => calledName === n.toLowerCase())
       if (!isMike && calledName.length >= 2) {
