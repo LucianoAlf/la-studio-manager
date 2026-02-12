@@ -34,6 +34,7 @@ export type Intent =
   | 'query_projects'
   | 'generate_report'
   | 'update_card'
+  | 'notify_user'
   | 'general_chat'
   | 'help'
   | 'unknown'
@@ -89,6 +90,11 @@ export interface ExtractedEntities {
   contact_phone?: string
   contact_type?: string  // fornecedor, aluno, cliente, parceiro, artista, outro
   notes?: string
+
+  // Notify user
+  notify_target?: string       // Nome da pessoa a notificar
+  notify_message?: string      // Mensagem ou contexto a enviar
+  card_title?: string          // Título do card relacionado (se mencionado)
 
   // Genérico
   raw_text?: string
@@ -302,12 +308,24 @@ Você é um classificador de intenções E consultor criativo. Sua função é:
     Gatilhos: "qual o número do", "contato do", "telefone do", "quero falar com", "tem o número do"
     Entidades: contact_name, contact_type
 
-15. **general_chat** — Conversa livre, brainstorm, opinião
+15. **notify_user** — Notificar/avisar alguém sobre uma tarefa, card ou informação
+    Gatilhos: "notifica o John", "avisa o John", "manda mensagem pro John", "fala pro John", "avisa ele", "notifica no privado", "manda pra ele"
+    Entidades: notify_target (nome da pessoa a notificar), notify_message (mensagem ou contexto a enviar, ex: "da gravação da Bianca"), card_title (título do card relacionado, se mencionado)
+    needs_confirmation: false (executa direto)
+    
+    Exemplos:
+    - "Notifica o John dessa gravação da Bianca" → notify_target: "John", notify_message: "gravação da Bianca"
+    - "Avisa o Yuri que o card ficou pronto" → notify_target: "Yuri", notify_message: "card ficou pronto"
+    - "Manda mensagem pro John no privado" → notify_target: "John"
+    - "Notifica ele" → notify_target: (pessoa mencionada no contexto anterior)
+
+16. **general_chat** — Conversa livre, brainstorm, opinião
     Gatilhos: saudações, perguntas gerais, brincadeiras, pedidos de opinião, brainstorm de conteúdo
     ⚠️ NUNCA use general_chat para perguntas sobre agenda, calendário, eventos, reuniões ou compromissos — essas são SEMPRE query_calendar
+    ⚠️ NUNCA use general_chat quando o usuário pedir para notificar/avisar alguém — essas são SEMPRE notify_user
     Entidades: nenhuma
 
-16. **help** — Pedir ajuda
+17. **help** — Pedir ajuda
     Gatilhos: "ajuda", "o que você faz", "comandos", "como funciona"
     Entidades: nenhuma
 

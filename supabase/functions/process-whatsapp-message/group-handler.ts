@@ -152,9 +152,12 @@ function isCallingAnotherPerson(text: string): boolean {
   if (!text) return false
   const lower = text.toLowerCase().trim()
 
-  // Padrões de chamada direta: "Fala X", "Oi X", "E aí X", "Opa X"
+  // Padrões de chamada direta:
+  // 1. "Fala X", "Oi X", "E aí X", "Opa X" (saudação + nome)
+  // 2. "Yuri, ..." (nome seguido de vírgula — dirigindo-se a alguém)
   const callingPatterns = [
     /^(?:fala|oi|e\s*a[ií]|opa|hey|ei|salve|ol[aá])\s+([a-záàâãéèêíïóôõöúçñ]+)/i,
+    /^([a-záàâãéèêíïóôõöúçñ]{2,})\s*,/i,
   ]
 
   for (const pattern of callingPatterns) {

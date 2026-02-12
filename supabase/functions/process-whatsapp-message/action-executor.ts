@@ -7,6 +7,7 @@
  */
 
 import type { ExtractedEntities } from './gemini-classifier.ts'
+import { sendTextMessage } from './send-message.ts'
 
 // ============================================
 // TIPOS
@@ -27,23 +28,36 @@ interface ExecutionContext {
   userName: string
   phone: string
   entities: ExtractedEntities
+  uazapiUrl?: string    // UAZAPI server URL para notificações
+  uazapiToken?: string  // UAZAPI instance token para notificações
 }
 
 // ============================================
 // MAPEAMENTO DE SLUGS (WA-02 → DB)
 // ============================================
-// O NLP do WA-02 classifica como 'brainstorm', DB tem 'brainstorming'
+// Slugs reais no banco: brainstorm, planning, todo, capturing, editing, awaiting_approval, approved, published, archived
 const COLUMN_SLUG_MAP: Record<string, string> = {
-  'brainstorm': 'brainstorming',
-  'brainstorming': 'brainstorming',
+  'brainstorm': 'brainstorm',
+  'brainstorming': 'brainstorm',
   'planning': 'planning',
+  'planejamento': 'planning',
   'todo': 'todo',
+  'a_fazer': 'todo',
   'capturing': 'capturing',
+  'captando': 'capturing',
+  'gravação': 'capturing',
+  'gravacao': 'capturing',
   'editing': 'editing',
+  'editando': 'editing',
   'awaiting_approval': 'awaiting_approval',
+  'aprovação': 'awaiting_approval',
+  'aprovacao': 'awaiting_approval',
   'approved': 'approved',
+  'aprovado': 'approved',
   'published': 'published',
+  'publicado': 'published',
   'archived': 'archived',
+  'arquivo': 'archived',
 }
 
 // ============================================
@@ -105,7 +119,7 @@ async function executeCreateCard(ctx: ExecutionContext): Promise<ExecutionResult
   const { supabase, authUserId, entities } = ctx
 
   // 1. Resolver column_id pelo slug
-  const columnSlug = COLUMN_SLUG_MAP[entities.column || 'brainstorm'] || 'brainstorming'
+  const columnSlug = COLUMN_SLUG_MAP[entities.column || 'brainstorm'] || 'brainstorm'
 
   const { data: column, error: columnError } = await supabase
     .from('kanban_columns')
@@ -135,14 +149,17 @@ async function executeCreateCard(ctx: ExecutionContext): Promise<ExecutionResult
   const nextPosition = (maxPosResult?.position_in_column ?? 0) + 1
 
   // 3. WA-06.8: Resolver responsável (assigned_to) por nome
-  let responsibleUserId = authUserId // Default: criador é responsável
+  let responsibleUserId = authUserId // Default: criador é responsável (auth.users.id)
+  let responsibleProfileId = ctx.profileId // Default: profile do criador (user_profiles.id)
   let responsibleName = ctx.userName
   if (entities.assigned_to) {
     const assigneeName = String(entities.assigned_to).trim()
     // Buscar usuário pelo nome (case-insensitive, parcial)
+    // id = user_profiles.id (FK de whatsapp_connections)
+    // user_id = auth.users.id (FK de kanban_cards)
     const { data: assignee } = await supabase
       .from('user_profiles')
-      .select('user_id, full_name')
+      .select('id, user_id, full_name, phone')
       .eq('is_active', true)
       .ilike('full_name', `%${assigneeName}%`)
       .limit(1)
@@ -150,8 +167,9 @@ async function executeCreateCard(ctx: ExecutionContext): Promise<ExecutionResult
 
     if (assignee) {
       responsibleUserId = assignee.user_id
+      responsibleProfileId = assignee.id
       responsibleName = assignee.full_name
-      console.log(`[WA-03] Responsável resolvido: "${assigneeName}" → ${assignee.full_name} (${assignee.user_id})`)
+      console.log(`[WA-03] Responsável resolvido: "${assigneeName}" → ${assignee.full_name} (auth=${assignee.user_id}, profile=${assignee.id})`)
     } else {
       console.log(`[WA-03] Responsável "${assigneeName}" não encontrado, usando criador`)
     }
@@ -207,7 +225,71 @@ async function executeCreateCard(ctx: ExecutionContext): Promise<ExecutionResult
 
   console.log(`[WA-03] Card created: ${card.id} - "${card.title}"`)
 
-  // 6. Montar resposta de sucesso (tom Mike)
+  // 6. Notificar responsável via WhatsApp (se diferente do criador)
+  let notifiedResponsible = false
+  if (responsibleUserId !== authUserId) {
+    try {
+      // Resolver telefone: user_profiles.phone (tela Equipe) é a fonte primária
+      // whatsapp_connections é fallback (pode estar desatualizado)
+      console.log(`[WA-03] Buscando telefone do responsável: profileId=${responsibleProfileId}`)
+      const { data: profileData } = await supabase
+        .from('user_profiles')
+        .select('phone')
+        .eq('id', responsibleProfileId)
+        .single()
+
+      let responsiblePhone = profileData?.phone ? profileData.phone.replace(/[\s+\-()]/g, '') : null
+
+      if (!responsiblePhone) {
+        const { data: conn } = await supabase
+          .from('whatsapp_connections')
+          .select('phone_number')
+          .eq('user_id', responsibleProfileId)
+          .eq('is_active', true)
+          .limit(1)
+          .maybeSingle()
+        responsiblePhone = conn?.phone_number || null
+      }
+
+      console.log(`[WA-03] Telefone resolvido: ${responsiblePhone || 'nenhum'}`)
+
+      if (responsiblePhone && ctx.uazapiUrl && ctx.uazapiToken) {
+        const serverUrl = ctx.uazapiUrl
+        const token = ctx.uazapiToken
+
+        const notifyParts = [
+          `Fala ${responsibleName}! 👋`,
+          `\n${ctx.userName} criou uma tarefa pra você:`,
+          `\n📝 *${card.title}*`,
+          `📋 ${column.name}`,
+        ]
+        if (deadlineText) notifyParts.push(`📅 Prazo: ${deadlineText}`)
+        if (entities.priority && entities.priority !== 'medium') notifyParts.push(formatPriority(entities.priority as string))
+        if (entities.content_type) notifyParts.push(`🎬 ${entities.content_type}`)
+        notifyParts.push(`\nQualquer dúvida, fala comigo! 🤙`)
+
+        const sendResult = await sendTextMessage({
+          serverUrl,
+          token,
+          to: responsiblePhone,
+          text: notifyParts.join('\n'),
+        })
+
+        if (sendResult.success) {
+          notifiedResponsible = true
+          console.log(`[WA-03] ✅ Responsável ${responsibleName} notificado via WhatsApp (${responsiblePhone})`)
+        } else {
+          console.error(`[WA-03] Falha ao notificar responsável:`, sendResult.error)
+        }
+      } else {
+        console.log(`[WA-03] Responsável ${responsibleName} sem WhatsApp cadastrado, pulando notificação`)
+      }
+    } catch (notifyErr) {
+      console.error(`[WA-03] Erro ao notificar responsável:`, notifyErr)
+    }
+  }
+
+  // 7. Montar resposta de sucesso (tom Mike)
   const successParts = [
     `Pronto, criei a tarefa!\n`,
     `📝 *${card.title}*`,
@@ -217,6 +299,7 @@ async function executeCreateCard(ctx: ExecutionContext): Promise<ExecutionResult
   if (responsibleName) successParts.push(`👤 ${responsibleName}`)
   if (deadlineText) successParts.push(`📅 Prazo: ${deadlineText}`)
   if (entities.content_type) successParts.push(`🎬 ${entities.content_type}`)
+  if (notifiedResponsible) successParts.push(`\nNotifiquei ${responsibleName} pelo WhatsApp.`)
 
   return {
     success: true,

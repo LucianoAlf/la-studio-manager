@@ -386,7 +386,7 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
         .update({ context_data: { ...activeContext.context_data, step: 'awaiting_confirmation' }, updated_at: new Date().toISOString() })
         .eq('id', activeContext.id)
       // Redirecionar para o fluxo normal de confirmação (recursão controlada)
-      const result = await executeConfirmedAction(activeContext.context_type, { supabase, profileId: userId, authUserId, userName: firstName, phone, entities: ents })
+      const result = await executeConfirmedAction(activeContext.context_type, { supabase, profileId: userId, authUserId, userName: firstName, phone, entities: ents, uazapiUrl: params.uazapiUrl, uazapiToken: params.uazapiToken })
       await supabase
         .from('whatsapp_conversation_context')
         .update({ is_active: false, context_data: { ...activeContext.context_data, step: result.success ? 'executed' : 'execution_failed', executed_at: new Date().toISOString(), record_id: result.record_id || null }, updated_at: new Date().toISOString() })
@@ -483,7 +483,7 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
         // Fila vazia — todos os participantes resolvidos
         if (isSkip && resolved.length === 0) {
           // Pulou todos → criar evento direto sem esperar confirmação
-          const result = await executeConfirmedAction(activeContext.context_type, { supabase, profileId: userId, authUserId, userName: firstName, phone, entities: ents })
+          const result = await executeConfirmedAction(activeContext.context_type, { supabase, profileId: userId, authUserId, userName: firstName, phone, entities: ents, uazapiUrl: params.uazapiUrl, uazapiToken: params.uazapiToken })
           await supabase
             .from('whatsapp_conversation_context')
             .update({ is_active: false, context_data: { ...activeContext.context_data, step: result.success ? 'executed' : 'execution_failed', executed_at: new Date().toISOString(), record_id: result.record_id || null }, updated_at: new Date().toISOString() })
@@ -575,7 +575,7 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
 
     if (isConfirm) {
       // Participante confirmou → criar evento agora
-      const result = await executeConfirmedAction(activeContext.context_type, { supabase, profileId: userId, authUserId, userName: firstName, phone, entities: ents })
+      const result = await executeConfirmedAction(activeContext.context_type, { supabase, profileId: userId, authUserId, userName: firstName, phone, entities: ents, uazapiUrl: params.uazapiUrl, uazapiToken: params.uazapiToken })
       await supabase
         .from('whatsapp_conversation_context')
         .update({ is_active: false, context_data: { ...activeContext.context_data, step: result.success ? 'executed' : 'execution_failed', executed_at: new Date().toISOString(), record_id: result.record_id || null }, updated_at: new Date().toISOString() })
@@ -718,6 +718,8 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
           userName: firstName,
           phone,
           entities: activeContext.context_data.entities,
+          uazapiUrl: params.uazapiUrl,
+          uazapiToken: params.uazapiToken,
         }
       )
 
@@ -1215,6 +1217,139 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
       return {
         text: `Encontrei ${contacts.length} contatos:\n\n${list}`,
         intent: 'query_contact',
+        confidence: 1.0,
+      }
+    }
+
+    // ========================================
+    // WA-10: NOTIFICAR USUÁRIO NO PRIVADO
+    // ========================================
+    case 'notify_user': {
+      const notifyTarget = classification.entities.notify_target as string
+      const notifyMessage = classification.entities.notify_message as string || ''
+      const cardTitle = classification.entities.card_title as string || ''
+
+      if (!notifyTarget) {
+        return { text: `Quem você quer que eu notifique, ${firstName}?`, intent: 'notify_user_missing_target', confidence: 0.9 }
+      }
+
+      // 1. Buscar na equipe (user_profiles)
+      const { data: targetProfile } = await supabase
+        .from('user_profiles')
+        .select('id, user_id, full_name, phone')
+        .eq('is_active', true)
+        .ilike('full_name', `%${notifyTarget.trim()}%`)
+        .limit(1)
+        .maybeSingle()
+
+      // 2. Se não achou na equipe, buscar na agenda (contacts)
+      let targetName = ''
+      let targetPhone: string | null = null
+
+      if (targetProfile) {
+        targetName = targetProfile.full_name
+        // Cadeia de resolução: user_profiles.phone → whatsapp_connections → contacts.phone
+        targetPhone = targetProfile.phone ? targetProfile.phone.replace(/[\s+\-()]/g, '') : null
+
+        if (!targetPhone) {
+          const { data: conn } = await supabase
+            .from('whatsapp_connections').select('phone_number')
+            .eq('user_id', targetProfile.id).eq('is_active', true).limit(1).maybeSingle()
+          targetPhone = conn?.phone_number || null
+        }
+        if (!targetPhone) {
+          const { data: contact } = await supabase
+            .from('contacts').select('phone')
+            .eq('user_profile_id', targetProfile.id).is('deleted_at', null).limit(1).maybeSingle()
+          targetPhone = contact?.phone || null
+        }
+      } else {
+        // Não é membro da equipe — buscar direto na agenda
+        const { data: contact } = await supabase
+          .from('contacts').select('id, name, phone')
+          .ilike('name', `%${notifyTarget.trim()}%`)
+          .is('deleted_at', null).limit(1).maybeSingle()
+
+        if (contact) {
+          targetName = contact.name
+          targetPhone = contact.phone || null
+        }
+      }
+
+      if (!targetName) {
+        return { text: `Não encontrei "${notifyTarget}" nem na equipe nem na agenda. Confere o nome.`, intent: 'notify_user_not_found', confidence: 1.0 }
+      }
+      if (!targetPhone) {
+        return { text: `${targetName} não tem telefone cadastrado. Adiciona na tela de Equipe ou na agenda.`, intent: 'notify_user_no_phone', confidence: 1.0 }
+      }
+
+      console.log(`[WA-NOTIFY] Telefone resolvido para ${targetName}: ${targetPhone} (fonte: ${targetProfile ? 'equipe' : 'agenda'})`)
+
+      // Buscar card relacionado se mencionado
+      let cardInfo = ''
+      if (cardTitle || notifyMessage) {
+        const searchTerm = cardTitle || notifyMessage
+        const { data: relatedCard } = await supabase
+          .from('kanban_cards')
+          .select('id, title, priority, due_date, column_id')
+          .is('deleted_at', null)
+          .ilike('title', `%${searchTerm.trim()}%`)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+
+        if (relatedCard) {
+          const { data: col } = await supabase
+            .from('kanban_columns')
+            .select('name')
+            .eq('id', relatedCard.column_id)
+            .single()
+
+          cardInfo = `\n\n📝 *${relatedCard.title}*`
+          if (col?.name) cardInfo += `\n📋 ${col.name}`
+          if (relatedCard.due_date) {
+            const d = new Date(relatedCard.due_date)
+            cardInfo += `\n📅 Prazo: ${d.getDate()}/${d.getMonth() + 1}`
+          }
+          if (relatedCard.priority && relatedCard.priority !== 'medium') {
+            cardInfo += `\n⚡ Prioridade: ${relatedCard.priority}`
+          }
+        }
+      }
+
+      // Montar e enviar mensagem
+      let msgText = `Fala ${targetName}! 👋\n${firstName} pediu pra te avisar`
+      if (notifyMessage) {
+        msgText += ` sobre: ${notifyMessage}`
+      }
+      if (cardInfo) {
+        msgText += cardInfo
+      }
+      if (!notifyMessage && !cardInfo) {
+        msgText += `. Entra em contato com ele!`
+      }
+      msgText += `\n\nQualquer dúvida, fala comigo! 🤙`
+
+      console.log(`[WA-NOTIFY] Enviando para ${targetName}: phone=${targetPhone}, serverUrl=${params.uazapiUrl}, hasToken=${!!params.uazapiToken}, msgLen=${msgText.length}`)
+
+      const sendResult = await sendTextMessage({
+        serverUrl: params.uazapiUrl,
+        token: params.uazapiToken,
+        to: targetPhone,
+        text: msgText,
+      })
+
+      console.log(`[WA-NOTIFY] sendResult: success=${sendResult.success}, messageId=${sendResult.messageId || 'none'}, error=${sendResult.error || 'none'}`)
+
+      if (!sendResult.success) {
+        console.error(`[WA-NOTIFY] Falha ao enviar para ${targetName}:`, sendResult.error)
+        return { text: `Não consegui enviar a mensagem pro ${targetName}. Tenta de novo daqui a pouco.`, intent: 'notify_user_error', confidence: 1.0 }
+      }
+
+      console.log(`[WA-NOTIFY] ✅ ${targetName} notificado no privado (${targetPhone})`)
+      return {
+        text: `Pronto! Notifiquei ${targetName} no privado 📩`,
+        intent: 'notify_user',
         confidence: 1.0,
       }
     }
@@ -2199,6 +2334,8 @@ async function handleAudioMessage(
           userName: firstName,
           phone,
           entities: activeContext.context_data.entities,
+          uazapiUrl: params.uazapiUrl,
+          uazapiToken: params.uazapiToken,
         }
       )
 
@@ -2579,6 +2716,107 @@ async function routeClassifiedMessage(
       const result = await handleGenerateReport(qCtx)
       return { text: result.text, intent: 'generate_report', confidence: classification.confidence }
     }
+    // WA-10: Notificar usuário (áudio)
+    case 'notify_user': {
+      const notifyTarget = classification.entities.notify_target as string
+      const notifyMessage = classification.entities.notify_message as string || ''
+      const cardTitle = classification.entities.card_title as string || ''
+
+      if (!notifyTarget) {
+        return { text: `Quem você quer que eu notifique, ${firstName}?`, intent: 'notify_user_missing_target', confidence: 0.9 }
+      }
+
+      // 1. Buscar na equipe (user_profiles)
+      const { data: targetProfile } = await supabase
+        .from('user_profiles')
+        .select('id, user_id, full_name, phone')
+        .eq('is_active', true)
+        .ilike('full_name', `%${notifyTarget.trim()}%`)
+        .limit(1)
+        .maybeSingle()
+
+      // 2. Resolver nome e telefone: equipe → whatsapp_connections → agenda
+      let targetName = ''
+      let targetPhone: string | null = null
+
+      if (targetProfile) {
+        targetName = targetProfile.full_name
+        targetPhone = targetProfile.phone ? targetProfile.phone.replace(/[\s+\-()]/g, '') : null
+        if (!targetPhone) {
+          const { data: conn } = await supabase
+            .from('whatsapp_connections').select('phone_number')
+            .eq('user_id', targetProfile.id).eq('is_active', true).limit(1).maybeSingle()
+          targetPhone = conn?.phone_number || null
+        }
+        if (!targetPhone) {
+          const { data: contact } = await supabase
+            .from('contacts').select('phone')
+            .eq('user_profile_id', targetProfile.id).is('deleted_at', null).limit(1).maybeSingle()
+          targetPhone = contact?.phone || null
+        }
+      } else {
+        const { data: contact } = await supabase
+          .from('contacts').select('id, name, phone')
+          .ilike('name', `%${notifyTarget.trim()}%`)
+          .is('deleted_at', null).limit(1).maybeSingle()
+        if (contact) {
+          targetName = contact.name
+          targetPhone = contact.phone || null
+        }
+      }
+
+      if (!targetName) {
+        return { text: `Não encontrei "${notifyTarget}" nem na equipe nem na agenda.`, intent: 'notify_user_not_found', confidence: 1.0 }
+      }
+      if (!targetPhone) {
+        return { text: `${targetName} não tem telefone cadastrado.`, intent: 'notify_user_no_phone', confidence: 1.0 }
+      }
+
+      let cardInfo = ''
+      if (cardTitle || notifyMessage) {
+        const searchTerm = cardTitle || notifyMessage
+        const { data: relatedCard } = await supabase
+          .from('kanban_cards')
+          .select('id, title, priority, due_date, column_id')
+          .is('deleted_at', null)
+          .ilike('title', `%${searchTerm.trim()}%`)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+
+        if (relatedCard) {
+          const { data: col } = await supabase
+            .from('kanban_columns').select('name').eq('id', relatedCard.column_id).single()
+          cardInfo = `\n\n📝 *${relatedCard.title}*`
+          if (col?.name) cardInfo += `\n📋 ${col.name}`
+          if (relatedCard.due_date) {
+            const d = new Date(relatedCard.due_date)
+            cardInfo += `\n📅 Prazo: ${d.getDate()}/${d.getMonth() + 1}`
+          }
+        }
+      }
+
+      let msgText = `Fala ${targetName}! 👋\n${firstName} pediu pra te avisar`
+      if (notifyMessage) msgText += ` sobre: ${notifyMessage}`
+      if (cardInfo) msgText += cardInfo
+      if (!notifyMessage && !cardInfo) msgText += `. Entra em contato com ele!`
+      msgText += `\n\nQualquer dúvida, fala comigo! 🤙`
+
+      const sendResult = await sendTextMessage({
+        serverUrl: params.uazapiUrl,
+        token: params.uazapiToken,
+        to: targetPhone,
+        text: msgText,
+      })
+
+      if (!sendResult.success) {
+        return { text: `Não consegui enviar a mensagem pro ${targetName}.`, intent: 'notify_user_error', confidence: 1.0 }
+      }
+
+      console.log(`[WA-NOTIFY] ✅ ${targetName} notificado no privado (${targetPhone}) via áudio`)
+      return { text: `Pronto! Notifiquei ${targetName} no privado 📩`, intent: 'notify_user', confidence: 1.0 }
+    }
+
     case 'help':
       return { text: getHelpText(), intent: 'help', confidence: 1.0 }
     case 'general_chat':

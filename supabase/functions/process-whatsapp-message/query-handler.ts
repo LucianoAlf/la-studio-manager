@@ -371,10 +371,15 @@ export async function handleQueryCards(ctx: QueryContext): Promise<QueryResult> 
   // Filtro por coluna (resolver slug → column_id)
   if (entities.column) {
     const slugMap: Record<string, string> = {
-      'brainstorm': 'brainstorming', 'brainstorming': 'brainstorming',
-      'planning': 'planning', 'todo': 'todo', 'capturing': 'capturing',
-      'editing': 'editing', 'awaiting_approval': 'awaiting_approval',
-      'approved': 'approved', 'published': 'published', 'archived': 'archived',
+      'brainstorm': 'brainstorm', 'brainstorming': 'brainstorm',
+      'planning': 'planning', 'planejamento': 'planning',
+      'todo': 'todo', 'a_fazer': 'todo',
+      'capturing': 'capturing', 'captando': 'capturing', 'gravação': 'capturing', 'gravacao': 'capturing',
+      'editing': 'editing', 'editando': 'editing',
+      'awaiting_approval': 'awaiting_approval', 'aprovação': 'awaiting_approval',
+      'approved': 'approved', 'aprovado': 'approved',
+      'published': 'published', 'publicado': 'published',
+      'archived': 'archived', 'arquivo': 'archived',
     }
     const realSlug = slugMap[entities.column] || entities.column
 
