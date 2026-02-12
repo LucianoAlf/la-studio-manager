@@ -25,6 +25,7 @@ import { toast } from "sonner";
 import type { CalendarItem, UserProfile } from "@/lib/types/database";
 import { createCalendarItem, updateCalendarItem, deleteCalendarItem } from "@/lib/queries/calendar";
 import { getCurrentUserProfile, getAllUsers } from "@/lib/queries/users";
+import { createClient } from "@/lib/supabase/client";
 
 // === Helpers ===
 
@@ -110,6 +111,10 @@ export function CalendarItemModal({
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
 
+  // Card vinculado (kanban_card_id)
+  const [linkedCardDueDate, setLinkedCardDueDate] = useState<string | null>(null);
+  const [linkedCardTitle, setLinkedCardTitle] = useState<string | null>(null);
+
   // Carregar users e current user
   useEffect(() => {
     if (!open) return;
@@ -118,6 +123,33 @@ export function CalendarItemModal({
       if (u) setCurrentUserId(u.userId);
     }).catch(console.error);
   }, [open]);
+
+  // Carregar card vinculado quando tem kanban_card_id
+  useEffect(() => {
+    if (!open || !item?.kanban_card_id) {
+      setLinkedCardDueDate(null);
+      setLinkedCardTitle(null);
+      return;
+    }
+    async function fetchLinkedCard() {
+      try {
+        const supabase = createClient();
+        const { data } = await supabase
+          .from("kanban_cards")
+          .select("title, due_date, start_date")
+          .eq("id", item!.kanban_card_id!)
+          .single();
+        if (data) {
+          const row = data as Record<string, unknown>;
+          setLinkedCardDueDate(row.due_date as string | null);
+          setLinkedCardTitle(row.title as string | null);
+        }
+      } catch (err) {
+        console.error("Erro ao carregar card vinculado:", err);
+      }
+    }
+    fetchLinkedCard();
+  }, [open, item?.kanban_card_id]);
 
   // Pré-popular campos ao editar ou resetar ao criar
   useEffect(() => {
@@ -289,6 +321,23 @@ export function CalendarItemModal({
               />
             </FormField>
           </div>
+
+          {/* Card vinculado — data de entrega (read-only) */}
+          {linkedCardDueDate && (
+            <div className="rounded-lg border border-blue-500/20 bg-blue-500/5 px-4 py-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-xs font-medium text-blue-300">📦 Data de Entrega (card vinculado)</p>
+                  {linkedCardTitle && (
+                    <p className="mt-0.5 text-[10px] text-slate-400">Card: {linkedCardTitle}</p>
+                  )}
+                </div>
+                <span className="text-sm font-semibold text-blue-200">
+                  {new Date(linkedCardDueDate).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" })}
+                </span>
+              </div>
+            </div>
+          )}
 
           {/* Linha 4 — Responsável + Prioridade */}
           <div className="grid grid-cols-2 gap-4">

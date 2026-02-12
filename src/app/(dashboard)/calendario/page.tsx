@@ -7,7 +7,7 @@ import { CaretLeft, CaretRight, Plus, X, Funnel, Trash } from "@phosphor-icons/r
 import { cn } from "@/lib/utils";
 import { Button, Badge, Avatar, IconButton, Chip, Dot } from "@/components/ui";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/shadcn/select";
-import { getCalendarItems, getCalendarItemConnections, getCalendarItemComments, addCalendarComment, moveCalendarItem, deleteCalendarItem, getCalendarReminders } from "@/lib/queries/calendar";
+import { getCalendarItems, getCalendarItemConnections, getCalendarItemComments, addCalendarComment, moveCalendarItem, deleteCalendarItem, getCalendarReminders, getDeliveryMarkers } from "@/lib/queries/calendar";
 import { getCurrentUserProfile, getAllUsers } from "@/lib/queries/users";
 import { TYPE_COLORS, TYPE_EMOJIS, getDateRange, getUserDisplay, PLATFORM_COLORS } from "@/lib/utils/calendar-helpers";
 import type { CalendarItem, CalendarItemType, CalendarItemConnection, CalendarItemComment, UserProfile } from "@/lib/types/database";
@@ -43,7 +43,7 @@ const TYPE_CONFIG: Record<CalendarItemType, { color: string; emoji: string; labe
 
 const HOUR_H = 64;
 const START_HOUR = 7;
-const END_HOUR = 18;
+const END_HOUR = 22;
 const HOURS = Array.from({ length: END_HOUR - START_HOUR + 1 }, (_, i) => START_HOUR + i);
 
 function parseTime(iso: string) {
@@ -84,6 +84,7 @@ const MESES = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julh
 
 export default function CalendarioPage() {
   const TODAY = useMemo(() => new Date(), []);
+  const [nowTime, setNowTime] = useState(() => new Date());
   const [view, setView] = useState<ViewMode>("semana");
   const [currentDate, setCurrentDate] = useState(() => new Date());
   const [selectedItem, setSelectedItem] = useState<CalendarItem | null>(null);
@@ -123,15 +124,17 @@ export default function CalendarioPage() {
     getAllUsers().then(setTeamMembers).catch(console.error);
   }, []);
 
-  // Montar filtros combinados (type chips + filtros avançados)
-  const combinedFilters = useMemo(() => {
-    const activeTypes = (Object.keys(typeFilters) as CalendarItemType[]).filter((t) => typeFilters[t]);
-    const allActive = activeTypes.length === Object.keys(typeFilters).length;
-    return {
-      ...advancedFilters,
-      types: allActive ? advancedFilters.types : activeTypes,
-    };
-  }, [typeFilters, advancedFilters]);
+  // Atualizar nowTime a cada 60s para a barra vermelha se mover
+  useEffect(() => {
+    const interval = setInterval(() => setNowTime(new Date()), 60_000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Filtros server-side (apenas filtros avançados — badges são client-side)
+  const serverFilters = useMemo(() => ({
+    ...advancedFilters,
+    types: advancedFilters.types, // só passa types se vier dos filtros avançados
+  }), [advancedFilters]);
 
   // Contagem de filtros avançados ativos
   const activeFilterCount = useMemo(() => {
@@ -148,16 +151,17 @@ export default function CalendarioPage() {
     try {
       const { start, end } = getDateRange(currentDate, view);
       const profileId = currentUser?.profile ? undefined : undefined;
-      const [calItems, reminderItems] = await Promise.all([
-        getCalendarItems(start, end, combinedFilters),
+      const [calItems, reminderItems, deliveryItems] = await Promise.all([
+        getCalendarItems(start, end, serverFilters),
         getCalendarReminders(start, end, profileId),
+        getDeliveryMarkers(start, end),
       ]);
-      setItems([...calItems, ...reminderItems]);
+      setItems([...calItems, ...reminderItems, ...deliveryItems]);
       setSelectedItem(null);
     } catch (err) {
       console.error("Erro ao recarregar:", err);
     }
-  }, [currentDate, view, combinedFilters, currentUser]);
+  }, [currentDate, view, serverFilters, currentUser]);
 
   // Carregar items quando muda data, view, filtros ou retry
   useEffect(() => {
@@ -167,11 +171,12 @@ export default function CalendarioPage() {
       setError(null);
       try {
         const { start, end } = getDateRange(currentDate, view);
-        const [calItems, reminderItems] = await Promise.all([
-          getCalendarItems(start, end, combinedFilters),
+        const [calItems, reminderItems, deliveryItems] = await Promise.all([
+          getCalendarItems(start, end, serverFilters),
           getCalendarReminders(start, end),
+          getDeliveryMarkers(start, end),
         ]);
-        if (!cancelled) setItems([...calItems, ...reminderItems]);
+        if (!cancelled) setItems([...calItems, ...reminderItems, ...deliveryItems]);
       } catch (err) {
         console.error("Erro ao carregar items:", err);
         if (!cancelled) setError("Erro ao carregar dados do calendário");
@@ -181,7 +186,7 @@ export default function CalendarioPage() {
     }
     loadItems();
     return () => { cancelled = true; };
-  }, [currentDate, view, retryKey, combinedFilters]);
+  }, [currentDate, view, retryKey, serverFilters]);
 
   // === Realtime Subscription ===
   useRealtimeSubscription({
@@ -189,11 +194,12 @@ export default function CalendarioPage() {
     onInsert: useCallback(async () => {
       if (isDroppingRef.current) return;
       const { start, end } = getDateRange(currentDate, view);
-      const [calItems, reminderItems] = await Promise.all([
-        getCalendarItems(start, end, combinedFilters),
+      const [calItems, reminderItems, deliveryItems] = await Promise.all([
+        getCalendarItems(start, end, serverFilters),
         getCalendarReminders(start, end),
+        getDeliveryMarkers(start, end),
       ]);
-      const allData = [...calItems, ...reminderItems];
+      const allData = [...calItems, ...reminderItems, ...deliveryItems];
       const currentIds = new Set(items.map((i) => i.id));
       const newIds = new Set(allData.filter((i) => !currentIds.has(i.id)).map((i) => i.id));
       setItems(allData);
@@ -201,30 +207,32 @@ export default function CalendarioPage() {
         setRealtimeNewIds(newIds);
         setTimeout(() => setRealtimeNewIds(new Set()), 1500);
       }
-    }, [currentDate, view, combinedFilters, items]),
+    }, [currentDate, view, serverFilters, items]),
     onUpdate: useCallback(async () => {
       if (isDroppingRef.current) return;
       const { start, end } = getDateRange(currentDate, view);
-      const [calItems, reminderItems] = await Promise.all([
-        getCalendarItems(start, end, combinedFilters),
+      const [calItems, reminderItems, deliveryItems] = await Promise.all([
+        getCalendarItems(start, end, serverFilters),
         getCalendarReminders(start, end),
+        getDeliveryMarkers(start, end),
       ]);
-      setItems([...calItems, ...reminderItems]);
-    }, [currentDate, view, combinedFilters]),
+      setItems([...calItems, ...reminderItems, ...deliveryItems]);
+    }, [currentDate, view, serverFilters]),
     onDelete: useCallback(async () => {
       if (isDroppingRef.current) return;
       const { start, end } = getDateRange(currentDate, view);
-      const [calItems, reminderItems] = await Promise.all([
-        getCalendarItems(start, end, combinedFilters),
+      const [calItems, reminderItems, deliveryItems] = await Promise.all([
+        getCalendarItems(start, end, serverFilters),
         getCalendarReminders(start, end),
+        getDeliveryMarkers(start, end),
       ]);
-      const allData = [...calItems, ...reminderItems];
+      const allData = [...calItems, ...reminderItems, ...deliveryItems];
       setItems(allData);
       setSelectedItem((prev) => {
         if (prev && !allData.find((i) => i.id === prev.id)) return null;
         return prev;
       });
-    }, [currentDate, view, combinedFilters]),
+    }, [currentDate, view, serverFilters]),
   });
 
   const toggleFilter = useCallback((type: CalendarItemType) => {
@@ -554,8 +562,8 @@ export default function CalendarioPage() {
             </div>
           ) : (
             <>
-              {view === "semana" && <WeekView currentDate={currentDate} today={TODAY} items={filteredItems} onSelectItem={handleSelectItem} onDrop={handleCalendarDrop} realtimeNewIds={realtimeNewIds} />}
-              {view === "dia" && <DayView currentDate={currentDate} today={TODAY} items={filteredItems} onSelectItem={handleSelectItem} onDrop={handleCalendarDrop} realtimeNewIds={realtimeNewIds} />}
+              {view === "semana" && <WeekView currentDate={currentDate} today={TODAY} nowTime={nowTime} items={filteredItems} onSelectItem={handleSelectItem} onDrop={handleCalendarDrop} realtimeNewIds={realtimeNewIds} />}
+              {view === "dia" && <DayView currentDate={currentDate} today={TODAY} nowTime={nowTime} items={filteredItems} onSelectItem={handleSelectItem} onDrop={handleCalendarDrop} realtimeNewIds={realtimeNewIds} />}
               {view === "mes" && <MonthView currentDate={currentDate} today={TODAY} items={filteredItems} onSelectItem={handleSelectItem} onDrop={handleCalendarDrop} realtimeNewIds={realtimeNewIds} />}
             </>
           )}
@@ -607,7 +615,7 @@ export default function CalendarioPage() {
 // VIEW: SEMANA
 // ============================================================
 
-function WeekView({ currentDate, today, items, onSelectItem, onDrop, realtimeNewIds }: { currentDate: Date; today: Date; items: CalendarItem[]; onSelectItem: (i: CalendarItem) => void; onDrop: (itemId: string, targetDate: Date, targetHour?: number) => void; realtimeNewIds: Set<string> }) {
+function WeekView({ currentDate, today, nowTime, items, onSelectItem, onDrop, realtimeNewIds }: { currentDate: Date; today: Date; nowTime: Date; items: CalendarItem[]; onSelectItem: (i: CalendarItem) => void; onDrop: (itemId: string, targetDate: Date, targetHour?: number) => void; realtimeNewIds: Set<string> }) {
   const weekStart = getWeekStart(currentDate);
   const weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
   const [dragOverSlot, setDragOverSlot] = useState<string | null>(null);
@@ -782,16 +790,16 @@ function WeekView({ currentDate, today, items, onSelectItem, onDrop, realtimeNew
                   );
                 })}
 
-                {/* Now line */}
+                {/* Now line (vermelho) */}
                 {isToday && (() => {
-                  const nowMin = (today.getHours() - START_HOUR) * 60 + today.getMinutes();
-                  const nowTop = (nowMin / 60) * HOUR_H;
-                  if (nowTop < 0 || nowTop > HOURS.length * HOUR_H) return null;
+                  const nowMin = (nowTime.getHours() - START_HOUR) * 60 + nowTime.getMinutes();
+                  const nowTop = (nowMin / 60) * HOUR_H + 12;
+                  if (nowMin < 0 || nowTop > HOURS.length * HOUR_H + 12) return null;
                   return (
                     <div className="absolute left-0 right-0 z-20 pointer-events-none" style={{ top: nowTop }}>
                       <div className="flex items-center">
-                        <div className="h-2.5 w-2.5 rounded-full bg-orange-500 -ml-1" />
-                        <div className="flex-1 h-[2px] bg-orange-500" />
+                        <div className="h-3 w-3 rounded-full bg-red-500 -ml-1.5 shadow-[0_0_6px_rgba(239,68,68,0.5)]" />
+                        <div className="flex-1 h-[2px] bg-red-500 shadow-[0_0_4px_rgba(239,68,68,0.3)]" />
                       </div>
                     </div>
                   );
@@ -809,7 +817,7 @@ function WeekView({ currentDate, today, items, onSelectItem, onDrop, realtimeNew
 // VIEW: DIA
 // ============================================================
 
-function DayView({ currentDate, today, items, onSelectItem, onDrop, realtimeNewIds }: { currentDate: Date; today: Date; items: CalendarItem[]; onSelectItem: (i: CalendarItem) => void; onDrop: (itemId: string, targetDate: Date, targetHour?: number) => void; realtimeNewIds: Set<string> }) {
+function DayView({ currentDate, today, nowTime, items, onSelectItem, onDrop, realtimeNewIds }: { currentDate: Date; today: Date; nowTime: Date; items: CalendarItem[]; onSelectItem: (i: CalendarItem) => void; onDrop: (itemId: string, targetDate: Date, targetHour?: number) => void; realtimeNewIds: Set<string> }) {
   const isToday = isSameDay(currentDate, today);
   const allItems = items.filter((item) => isSameDay(new Date(item.start_time), currentDate));
   const allDayItems = allItems.filter((item) => item.all_day);
@@ -967,16 +975,16 @@ function DayView({ currentDate, today, items, onSelectItem, onDrop, realtimeNewI
               );
             })}
 
-            {/* Now line */}
+            {/* Now line (vermelho) */}
             {isToday && (() => {
-              const nowMin = (today.getHours() - START_HOUR) * 60 + today.getMinutes();
-              const nowTop = (nowMin / 60) * HOUR_H;
-              if (nowTop < 0 || nowTop > HOURS.length * HOUR_H) return null;
+              const nowMin = (nowTime.getHours() - START_HOUR) * 60 + nowTime.getMinutes();
+              const nowTop = (nowMin / 60) * HOUR_H + 12;
+              if (nowMin < 0 || nowTop > HOURS.length * HOUR_H + 12) return null;
               return (
                 <div className="absolute left-0 right-0 z-20 pointer-events-none" style={{ top: nowTop }}>
                   <div className="flex items-center">
-                    <div className="h-2.5 w-2.5 rounded-full bg-orange-500 -ml-1" />
-                    <div className="flex-1 h-[2px] bg-orange-500" />
+                    <div className="h-3 w-3 rounded-full bg-red-500 -ml-1.5 shadow-[0_0_6px_rgba(239,68,68,0.5)]" />
+                    <div className="flex-1 h-[2px] bg-red-500 shadow-[0_0_4px_rgba(239,68,68,0.3)]" />
                   </div>
                 </div>
               );

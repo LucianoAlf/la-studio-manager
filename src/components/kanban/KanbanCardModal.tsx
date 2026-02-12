@@ -85,6 +85,7 @@ export function KanbanCardModal({
   const [selectedColumnId, setSelectedColumnId] = useState("");
   const [selectedPriority, setSelectedPriority] = useState("medium");
   const [selectedUser, setSelectedUser] = useState("");
+  const [startDate, setStartDate] = useState("");
   const [dueDate, setDueDate] = useState("");
   const [contentType, setContentType] = useState("");
   const [selectedBrand, setSelectedBrand] = useState("la_music_school");
@@ -115,6 +116,7 @@ export function KanbanCardModal({
       setSelectedColumnId(card.column_id);
       setSelectedPriority(card.priority || "medium");
       setSelectedUser(card.responsible_user_id || "");
+      setStartDate(card.start_date ? card.start_date.split("T")[0] : "");
       setDueDate(card.due_date ? card.due_date.split("T")[0] : "");
       setContentType(card.content_type || "");
       setSelectedBrand((card.metadata?.brand as string) || "la_music_school");
@@ -134,6 +136,7 @@ export function KanbanCardModal({
     setSelectedColumnId(columns[0]?.id || "");
     setSelectedPriority("medium");
     setSelectedUser("");
+    setStartDate("");
     setDueDate("");
     setContentType("");
     setSelectedBrand("la_music_school");
@@ -163,6 +166,7 @@ export function KanbanCardModal({
         description: description || null,
         column_id: selectedColumnId,
         responsible_user_id: selectedUser && selectedUser !== "none" ? selectedUser : null,
+        start_date: startDate ? new Date(startDate).toISOString() : null,
         due_date: dueDate ? new Date(dueDate).toISOString() : null,
         priority: selectedPriority || null,
         content_type: contentType || null,
@@ -280,13 +284,29 @@ export function KanbanCardModal({
               </Select>
             </FormField>
 
-            <FormField label="Prazo">
+            <FormField label="Prazo de Entrega">
               <DatePicker
                 value={dueDate}
                 onChange={setDueDate}
                 placeholder="Selecione o prazo"
               />
             </FormField>
+          </div>
+
+          {/* Linha 3b — Data de Produção + Aviso */}
+          <div className="grid grid-cols-2 gap-4">
+            <FormField label="Data de Produção">
+              <DatePicker
+                value={startDate}
+                onChange={setStartDate}
+                placeholder="Quando produz/grava"
+              />
+            </FormField>
+            <div className="flex items-end pb-1">
+              {startDate && dueDate && new Date(startDate) > new Date(dueDate) && (
+                <p className="text-xs text-amber-400">⚠️ Produção após a entrega</p>
+              )}
+            </div>
           </div>
 
           {/* Linha 4 — Tipo de Conteúdo + Marca */}

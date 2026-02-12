@@ -623,27 +623,23 @@ function ListaTab({ cards, columns, onEditCard }: { cards: KanbanCardType[]; col
 
   return (
     <Card variant="default" className="overflow-hidden !p-0">
-      <table className="w-full">
+      <div className="overflow-x-auto">
+      <table className="w-full min-w-[1100px]">
         <thead>
           <tr className="border-b border-slate-800">
-            <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">
-              Projeto
-            </th>
-            <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">
-              Responsável
-            </th>
-            <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">
-              Status
-            </th>
-            <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">
-              Prioridade
-            </th>
+            <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">Projeto</th>
+            <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 whitespace-nowrap">Formato</th>
+            <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">Marca</th>
+            <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">Responsável</th>
+            <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">Status</th>
+            <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">Prioridade</th>
+            <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 whitespace-nowrap">🎬 Produção</th>
             <th
-              className="cursor-pointer select-none px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 hover:text-slate-200"
+              className="cursor-pointer select-none px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 hover:text-slate-200 whitespace-nowrap"
               onClick={() => setSortAsc(!sortAsc)}
             >
               <span className="flex items-center gap-1">
-                Prazo
+                📦 Entrega
                 {sortAsc ? (
                   <CaretDown size={12} weight="bold" />
                 ) : (
@@ -651,9 +647,8 @@ function ListaTab({ cards, columns, onEditCard }: { cards: KanbanCardType[]; col
                 )}
               </span>
             </th>
-            <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">
-              Progresso
-            </th>
+            <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">Progresso</th>
+            <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">Descrição</th>
             <th className="w-10" />
           </tr>
         </thead>
@@ -683,26 +678,54 @@ function ListaTab({ cards, columns, onEditCard }: { cards: KanbanCardType[]; col
                 )}
               >
                 {/* PROJETO */}
-                <td className="px-5 py-3.5">
+                <td className="px-4 py-3.5">
                   <p className="text-sm font-semibold text-slate-100">{card.title}</p>
                   <div className="mt-1 flex items-center gap-2">
                     {platform && <Dot color={PLATFORM_COLORS[platform] ?? "#6B7280"} />}
                     <span className="text-xs text-slate-400">{platform || "—"}</span>
-                    <span
-                      className={cn(
-                        "rounded px-1.5 py-0.5 text-[10px] font-bold uppercase",
-                        brand === "la_kids"
-                          ? "bg-orange-500/20 text-orange-400"
-                          : "bg-teal-500/20 text-teal-400"
-                      )}
-                    >
-                      {brand === "la_kids" ? "Kids" : "School"}
-                    </span>
                   </div>
                 </td>
 
+                {/* FORMATO */}
+                <td className="px-4 py-3.5">
+                  {card.content_type ? (
+                    <span className={cn(
+                      "inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold uppercase",
+                      {
+                        video: "bg-purple-500/20 text-purple-400",
+                        carousel: "bg-blue-500/20 text-blue-400",
+                        reels: "bg-pink-500/20 text-pink-400",
+                        story: "bg-yellow-500/20 text-yellow-400",
+                        photo: "bg-green-500/20 text-green-400",
+                        image: "bg-green-500/20 text-green-400",
+                        live: "bg-red-500/20 text-red-400",
+                        short: "bg-orange-500/20 text-orange-400",
+                        newsletter: "bg-cyan-500/20 text-cyan-400",
+                      }[card.content_type] ?? "bg-slate-500/20 text-slate-400"
+                    )}>
+                      {card.content_type.charAt(0).toUpperCase() + card.content_type.slice(1)}
+                    </span>
+                  ) : (
+                    <span className="text-xs text-slate-600">—</span>
+                  )}
+                </td>
+
+                {/* MARCA */}
+                <td className="px-4 py-3.5">
+                  <span
+                    className={cn(
+                      "inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-bold uppercase",
+                      brand === "la_kids"
+                        ? "bg-orange-500/20 text-orange-400"
+                        : "bg-teal-500/20 text-teal-400"
+                    )}
+                  >
+                    {brand === "la_kids" ? "Kids" : "School"}
+                  </span>
+                </td>
+
                 {/* RESPONSÁVEL */}
-                <td className="px-5 py-3.5">
+                <td className="px-4 py-3.5">
                   <div className="flex items-center gap-2">
                     <Avatar initial={display.initial} color={display.color} size="md" className="!h-7 !w-7 !text-xs" />
                     <span className="text-sm text-slate-300">{display.name}</span>
@@ -710,7 +733,7 @@ function ListaTab({ cards, columns, onEditCard }: { cards: KanbanCardType[]; col
                 </td>
 
                 {/* STATUS */}
-                <td className="px-5 py-3.5">
+                <td className="px-4 py-3.5">
                   <span
                     className={cn(
                       "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold",
@@ -722,7 +745,7 @@ function ListaTab({ cards, columns, onEditCard }: { cards: KanbanCardType[]; col
                 </td>
 
                 {/* PRIORIDADE */}
-                <td className="px-5 py-3.5">
+                <td className="px-4 py-3.5">
                   {prio ? (
                     <span
                       className={cn(
@@ -737,24 +760,43 @@ function ListaTab({ cards, columns, onEditCard }: { cards: KanbanCardType[]; col
                   )}
                 </td>
 
-                {/* PRAZO */}
-                <td className="px-5 py-3.5">
-                  <span
-                    className={cn(
-                      "text-sm",
-                      overdue ? "font-semibold text-red-400" : "text-slate-300"
-                    )}
-                  >
-                    {card.due_date ? formatDateHelper(card.due_date) : "—"}
-                  </span>
+                {/* 🎬 PRODUÇÃO */}
+                <td className="px-4 py-3.5 whitespace-nowrap">
+                  {card.start_date ? (
+                    <span className="text-sm text-slate-300">{formatDateHelper(card.start_date)}</span>
+                  ) : (
+                    <span className="text-xs text-slate-600">—</span>
+                  )}
+                </td>
+
+                {/* 📦 ENTREGA */}
+                <td className="px-4 py-3.5 whitespace-nowrap">
+                  {card.due_date ? (
+                    <span className={cn("text-sm", overdue ? "font-semibold text-red-400" : "text-slate-300")}>
+                      {formatDateHelper(card.due_date)}
+                    </span>
+                  ) : (
+                    <span className="text-xs text-slate-600">—</span>
+                  )}
                 </td>
 
                 {/* PROGRESSO */}
-                <td className="px-5 py-3.5">
+                <td className="px-4 py-3.5">
                   <div className="flex items-center gap-2">
                     <ProgressBar value={progress} colorClass={progressColor} size="thin" className="w-20 !bg-slate-700" />
                     <span className="text-xs font-medium text-slate-400">{progress}%</span>
                   </div>
+                </td>
+
+                {/* DESCRIÇÃO */}
+                <td className="px-4 py-3.5" style={{ minWidth: 120, maxWidth: 250 }}>
+                  {card.description ? (
+                    <p className="text-xs text-slate-500 truncate" title={card.description}>
+                      {card.description.length > 60 ? card.description.slice(0, 60) + "…" : card.description}
+                    </p>
+                  ) : (
+                    <span className="text-xs text-slate-600">—</span>
+                  )}
                 </td>
 
                 {/* AÇÕES */}
@@ -768,6 +810,7 @@ function ListaTab({ cards, columns, onEditCard }: { cards: KanbanCardType[]; col
           })}
         </tbody>
       </table>
+      </div>
     </Card>
   );
 }
@@ -981,16 +1024,25 @@ function KanbanCardItem({
           <Avatar initial={display.initial} color={display.color} size="sm" />
           <span className="text-xs text-slate-500">{display.name}</span>
         </div>
-        <span className={cn("text-xs", overdue ? "font-semibold text-red-400" : "text-slate-500")}>
-          {card.due_date ? formatDateHelper(card.due_date) : "—"}
-        </span>
+        <div className="flex items-center gap-2 text-xs">
+          {card.start_date && (
+            <span className="text-slate-500" title="Produção">🎬 {formatDateHelper(card.start_date)}</span>
+          )}
+          {card.start_date && card.due_date && <span className="text-slate-700">→</span>}
+          {card.due_date && (
+            <span className={cn(overdue ? "font-semibold text-red-400" : "text-slate-500")} title="Entrega">
+              📦 {formatDateHelper(card.due_date)}
+            </span>
+          )}
+          {!card.start_date && !card.due_date && <span className="text-slate-500">—</span>}
+        </div>
       </div>
     </div>
   );
 }
 
 // ============================================================
-// TAB: CALENDÁRIO (Prazos dos Projetos — kanban_cards.due_date)
+// TAB: CALENDÁRIO (Prazos dos Projetos — kanban_cards.due_date + start_date)
 // ============================================================
 
 const CAL_DIAS_SEMANA = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
@@ -1004,6 +1056,14 @@ function isSameDayUtil(d1: Date, d2: Date) {
   return d1.getFullYear() === d2.getFullYear() && d1.getMonth() === d2.getMonth() && d1.getDate() === d2.getDate();
 }
 
+// Tipo auxiliar para renderizar cards em múltiplas datas
+interface CalendarEntry {
+  card: KanbanCardType;
+  date: Date;
+  entryType: "production" | "delivery";
+  key: string;
+}
+
 interface CalendarioTabProps {
   cards: KanbanCardType[];
   columns: KanbanColumnType[];
@@ -1013,11 +1073,29 @@ interface CalendarioTabProps {
 function CalendarioTab({ cards, columns, onEditCard }: CalendarioTabProps) {
   const [offset, setOffset] = useState(0);
   const [view, setView] = useState<"dia" | "semana" | "mes">("semana");
+  const [calendarFilter, setCalendarFilter] = useState<"all" | "production" | "delivery">("all");
 
   const now = useMemo(() => new Date(), []);
 
-  // Cards com due_date (únicos que fazem sentido no calendário de prazos)
-  const cardsWithDue = useMemo(() => cards.filter((c) => c.due_date), [cards]);
+  // Gerar entries: cada card pode gerar 1 ou 2 entries (produção + entrega)
+  const calEntries = useMemo(() => {
+    const entries: CalendarEntry[] = [];
+    cards.forEach((card) => {
+      if (card.start_date) {
+        entries.push({ card, date: new Date(card.start_date), entryType: "production", key: `${card.id}-prod` });
+      }
+      if (card.due_date) {
+        entries.push({ card, date: new Date(card.due_date), entryType: "delivery", key: `${card.id}-del` });
+      }
+    });
+    return entries;
+  }, [cards]);
+
+  // Filtrar entries pelo filtro de perspectiva
+  const filteredEntries = useMemo(() => {
+    if (calendarFilter === "all") return calEntries;
+    return calEntries.filter((e) => e.entryType === calendarFilter);
+  }, [calEntries, calendarFilter]);
 
   // Navegação
   const currentDate = useMemo(() => {
@@ -1053,8 +1131,8 @@ function CalendarioTab({ cards, columns, onEditCard }: CalendarioTabProps) {
     return `${CAL_MESES[currentDate.getMonth()]} de ${currentDate.getFullYear()}`;
   }, [currentDate, view]);
 
-  // Contagem de cards sem prazo
-  const noDueCount = cards.length - cardsWithDue.length;
+  // Contagem de cards sem nenhuma data
+  const noDateCount = cards.filter((c) => !c.due_date && !c.start_date).length;
 
   return (
     <div className="space-y-4">
@@ -1076,9 +1154,26 @@ function CalendarioTab({ cards, columns, onEditCard }: CalendarioTabProps) {
         </div>
 
         <div className="flex items-center gap-3">
-          {noDueCount > 0 && (
-            <span className="text-xs text-slate-500">{noDueCount} sem prazo</span>
+          {noDateCount > 0 && (
+            <span className="text-xs text-slate-500">{noDateCount} sem data</span>
           )}
+          {/* Filtro Produção / Entrega */}
+          <div className="flex rounded-lg border border-slate-700 overflow-hidden">
+            {(["all", "production", "delivery"] as const).map((f) => (
+              <button
+                key={f}
+                onClick={() => setCalendarFilter(f)}
+                className={cn(
+                  "px-3 py-1.5 text-xs font-medium transition-colors",
+                  calendarFilter === f
+                    ? "bg-accent-cyan text-slate-950"
+                    : "text-slate-400 hover:bg-slate-800 hover:text-slate-200"
+                )}
+              >
+                {f === "all" ? "📋 Tudo" : f === "production" ? "🎬 Produção" : "📦 Entrega"}
+              </button>
+            ))}
+          </div>
           <div className="flex rounded-lg border border-slate-700 overflow-hidden">
             {(["dia", "semana", "mes"] as const).map((v) => (
               <button
@@ -1100,38 +1195,46 @@ function CalendarioTab({ cards, columns, onEditCard }: CalendarioTabProps) {
 
       {/* Views */}
       {view === "dia" && (
-        <CalDiaView date={currentDate} cards={cardsWithDue} columns={columns} onEditCard={onEditCard} now={now} />
+        <CalDiaView date={currentDate} entries={filteredEntries} columns={columns} onEditCard={onEditCard} now={now} />
       )}
       {view === "semana" && (
-        <CalSemanaView date={currentDate} cards={cardsWithDue} columns={columns} onEditCard={onEditCard} now={now} />
+        <CalSemanaView date={currentDate} entries={filteredEntries} columns={columns} onEditCard={onEditCard} now={now} />
       )}
       {view === "mes" && (
-        <CalMesView date={currentDate} cards={cardsWithDue} columns={columns} onEditCard={onEditCard} now={now} />
+        <CalMesView date={currentDate} entries={filteredEntries} columns={columns} onEditCard={onEditCard} now={now} />
       )}
     </div>
   );
 }
 
 // --- Card chip reutilizável ---
-function CalCardChip({ card, columns, onClick }: { card: KanbanCardType; columns: KanbanColumnType[]; onClick: () => void }) {
+function CalCardChip({ entry, columns, onClick }: { entry: CalendarEntry; columns: KanbanColumnType[]; onClick: () => void }) {
+  const { card, entryType } = entry;
   const status = getStatusFromColumn(card.column ?? columns.find((c) => c.id === card.column_id));
   const priority = getPriorityDisplay(card.priority);
-  const overdue = card.due_date ? isOverdueHelper(card.due_date) : false;
+  const overdue = entryType === "delivery" && card.due_date ? isOverdueHelper(card.due_date) : false;
+  const isProduction = entryType === "production";
 
   return (
     <button
       onClick={onClick}
       className={cn(
         "group w-full text-left rounded-lg p-2.5 transition-all hover:brightness-125 cursor-pointer",
-        overdue ? "bg-red-500/10 border border-red-500/20" : "bg-slate-800/60 border border-slate-700/40 hover:border-slate-600/60"
+        overdue ? "bg-red-500/10 border border-red-500/20" :
+        isProduction ? "bg-blue-500/10 border border-blue-500/20 hover:border-blue-500/40" :
+        "bg-slate-800/60 border border-slate-700/40 hover:border-slate-600/60"
       )}
     >
       <div className="flex items-start gap-2">
-        <div className="mt-0.5 h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: status.color }} />
+        <span className="mt-0.5 shrink-0 text-xs">{isProduction ? "🎬" : "📦"}</span>
         <div className="min-w-0 flex-1">
-          <p className="text-xs font-medium text-slate-200 truncate">{card.title}</p>
+          <p className="text-xs font-medium text-slate-200 truncate">
+            {isProduction ? "" : ""}{card.title}
+          </p>
           <div className="mt-1 flex items-center gap-1.5 flex-wrap">
-            <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full", status.bgClass)}>{status.label}</span>
+            <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full", isProduction ? "bg-blue-500/20 text-blue-300" : status.bgClass)}>
+              {isProduction ? "Produção" : status.label}
+            </span>
             {priority && (
               <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full", priority.bgClass)}>{priority.label}</span>
             )}
@@ -1147,17 +1250,17 @@ function CalCardChip({ card, columns, onClick }: { card: KanbanCardType; columns
 }
 
 // --- VIEW: DIA ---
-function CalDiaView({ date, cards, columns, onEditCard, now }: { date: Date; cards: KanbanCardType[]; columns: KanbanColumnType[]; onEditCard: (c: KanbanCardType) => void; now: Date }) {
-  const dayCards = useMemo(() =>
-    cards.filter((c) => {
-      const d = new Date(c.due_date!);
-      return isSameDayUtil(d, date);
-    }).sort((a, b) => {
-      const pa = { urgent: 0, high: 1, medium: 2, low: 3 }[a.priority ?? "low"] ?? 3;
-      const pb = { urgent: 0, high: 1, medium: 2, low: 3 }[b.priority ?? "low"] ?? 3;
-      return pa - pb;
-    }),
-  [cards, date]);
+function CalDiaView({ date, entries, columns, onEditCard, now }: { date: Date; entries: CalendarEntry[]; columns: KanbanColumnType[]; onEditCard: (c: KanbanCardType) => void; now: Date }) {
+  const dayEntries = useMemo(() =>
+    entries.filter((e) => isSameDayUtil(e.date, date))
+      .sort((a, b) => {
+        // Produção antes de entrega, depois por prioridade
+        if (a.entryType !== b.entryType) return a.entryType === "production" ? -1 : 1;
+        const pa = { urgent: 0, high: 1, medium: 2, low: 3 }[a.card.priority ?? "low"] ?? 3;
+        const pb = { urgent: 0, high: 1, medium: 2, low: 3 }[b.card.priority ?? "low"] ?? 3;
+        return pa - pb;
+      }),
+  [entries, date]);
 
   const isToday = isSameDayUtil(date, now);
 
@@ -1167,21 +1270,21 @@ function CalDiaView({ date, cards, columns, onEditCard, now }: { date: Date; car
         <div className="flex items-center justify-between">
           <span className="text-sm font-semibold text-slate-200">
             {isToday && <span className="text-accent-cyan mr-2">●</span>}
-            Prazos do dia
+            Agenda do dia
           </span>
-          <Badge variant="neutral" size="sm">{dayCards.length} {dayCards.length === 1 ? "projeto" : "projetos"}</Badge>
+          <Badge variant="neutral" size="sm">{dayEntries.length} {dayEntries.length === 1 ? "item" : "itens"}</Badge>
         </div>
       </div>
       <div className="p-4">
-        {dayCards.length === 0 ? (
+        {dayEntries.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 text-center">
             <CalendarDots size={32} weight="duotone" className="text-slate-600 mb-2" />
-            <p className="text-sm text-slate-500">Nenhum prazo neste dia</p>
+            <p className="text-sm text-slate-500">Nenhum item neste dia</p>
           </div>
         ) : (
           <div className="space-y-2">
-            {dayCards.map((card) => (
-              <CalCardChip key={card.id} card={card} columns={columns} onClick={() => onEditCard(card)} />
+            {dayEntries.map((entry) => (
+              <CalCardChip key={entry.key} entry={entry} columns={columns} onClick={() => onEditCard(entry.card)} />
             ))}
           </div>
         )}
@@ -1191,7 +1294,7 @@ function CalDiaView({ date, cards, columns, onEditCard, now }: { date: Date; car
 }
 
 // --- VIEW: SEMANA ---
-function CalSemanaView({ date, cards, columns, onEditCard, now }: { date: Date; cards: KanbanCardType[]; columns: KanbanColumnType[]; onEditCard: (c: KanbanCardType) => void; now: Date }) {
+function CalSemanaView({ date, entries, columns, onEditCard, now }: { date: Date; entries: CalendarEntry[]; columns: KanbanColumnType[]; onEditCard: (c: KanbanCardType) => void; now: Date }) {
   const weekStart = useMemo(() => {
     const d = new Date(date);
     d.setDate(d.getDate() - d.getDay());
@@ -1207,25 +1310,25 @@ function CalSemanaView({ date, cards, columns, onEditCard, now }: { date: Date; 
     }),
   [weekStart]);
 
-  // Agrupar cards por dia da semana
-  const cardsByDay = useMemo(() => {
-    const map = new Map<number, KanbanCardType[]>();
+  // Agrupar entries por dia da semana
+  const entriesByDay = useMemo(() => {
+    const map = new Map<number, CalendarEntry[]>();
     weekDays.forEach((_, i) => map.set(i, []));
-    cards.forEach((card) => {
-      const d = new Date(card.due_date!);
-      const idx = weekDays.findIndex((wd) => isSameDayUtil(wd, d));
-      if (idx >= 0) map.get(idx)!.push(card);
+    entries.forEach((entry) => {
+      const idx = weekDays.findIndex((wd) => isSameDayUtil(wd, entry.date));
+      if (idx >= 0) map.get(idx)!.push(entry);
     });
-    // Ordenar por prioridade dentro de cada dia
-    map.forEach((dayCards) => {
-      dayCards.sort((a, b) => {
-        const pa = { urgent: 0, high: 1, medium: 2, low: 3 }[a.priority ?? "low"] ?? 3;
-        const pb = { urgent: 0, high: 1, medium: 2, low: 3 }[b.priority ?? "low"] ?? 3;
+    // Ordenar: produção antes de entrega, depois por prioridade
+    map.forEach((dayEntries) => {
+      dayEntries.sort((a, b) => {
+        if (a.entryType !== b.entryType) return a.entryType === "production" ? -1 : 1;
+        const pa = { urgent: 0, high: 1, medium: 2, low: 3 }[a.card.priority ?? "low"] ?? 3;
+        const pb = { urgent: 0, high: 1, medium: 2, low: 3 }[b.card.priority ?? "low"] ?? 3;
         return pa - pb;
       });
     });
     return map;
-  }, [cards, weekDays]);
+  }, [entries, weekDays]);
 
   return (
     <Card variant="default" className="overflow-hidden !p-0">
@@ -1233,7 +1336,7 @@ function CalSemanaView({ date, cards, columns, onEditCard, now }: { date: Date; 
       <div className="grid grid-cols-7 border-b border-slate-800">
         {weekDays.map((d, i) => {
           const isToday = isSameDayUtil(d, now);
-          const count = cardsByDay.get(i)?.length ?? 0;
+          const count = entriesByDay.get(i)?.length ?? 0;
           return (
             <div key={i} className={cn("flex flex-col items-center py-3", i > 0 && "border-l border-slate-800/50")}>
               <span className="text-[10px] font-medium text-slate-500 uppercase">{CAL_DIAS_SEMANA[i]}</span>
@@ -1246,17 +1349,17 @@ function CalSemanaView({ date, cards, columns, onEditCard, now }: { date: Date; 
                 {d.getDate()}
               </span>
               {count > 0 && (
-                <span className="mt-1 text-[10px] font-medium text-slate-400">{count} {count === 1 ? "prazo" : "prazos"}</span>
+                <span className="mt-1 text-[10px] font-medium text-slate-400">{count} {count === 1 ? "item" : "itens"}</span>
               )}
             </div>
           );
         })}
       </div>
 
-      {/* Cards grid */}
+      {/* Entries grid */}
       <div className="grid grid-cols-7 min-h-[320px]">
         {weekDays.map((wd, i) => {
-          const dayCards = cardsByDay.get(i) ?? [];
+          const dayEntries = entriesByDay.get(i) ?? [];
           const isToday = isSameDayUtil(wd, now);
           return (
             <div
@@ -1267,8 +1370,8 @@ function CalSemanaView({ date, cards, columns, onEditCard, now }: { date: Date; 
                 isToday && "bg-accent-cyan/[0.03]"
               )}
             >
-              {dayCards.map((card) => (
-                <CalCardChip key={card.id} card={card} columns={columns} onClick={() => onEditCard(card)} />
+              {dayEntries.map((entry) => (
+                <CalCardChip key={entry.key} entry={entry} columns={columns} onClick={() => onEditCard(entry.card)} />
               ))}
             </div>
           );
@@ -1279,14 +1382,12 @@ function CalSemanaView({ date, cards, columns, onEditCard, now }: { date: Date; 
 }
 
 // --- VIEW: MÊS ---
-function CalMesView({ date, cards, columns, onEditCard, now }: { date: Date; cards: KanbanCardType[]; columns: KanbanColumnType[]; onEditCard: (c: KanbanCardType) => void; now: Date }) {
+function CalMesView({ date, entries, columns, onEditCard, now }: { date: Date; entries: CalendarEntry[]; columns: KanbanColumnType[]; onEditCard: (c: KanbanCardType) => void; now: Date }) {
   const { weeks, monthStart } = useMemo(() => {
     const ms = new Date(date.getFullYear(), date.getMonth(), 1);
     const me = new Date(date.getFullYear(), date.getMonth() + 1, 0);
-    // Começar no domingo da semana do dia 1
     const calStart = new Date(ms);
     calStart.setDate(calStart.getDate() - calStart.getDay());
-    // Terminar no sábado da semana do último dia
     const calEnd = new Date(me);
     calEnd.setDate(calEnd.getDate() + (6 - calEnd.getDay()));
 
@@ -1303,17 +1404,17 @@ function CalMesView({ date, cards, columns, onEditCard, now }: { date: Date; car
     return { weeks: wks, monthStart: ms };
   }, [date]);
 
-  // Agrupar cards por dia (chave: YYYY-MM-DD)
-  const cardsByDate = useMemo(() => {
-    const map = new Map<string, KanbanCardType[]>();
-    cards.forEach((card) => {
-      const d = new Date(card.due_date!);
+  // Agrupar entries por dia (chave: YYYY-MM-DD)
+  const entriesByDate = useMemo(() => {
+    const map = new Map<string, CalendarEntry[]>();
+    entries.forEach((entry) => {
+      const d = entry.date;
       const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
       if (!map.has(key)) map.set(key, []);
-      map.get(key)!.push(card);
+      map.get(key)!.push(entry);
     });
     return map;
-  }, [cards]);
+  }, [entries]);
 
   return (
     <Card variant="default" className="overflow-hidden !p-0">
@@ -1333,8 +1434,8 @@ function CalMesView({ date, cards, columns, onEditCard, now }: { date: Date; car
             const isCurrentMonth = day.getMonth() === monthStart.getMonth();
             const isToday = isSameDayUtil(day, now);
             const key = `${day.getFullYear()}-${day.getMonth()}-${day.getDate()}`;
-            const dayCards = cardsByDate.get(key) ?? [];
-            const overdue = dayCards.some((c) => c.due_date && isOverdueHelper(c.due_date));
+            const dayEntries = entriesByDate.get(key) ?? [];
+            const hasOverdue = dayEntries.some((e) => e.entryType === "delivery" && e.card.due_date && isOverdueHelper(e.card.due_date));
 
             return (
               <div
@@ -1356,35 +1457,40 @@ function CalMesView({ date, cards, columns, onEditCard, now }: { date: Date; car
                   >
                     {day.getDate()}
                   </span>
-                  {dayCards.length > 0 && (
-                    <span className={cn("text-[9px] font-bold px-1.5 py-0.5 rounded-full", overdue ? "bg-red-500/15 text-red-400" : "bg-slate-700/50 text-slate-400")}>
-                      {dayCards.length}
+                  {dayEntries.length > 0 && (
+                    <span className={cn("text-[9px] font-bold px-1.5 py-0.5 rounded-full", hasOverdue ? "bg-red-500/15 text-red-400" : "bg-slate-700/50 text-slate-400")}>
+                      {dayEntries.length}
                     </span>
                   )}
                 </div>
 
-                {/* Card chips (max 3, then "+N") */}
+                {/* Entry chips (max 3, then "+N") */}
                 <div className="space-y-0.5">
-                  {dayCards.slice(0, 3).map((card) => {
+                  {dayEntries.slice(0, 3).map((entry) => {
+                    const { card, entryType } = entry;
                     const status = getStatusFromColumn(card.column ?? columns.find((c) => c.id === card.column_id));
-                    const cardOverdue = card.due_date ? isOverdueHelper(card.due_date) : false;
+                    const isProduction = entryType === "production";
+                    const entryOverdue = entryType === "delivery" && card.due_date ? isOverdueHelper(card.due_date) : false;
                     return (
                       <button
-                        key={card.id}
+                        key={entry.key}
                         onClick={() => onEditCard(card)}
                         className={cn(
                           "w-full text-left rounded px-1.5 py-0.5 text-[10px] font-medium truncate transition-colors hover:brightness-125 cursor-pointer",
-                          cardOverdue ? "bg-red-500/15 text-red-300" : "text-slate-300"
+                          entryOverdue ? "bg-red-500/15 text-red-300" : "text-slate-300"
                         )}
-                        style={{ backgroundColor: cardOverdue ? undefined : `${status.color}20`, borderLeft: `2px solid ${status.color}` }}
-                        title={card.title}
+                        style={{
+                          backgroundColor: entryOverdue ? undefined : isProduction ? "rgba(59,130,246,0.12)" : `${status.color}20`,
+                          borderLeft: `2px solid ${isProduction ? "#3B82F6" : status.color}`,
+                        }}
+                        title={`${isProduction ? "🎬 " : "📦 "}${card.title}`}
                       >
-                        {card.title}
+                        {isProduction ? "🎬 " : "📦 "}{card.title}
                       </button>
                     );
                   })}
-                  {dayCards.length > 3 && (
-                    <span className="block text-[9px] text-slate-500 pl-1">+{dayCards.length - 3} mais</span>
+                  {dayEntries.length > 3 && (
+                    <span className="block text-[9px] text-slate-500 pl-1">+{dayEntries.length - 3} mais</span>
                   )}
                 </div>
               </div>
@@ -1433,7 +1539,7 @@ function TimelineTab({ cards, columns }: { cards: KanbanCardType[]; columns: Kan
       .filter((c) => c.due_date)
       .map((card) => ({
         ...card,
-        startDate: new Date(card.created_at),
+        startDate: card.start_date ? new Date(card.start_date) : new Date(card.created_at),
         endDate: new Date(card.due_date!),
         progress: getProgressFromColumn(card.column, columns.length),
         statusColor: getStatusFromColumn(card.column).color,

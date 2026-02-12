@@ -99,7 +99,8 @@ export async function getCalendarItems(startDate: string, endDate: string, filte
     .order("start_time", { ascending: true });
 
   // Filtros opcionais
-  if (filters?.types && filters.types.length > 0) {
+  if (filters?.types) {
+    if (filters.types.length === 0) return []; // nenhum tipo selecionado → nada a retornar
     query = query.in("type", filters.types);
   }
   if (filters?.priorities && filters.priorities.length > 0) {
@@ -200,6 +201,83 @@ export async function getCalendarItemComments(itemId: string): Promise<CalendarI
     ...c,
     user: profileMap.get(c.user_id as string) ?? null,
   })) as unknown as CalendarItemComment[];
+}
+
+// ============================================================
+// MARCADORES DE ENTREGA (cards vinculados via kanban_card_id)
+// ============================================================
+
+/**
+ * Busca calendar_items que têm kanban_card_id, carrega o due_date do card vinculado,
+ * e gera "items fantasma" tipo delivery para exibir no calendário principal.
+ * Só retorna marcadores cuja due_date cai dentro do range solicitado.
+ */
+export async function getDeliveryMarkers(startDate: string, endDate: string): Promise<CalendarItem[]> {
+  const supabase = getSupabase();
+
+  // 1. Buscar calendar_items que têm kanban_card_id (sem filtro de data — o item pode estar fora do range mas a entrega dentro)
+  const { data: linkedItems, error: linkedErr } = await supabase
+    .from("calendar_items")
+    .select("id, title, kanban_card_id, responsible_user_id, content_type, platforms, metadata")
+    .not("kanban_card_id", "is", null)
+    .is("deleted_at", null);
+
+  if (linkedErr || !linkedItems || linkedItems.length === 0) return [];
+
+  // 2. Buscar os kanban_cards vinculados
+  const rows = linkedItems as unknown as Array<Record<string, unknown>>;
+  const cardIds = [...new Set(rows.map((i) => i.kanban_card_id as string).filter(Boolean))];
+  if (cardIds.length === 0) return [];
+
+  const { data: cards, error: cardsErr } = await supabase
+    .from("kanban_cards")
+    .select("id, title, due_date, start_date")
+    .in("id", cardIds);
+
+  if (cardsErr || !cards) return [];
+
+  const cardMap = new Map((cards as unknown as Array<Record<string, unknown>>).map((c) => [c.id as string, c]));
+
+  // 3. Gerar marcadores fantasma de entrega
+  const markers: CalendarItem[] = [];
+  const rangeStart = new Date(startDate).getTime();
+  const rangeEnd = new Date(endDate).getTime();
+
+  for (const item of rows) {
+    const card = cardMap.get(item.kanban_card_id as string);
+    if (!card || !card.due_date) continue;
+
+    const dueTime = new Date(card.due_date as string).getTime();
+    if (dueTime < rangeStart || dueTime > rangeEnd) continue;
+
+    markers.push({
+      id: `delivery-${item.id}`,
+      title: `📦 Entrega: ${item.title}`,
+      type: "delivery" as CalendarItem["type"],
+      start_time: card.due_date as string,
+      end_time: null,
+      all_day: false,
+      status: "pending",
+      description: `Entrega do card "${card.title ?? item.title}"`,
+      responsible_user_id: item.responsible_user_id as string | null,
+      created_by: null,
+      location: null,
+      content_type: item.content_type as string | null,
+      platforms: (item.platforms as string[]) ?? [],
+      kanban_card_id: item.kanban_card_id as string | null,
+      post_id: null,
+      color: null,
+      metadata: {
+        ...(item.metadata as Record<string, unknown> ?? {}),
+        is_delivery_marker: true,
+        source_calendar_item_id: item.id,
+      },
+      created_at: card.due_date as string,
+      updated_at: card.due_date as string,
+    } as unknown as CalendarItem);
+  }
+
+  return markers;
 }
 
 // === CRUD ===
