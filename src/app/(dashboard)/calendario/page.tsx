@@ -48,7 +48,17 @@ const HOURS = Array.from({ length: END_HOUR - START_HOUR + 1 }, (_, i) => START_
 
 function parseTime(iso: string) {
   const d = new Date(iso);
-  return { date: d, hour: d.getHours(), minute: d.getMinutes(), day: d.getDate(), month: d.getMonth(), year: d.getFullYear(), dayOfWeek: d.getDay() };
+  // Usar métodos UTC para evitar conversão de timezone
+  // Isso garante que a data salva seja exibida corretamente
+  return { 
+    date: d, 
+    hour: d.getUTCHours(), 
+    minute: d.getUTCMinutes(), 
+    day: d.getUTCDate(), 
+    month: d.getUTCMonth(), 
+    year: d.getUTCFullYear(), 
+    dayOfWeek: d.getUTCDay() 
+  };
 }
 
 function formatHour(h: number, m: number = 0) {

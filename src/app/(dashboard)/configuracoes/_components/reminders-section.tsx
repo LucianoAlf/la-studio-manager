@@ -53,9 +53,12 @@ const RECURRENCE_LABELS: Record<string, string> = {
 
 function formatDateTime(iso: string): string {
   const d = new Date(iso);
-  const day = d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" });
-  const time = d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
-  return `${day} às ${time}`;
+  // Usar UTC para evitar problemas de timezone
+  const dia = d.getUTCDate().toString().padStart(2, '0');
+  const mes = (d.getUTCMonth() + 1).toString().padStart(2, '0');
+  const horas = d.getUTCHours().toString().padStart(2, '0');
+  const minutos = d.getUTCMinutes().toString().padStart(2, '0');
+  return `${dia}/${mes} às ${horas}:${minutos}`;
 }
 
 function formatRelative(iso: string): string {
@@ -123,7 +126,11 @@ export function RemindersSection({ profileId }: RemindersSectionProps) {
 
     try {
       setCreating(true);
-      const scheduledFor = new Date(newDateTime).toISOString();
+      // Converter data local para UTC preservando o momento civil
+      const [datePart, timePart] = newDateTime.split('T');
+      const [year, month, day] = datePart.split('-').map(Number);
+      const [hours, minutes] = timePart ? timePart.split(':').map(Number) : [0, 0];
+      const scheduledFor = new Date(Date.UTC(year, month - 1, day, hours, minutes, 0, 0)).toISOString();
 
       if (new Date(scheduledFor) <= new Date()) {
         toast.error("A data do lembrete deve ser no futuro");
@@ -366,7 +373,12 @@ function ReminderItem({
     if (!editDateTime) return;
     try {
       setSaving(true);
-      const scheduledFor = new Date(editDateTime).toISOString();
+      // Converter data local para UTC preservando o momento civil
+      const [datePart, timePart] = editDateTime.split('T');
+      const [year, month, day] = datePart.split('-').map(Number);
+      const [hours, minutes] = timePart ? timePart.split(':').map(Number) : [0, 0];
+      const scheduledFor = new Date(Date.UTC(year, month - 1, day, hours, minutes, 0, 0)).toISOString();
+      
       if (new Date(scheduledFor) <= new Date()) {
         toast.error("A data deve ser no futuro");
         return;

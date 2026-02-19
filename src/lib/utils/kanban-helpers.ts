@@ -122,14 +122,17 @@ export const PLATFORM_COLORS: Record<string, string> = {
 // Formatar data curta
 export function formatDateShort(iso: string) {
   const d = new Date(iso);
-  const dia = d.getDate().toString().padStart(2, "0");
+  // Usar métodos UTC para evitar problemas de timezone
+  const dia = d.getUTCDate().toString().padStart(2, "0");
   const meses = ["jan.", "fev.", "mar.", "abr.", "mai.", "jun.", "jul.", "ago.", "set.", "out.", "nov.", "dez."];
-  return `${dia} de ${meses[d.getMonth()]}`;
+  return `${dia} de ${meses[d.getUTCMonth()]}`;
 }
 
 // Verificar se data já passou
 export function isOverdue(iso: string) {
   const hoje = new Date();
-  hoje.setHours(0, 0, 0, 0);
-  return new Date(iso) < hoje;
+  // Usar UTC para evitar problemas de timezone
+  const hojeUTC = Date.UTC(hoje.getFullYear(), hoje.getMonth(), hoje.getDate(), 0, 0, 0, 0);
+  const dataISO = new Date(iso).getTime();
+  return dataISO < hojeUTC;
 }

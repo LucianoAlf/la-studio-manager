@@ -22,13 +22,21 @@ export const TYPE_EMOJIS: Record<CalendarItemType, string> = {
 // Helper: formatar horário "09:00"
 export function formatTime(isoString: string) {
   const date = new Date(isoString);
-  return date.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  // Usar UTC para evitar problemas de timezone
+  const hours = date.getUTCHours().toString().padStart(2, '0');
+  const minutes = date.getUTCMinutes().toString().padStart(2, '0');
+  return `${hours}:${minutes}`;
 }
 
 // Helper: formatar data "06 fev. 2026"
 export function formatDateShort(isoString: string) {
   const date = new Date(isoString);
-  return date.toLocaleDateString("pt-BR", { day: "2-digit", month: "short", year: "numeric" });
+  // Usar UTC para evitar problemas de timezone
+  const dia = date.getUTCDate().toString().padStart(2, '0');
+  const mes = date.getUTCMonth();
+  const ano = date.getUTCFullYear();
+  const meses = ["jan.", "fev.", "mar.", "abr.", "mai.", "jun.", "jul.", "ago.", "set.", "out.", "nov.", "dez."];
+  return `${dia} ${meses[mes]} ${ano}`;
 }
 
 // Helper: calcular posição top e height para week/day view
@@ -39,8 +47,9 @@ export function calcEventPosition(
   startHour: number = 7
 ) {
   const start = new Date(startTime);
-  const startH = start.getHours();
-  const startM = start.getMinutes();
+  // Usar UTC para evitar problemas de timezone
+  const startH = start.getUTCHours();
+  const startM = start.getUTCMinutes();
   const top = (startH - startHour) * hourHeight + (startM / 60) * hourHeight;
 
   if (!endTime) {
@@ -56,30 +65,29 @@ export function calcEventPosition(
 
 // Helper: início e fim do período por view
 export function getDateRange(date: Date, view: "dia" | "semana" | "mes") {
-  const d = new Date(date);
+  // Usar UTC para evitar problemas de timezone
+  const year = date.getUTCFullYear();
+  const month = date.getUTCMonth();
+  const day = date.getUTCDate();
+  const dayOfWeek = date.getUTCDay();
 
   if (view === "dia") {
-    const start = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0);
-    const end = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59);
+    const start = new Date(Date.UTC(year, month, day, 0, 0, 0));
+    const end = new Date(Date.UTC(year, month, day, 23, 59, 59));
     return { start: start.toISOString(), end: end.toISOString() };
   }
 
   if (view === "semana") {
     // Semana começa na segunda-feira (alinhado com getWeekStart do calendário)
-    const dayOfWeek = d.getDay();
     const diff = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
-    const monday = new Date(d);
-    monday.setDate(d.getDate() + diff);
-    monday.setHours(0, 0, 0, 0);
-    const sunday = new Date(monday);
-    sunday.setDate(monday.getDate() + 6);
-    sunday.setHours(23, 59, 59, 999);
+    const monday = new Date(Date.UTC(year, month, day + diff, 0, 0, 0));
+    const sunday = new Date(Date.UTC(year, month, day + diff + 6, 23, 59, 59, 999));
     return { start: monday.toISOString(), end: sunday.toISOString() };
   }
 
   // mes
-  const start = new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0);
-  const end = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59);
+  const start = new Date(Date.UTC(year, month, 1, 0, 0, 0));
+  const end = new Date(Date.UTC(year, month + 1, 0, 23, 59, 59));
   return { start: start.toISOString(), end: end.toISOString() };
 }
 

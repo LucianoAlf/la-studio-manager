@@ -29,13 +29,38 @@ import { createClient } from "@/lib/supabase/client";
 
 // === Helpers ===
 
+/**
+ * Converte uma string datetime local (formato: "YYYY-MM-DDTHH:mm")
+ * para ISO string em UTC, preservando a data civil corretamente.
+ * 
+ * Para evitar problemas de timezone (ex: 20/02 22:00 BRT virar 21/02 01:00 UTC),
+ * esta função garante que a data civil seja mantida:
+ * - Extrai ano/mês/dia/hora/minuto da string local
+ * - Cria timestamp em UTC que represente o mesmo instante civil
+ */
+function localToUTCISO(localDateTime: string): string {
+  if (!localDateTime) return '';
+  
+  // Parse da string local: "2026-02-20T22:00"
+  const [datePart, timePart] = localDateTime.split('T');
+  const [year, month, day] = datePart.split('-').map(Number);
+  const [hours, minutes] = timePart ? timePart.split(':').map(Number) : [0, 0];
+  
+  // Criar data em UTC com os valores locais
+  // Assim 20/02 22:00 no Brasil vira 20/02 22:00 UTC (não converte timezone)
+  const utcDate = new Date(Date.UTC(year, month - 1, day, hours, minutes, 0, 0));
+  
+  return utcDate.toISOString();
+}
+
 function formatDateTimeLocal(iso: string): string {
   const date = new Date(iso);
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  const hours = String(date.getHours()).padStart(2, "0");
-  const minutes = String(date.getMinutes()).padStart(2, "0");
+  // Usar UTC para evitar problemas de timezone
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  const hours = String(date.getUTCHours()).padStart(2, "0");
+  const minutes = String(date.getUTCMinutes()).padStart(2, "0");
   return `${year}-${month}-${day}T${hours}:${minutes}`;
 }
 
@@ -207,8 +232,8 @@ export function CalendarItemModal({
         title: title.trim(),
         type: selectedType,
         status: selectedStatus,
-        start_time: new Date(startTime).toISOString(),
-        end_time: endTime ? new Date(endTime).toISOString() : null,
+        start_time: localToUTCISO(startTime),
+        end_time: endTime ? localToUTCISO(endTime) : null,
         responsible_user_id: selectedUser || null,
         content_type: contentType || null,
         platforms: selectedPlatforms,

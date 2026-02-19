@@ -38,6 +38,24 @@ import { createKanbanCard, updateKanbanCard, deleteKanbanCard } from "@/lib/quer
 import { getCurrentUserProfile, getAllUsers } from "@/lib/queries/users";
 import { getStatusFromColumn } from "@/lib/utils/kanban-helpers";
 
+// === Helpers ===
+
+/**
+ * Converte uma string de data (YYYY-MM-DD) para ISO UTC,
+ * garantindo que a data civil seja preservada sem problemas de timezone.
+ */
+function localDateToUTCISO(dateString: string): string {
+  if (!dateString) return '';
+  
+  // Parse: "2026-02-18"
+  const [year, month, day] = dateString.split('-').map(Number);
+  
+  // Criar data em UTC com ano/mês/dia (meia-noite UTC do mesmo dia civil)
+  const utcDate = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
+  
+  return utcDate.toISOString();
+}
+
 const INPUT_CLASS =
   "flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50";
 
@@ -166,8 +184,8 @@ export function KanbanCardModal({
         description: description || null,
         column_id: selectedColumnId,
         responsible_user_id: selectedUser && selectedUser !== "none" ? selectedUser : null,
-        start_date: startDate ? new Date(startDate).toISOString() : null,
-        due_date: dueDate ? new Date(dueDate).toISOString() : null,
+        start_date: startDate ? localDateToUTCISO(startDate) : null,
+        due_date: dueDate ? localDateToUTCISO(dueDate) : null,
         priority: selectedPriority || null,
         content_type: contentType || null,
         platforms: selectedPlatforms,
