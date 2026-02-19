@@ -43,6 +43,9 @@ import { getStatusFromColumn } from "@/lib/utils/kanban-helpers";
 /**
  * Converte uma string de data (YYYY-MM-DD) para ISO UTC,
  * garantindo que a data civil seja preservada sem problemas de timezone.
+ * 
+ * Para datas sem hora específica, salva como 03:00 UTC (meia-noite no Brasil, UTC-3)
+ * assim quando convertido para local, mantém o mesmo dia civil.
  */
 function localDateToUTCISO(dateString: string): string {
   if (!dateString) return '';
@@ -50,8 +53,9 @@ function localDateToUTCISO(dateString: string): string {
   // Parse: "2026-02-18"
   const [year, month, day] = dateString.split('-').map(Number);
   
-  // Criar data em UTC com ano/mês/dia (meia-noite UTC do mesmo dia civil)
-  const utcDate = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
+  // Salvar como 03:00 UTC (que é 00:00 no Brasil, UTC-3)
+  // Assim a data civil é preservada quando convertida para horário local
+  const utcDate = new Date(Date.UTC(year, month - 1, day, 3, 0, 0, 0));
   
   return utcDate.toISOString();
 }

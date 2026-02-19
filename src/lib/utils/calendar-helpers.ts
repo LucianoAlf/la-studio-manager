@@ -22,19 +22,19 @@ export const TYPE_EMOJIS: Record<CalendarItemType, string> = {
 // Helper: formatar horário "09:00"
 export function formatTime(isoString: string) {
   const date = new Date(isoString);
-  // Usar UTC para evitar problemas de timezone
-  const hours = date.getUTCHours().toString().padStart(2, '0');
-  const minutes = date.getUTCMinutes().toString().padStart(2, '0');
+  // Usar métodos locais para converter UTC para horário local do navegador
+  const hours = date.getHours().toString().padStart(2, '0');
+  const minutes = date.getMinutes().toString().padStart(2, '0');
   return `${hours}:${minutes}`;
 }
 
 // Helper: formatar data "06 fev. 2026"
 export function formatDateShort(isoString: string) {
   const date = new Date(isoString);
-  // Usar UTC para evitar problemas de timezone
-  const dia = date.getUTCDate().toString().padStart(2, '0');
-  const mes = date.getUTCMonth();
-  const ano = date.getUTCFullYear();
+  // Usar métodos locais para converter UTC para horário local do navegador
+  const dia = date.getDate().toString().padStart(2, '0');
+  const mes = date.getMonth();
+  const ano = date.getFullYear();
   const meses = ["jan.", "fev.", "mar.", "abr.", "mai.", "jun.", "jul.", "ago.", "set.", "out.", "nov.", "dez."];
   return `${dia} ${meses[mes]} ${ano}`;
 }
@@ -47,9 +47,9 @@ export function calcEventPosition(
   startHour: number = 7
 ) {
   const start = new Date(startTime);
-  // Usar UTC para evitar problemas de timezone
-  const startH = start.getUTCHours();
-  const startM = start.getUTCMinutes();
+  // Usar métodos locais para converter UTC para horário local do navegador
+  const startH = start.getHours();
+  const startM = start.getMinutes();
   const top = (startH - startHour) * hourHeight + (startM / 60) * hourHeight;
 
   if (!endTime) {

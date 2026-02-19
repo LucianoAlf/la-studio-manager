@@ -8,9 +8,10 @@ import { cn } from "@/lib/utils";
 import { Button, Badge, Avatar, IconButton, Chip, Dot } from "@/components/ui";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/shadcn/select";
 import { getCalendarItems, getCalendarItemConnections, getCalendarItemComments, addCalendarComment, moveCalendarItem, deleteCalendarItem, getCalendarReminders, getDeliveryMarkers } from "@/lib/queries/calendar";
+import { getKanbanCards } from "@/lib/queries/kanban";
 import { getCurrentUserProfile, getAllUsers } from "@/lib/queries/users";
 import { TYPE_COLORS, TYPE_EMOJIS, getDateRange, getUserDisplay, PLATFORM_COLORS } from "@/lib/utils/calendar-helpers";
-import type { CalendarItem, CalendarItemType, CalendarItemConnection, CalendarItemComment, UserProfile } from "@/lib/types/database";
+import type { CalendarItem, CalendarItemType, CalendarItemConnection, CalendarItemComment, UserProfile, KanbanCard } from "@/lib/types/database";
 import type { CalendarFilters } from "@/types/filters";
 import { useRealtimeSubscription } from "@/hooks/useRealtimeSubscription";
 import { toast } from "sonner";
@@ -48,16 +49,16 @@ const HOURS = Array.from({ length: END_HOUR - START_HOUR + 1 }, (_, i) => START_
 
 function parseTime(iso: string) {
   const d = new Date(iso);
-  // Usar métodos UTC para evitar conversão de timezone
-  // Isso garante que a data salva seja exibida corretamente
+  // Usar métodos locais para converter UTC para horário local do navegador
+  // Isso garante que a data seja exibida corretamente para o usuário
   return { 
     date: d, 
-    hour: d.getUTCHours(), 
-    minute: d.getUTCMinutes(), 
-    day: d.getUTCDate(), 
-    month: d.getUTCMonth(), 
-    year: d.getUTCFullYear(), 
-    dayOfWeek: d.getUTCDay() 
+    hour: d.getHours(), 
+    minute: d.getMinutes(), 
+    day: d.getDate(), 
+    month: d.getMonth(), 
+    year: d.getFullYear(), 
+    dayOfWeek: d.getDay() 
   };
 }
 
@@ -87,6 +88,47 @@ function addDays(date: Date, n: number): Date {
 const DIAS_SEMANA_CURTO = ["SEG", "TER", "QUA", "QUI", "SEX", "SÁB", "DOM"];
 const DIAS_SEMANA_FULL = ["Domingo", "Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado"];
 const MESES = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+
+/**
+ * Converte KanbanCards para formato CalendarItem para exibição no calendário global.
+ * Usa start_date ou due_date como start_time (priorizando start_date).
+ */
+function convertKanbanCardsToCalendarItems(cards: KanbanCard[]): CalendarItem[] {
+  return cards
+    .filter((card) => card.start_date || card.due_date) // Só cards com data
+    .map((card) => {
+      const startTime = card.start_date || card.due_date!;
+      // Se tiver due_date e for diferente de start_date, usar como end_time
+      const endTime = card.due_date && card.due_date !== card.start_date ? card.due_date : null;
+      
+      return {
+        id: `kanban-${card.id}`,
+        title: card.title,
+        type: "task" as CalendarItem["type"],
+        status: card.completed_at ? "completed" : "pending",
+        start_time: startTime,
+        end_time: endTime,
+        all_day: true, // Cards do kanban são tratados como eventos de dia todo
+        created_by: card.created_by,
+        responsible_user_id: card.responsible_user_id,
+        content_type: card.content_type,
+        platforms: card.platforms || [],
+        color: null,
+        location: null,
+        kanban_card_id: card.id,
+        post_id: null,
+        metadata: {
+          is_kanban_card: true,
+          kanban_column_id: card.column_id,
+          priority: card.priority,
+          card_type: card.card_type,
+        },
+        created_at: startTime,
+        updated_at: startTime,
+        description: card.description,
+      } as CalendarItem;
+    });
+}
 
 // ============================================================
 // COMPONENTE PRINCIPAL
@@ -161,12 +203,14 @@ export default function CalendarioPage() {
     try {
       const { start, end } = getDateRange(currentDate, view);
       const profileId = currentUser?.profile ? undefined : undefined;
-      const [calItems, reminderItems, deliveryItems] = await Promise.all([
+      const [calItems, reminderItems, deliveryItems, kanbanCards] = await Promise.all([
         getCalendarItems(start, end, serverFilters),
         getCalendarReminders(start, end, profileId),
         getDeliveryMarkers(start, end),
+        getKanbanCards(),
       ]);
-      setItems([...calItems, ...reminderItems, ...deliveryItems]);
+      const kanbanItems = convertKanbanCardsToCalendarItems(kanbanCards);
+      setItems([...calItems, ...reminderItems, ...deliveryItems, ...kanbanItems]);
       setSelectedItem(null);
     } catch (err) {
       console.error("Erro ao recarregar:", err);
@@ -181,12 +225,14 @@ export default function CalendarioPage() {
       setError(null);
       try {
         const { start, end } = getDateRange(currentDate, view);
-        const [calItems, reminderItems, deliveryItems] = await Promise.all([
+        const [calItems, reminderItems, deliveryItems, kanbanCards] = await Promise.all([
           getCalendarItems(start, end, serverFilters),
           getCalendarReminders(start, end),
           getDeliveryMarkers(start, end),
+          getKanbanCards(),
         ]);
-        if (!cancelled) setItems([...calItems, ...reminderItems, ...deliveryItems]);
+        const kanbanItems = convertKanbanCardsToCalendarItems(kanbanCards);
+        if (!cancelled) setItems([...calItems, ...reminderItems, ...deliveryItems, ...kanbanItems]);
       } catch (err) {
         console.error("Erro ao carregar items:", err);
         if (!cancelled) setError("Erro ao carregar dados do calendário");
@@ -204,12 +250,14 @@ export default function CalendarioPage() {
     onInsert: useCallback(async () => {
       if (isDroppingRef.current) return;
       const { start, end } = getDateRange(currentDate, view);
-      const [calItems, reminderItems, deliveryItems] = await Promise.all([
+      const [calItems, reminderItems, deliveryItems, kanbanCards] = await Promise.all([
         getCalendarItems(start, end, serverFilters),
         getCalendarReminders(start, end),
         getDeliveryMarkers(start, end),
+        getKanbanCards(),
       ]);
-      const allData = [...calItems, ...reminderItems, ...deliveryItems];
+      const kanbanItems = convertKanbanCardsToCalendarItems(kanbanCards);
+      const allData = [...calItems, ...reminderItems, ...deliveryItems, ...kanbanItems];
       const currentIds = new Set(items.map((i) => i.id));
       const newIds = new Set(allData.filter((i) => !currentIds.has(i.id)).map((i) => i.id));
       setItems(allData);
@@ -221,22 +269,26 @@ export default function CalendarioPage() {
     onUpdate: useCallback(async () => {
       if (isDroppingRef.current) return;
       const { start, end } = getDateRange(currentDate, view);
-      const [calItems, reminderItems, deliveryItems] = await Promise.all([
+      const [calItems, reminderItems, deliveryItems, kanbanCards] = await Promise.all([
         getCalendarItems(start, end, serverFilters),
         getCalendarReminders(start, end),
         getDeliveryMarkers(start, end),
+        getKanbanCards(),
       ]);
-      setItems([...calItems, ...reminderItems, ...deliveryItems]);
+      const kanbanItems = convertKanbanCardsToCalendarItems(kanbanCards);
+      setItems([...calItems, ...reminderItems, ...deliveryItems, ...kanbanItems]);
     }, [currentDate, view, serverFilters]),
     onDelete: useCallback(async () => {
       if (isDroppingRef.current) return;
       const { start, end } = getDateRange(currentDate, view);
-      const [calItems, reminderItems, deliveryItems] = await Promise.all([
+      const [calItems, reminderItems, deliveryItems, kanbanCards] = await Promise.all([
         getCalendarItems(start, end, serverFilters),
         getCalendarReminders(start, end),
         getDeliveryMarkers(start, end),
+        getKanbanCards(),
       ]);
-      const allData = [...calItems, ...reminderItems, ...deliveryItems];
+      const kanbanItems = convertKanbanCardsToCalendarItems(kanbanCards);
+      const allData = [...calItems, ...reminderItems, ...deliveryItems, ...kanbanItems];
       setItems(allData);
       setSelectedItem((prev) => {
         if (prev && !allData.find((i) => i.id === prev.id)) return null;
@@ -1137,6 +1189,18 @@ function SidePanel({ today, currentDate, setCurrentDate, items, allItems, select
   const [miniYear, setMiniYear] = useState(today.getFullYear());
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
   const commentInputRef = useRef<HTMLInputElement>(null);
+  const isMiniCalendarClick = useRef(false);
+
+  // Sincronizar mini calendário com currentDate quando o calendário grande navega
+  // Mas NÃO sincronizar quando o clique veio do próprio mini calendário
+  useEffect(() => {
+    if (isMiniCalendarClick.current) {
+      isMiniCalendarClick.current = false;
+      return;
+    }
+    setMiniMonth(currentDate.getMonth());
+    setMiniYear(currentDate.getFullYear());
+  }, [currentDate]);
 
   const todayItems = items.filter((item) => isSameDay(new Date(item.start_time), today));
 
@@ -1195,7 +1259,10 @@ function SidePanel({ today, currentDate, setCurrentDate, items, allItems, select
               return (
                 <button
                   key={i}
-                  onClick={() => setCurrentDate(new Date(d))}
+                  onClick={() => {
+                    isMiniCalendarClick.current = true;
+                    setCurrentDate(new Date(d));
+                  }}
                   className={cn(
                     "flex flex-col items-center justify-center h-8 rounded-full text-[11px] transition-colors",
                     !isCurrentMonth && "opacity-40",
