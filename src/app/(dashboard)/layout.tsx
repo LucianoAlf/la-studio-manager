@@ -2,7 +2,6 @@
 
 import { AppSidebar } from "@/components/layout/app-sidebar";
 import { UserProvider, useUser } from "@/contexts/user-context";
-import { Toaster } from "@/components/ui/shadcn/sonner";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
@@ -56,7 +55,6 @@ function DashboardContent({
       >
         {children}
       </main>
-      <Toaster />
     </div>
   );
 }

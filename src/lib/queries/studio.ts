@@ -36,7 +36,11 @@ export interface PhotoAsset {
   birth_date: string | null;
   source: string;
   metadata: Record<string, unknown> | null;
+  event_name?: string | null;
+  event_date?: string | null;
 }
+
+export type AssetFilterType = "alunos" | "eventos" | "todos";
 
 export interface BirthdayLogItem {
   id: string;
@@ -129,7 +133,8 @@ export async function getPhotoAssets(
   page: number,
   pageSize: number,
   onlyWithPhoto: boolean | null,
-  search: string
+  search: string,
+  filterType: AssetFilterType = "alunos"
 ): Promise<{ rows: PhotoAsset[]; total: number }> {
   const supabase = getSupabase();
   const from = (page - 1) * pageSize;
@@ -137,11 +142,21 @@ export async function getPhotoAssets(
 
   let query = supabase
     .from("assets" as never)
-    .select("id, person_name, brand, file_url, birth_date, source, metadata", { count: "exact" })
-    .eq("source", "emusys")
+    .select("id, person_name, brand, file_url, birth_date, source, metadata, event_name, event_date", { count: "exact" })
     .or(`brand.eq.${brand},brand.eq.both`)
-    .is("deleted_at", null)
-    .order("person_name", { ascending: true });
+    .is("deleted_at", null);
+
+  // Filtro por tipo: alunos (emusys) ou eventos (upload com event_name)
+  if (filterType === "alunos") {
+    query = query.eq("source", "emusys");
+    query = query.order("person_name", { ascending: true });
+  } else if (filterType === "eventos") {
+    query = query.not("event_name", "is", null);
+    query = query.order("event_date", { ascending: false, nullsFirst: false });
+  } else {
+    // todos
+    query = query.order("created_at", { ascending: false });
+  }
 
   if (onlyWithPhoto === true) {
     query = query.not("file_url", "is", null);
@@ -152,7 +167,11 @@ export async function getPhotoAssets(
   }
 
   if (search.trim()) {
-    query = query.ilike("person_name", `%${search.trim()}%`);
+    if (filterType === "eventos") {
+      query = query.ilike("event_name", `%${search.trim()}%`);
+    } else {
+      query = query.ilike("person_name", `%${search.trim()}%`);
+    }
   }
 
   const { data, count, error } = await query.range(from, to);
