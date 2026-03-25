@@ -24,6 +24,7 @@ export const SIDEBAR_NAV = [
   { label: "Dashboard", href: "/", icon: SquaresFour, disabled: true },
   { label: "Projetos", href: "/projetos", icon: Kanban, disabled: false },
   { label: "Calendário", href: "/calendario", icon: CalendarDots, disabled: false },
+  { label: "Studio", href: "/studio", icon: Lightning, disabled: false },
   { label: "Agentes IA", href: "/agentes", icon: Robot, disabled: true },
   { label: "Ativos", href: "/ativos", icon: Images, disabled: true },
   { label: "Relatórios", href: "/relatorios", icon: ChartBar, disabled: true },
