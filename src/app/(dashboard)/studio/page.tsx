@@ -155,6 +155,7 @@ export default function StudioPage() {
   const [eventFiles, setEventFiles] = useState<File[]>([]);
   const [isEventUploading, setIsEventUploading] = useState(false);
   const [eventUploadProgress, setEventUploadProgress] = useState(0);
+  const [eventDragOver, setEventDragOver] = useState(false);
 
   const [platformFilter, setPlatformFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
@@ -510,6 +511,101 @@ export default function StudioPage() {
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-|-$/g, "");
   };
+
+  // Processa drop de pasta ou arquivos no modal de evento
+  const handleEventDrop = useCallback(async (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setEventDragOver(false);
+
+    const files: File[] = [];
+    let folderName: string | null = null;
+
+    // Tenta usar webkitGetAsEntry para detectar pasta
+    const items = e.dataTransfer.items;
+    let usedWebkitApi = false;
+
+    if (items && items.length > 0) {
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        const entry = item.webkitGetAsEntry?.();
+
+        if (entry?.isDirectory) {
+          usedWebkitApi = true;
+          folderName = entry.name;
+
+          // Ler arquivos da pasta
+          const dirReader = (entry as FileSystemDirectoryEntry).createReader();
+          const readAllEntries = (): Promise<FileSystemEntry[]> => {
+            return new Promise((resolve) => {
+              const allEntries: FileSystemEntry[] = [];
+              const readBatch = () => {
+                dirReader.readEntries((entries) => {
+                  if (entries.length === 0) {
+                    resolve(allEntries);
+                  } else {
+                    allEntries.push(...entries);
+                    readBatch();
+                  }
+                });
+              };
+              readBatch();
+            });
+          };
+
+          try {
+            const entries = await readAllEntries();
+            for (const fileEntry of entries) {
+              if (fileEntry.isFile) {
+                const file = await new Promise<File>((resolve, reject) => {
+                  (fileEntry as FileSystemFileEntry).file(resolve, reject);
+                });
+                if (file.type.startsWith("image/")) {
+                  files.push(file);
+                }
+              }
+            }
+          } catch (err) {
+            console.error("Erro ao ler pasta:", err);
+          }
+        } else if (entry?.isFile) {
+          usedWebkitApi = true;
+          const file = item.getAsFile();
+          if (file?.type.startsWith("image/")) {
+            files.push(file);
+          }
+        }
+      }
+    }
+
+    // Fallback: usar dataTransfer.files (não detecta nome de pasta)
+    if (!usedWebkitApi && e.dataTransfer.files.length > 0) {
+      const droppedFiles = Array.from(e.dataTransfer.files);
+      for (const file of droppedFiles) {
+        if (file.type.startsWith("image/")) {
+          files.push(file);
+        }
+      }
+      // Tentar extrair nome da pasta do path (se disponível)
+      const firstFile = droppedFiles[0];
+      if (firstFile && "webkitRelativePath" in firstFile && firstFile.webkitRelativePath) {
+        const pathParts = (firstFile.webkitRelativePath as string).split("/");
+        if (pathParts.length > 1) {
+          folderName = pathParts[0];
+        }
+      }
+    }
+
+    if (files.length > 0) {
+      setEventFiles(files);
+      if (folderName && !eventName.trim()) {
+        setEventName(folderName);
+      }
+      toast.success(`${files.length} foto(s) carregada(s)`);
+    } else {
+      toast.error("Nenhuma imagem encontrada");
+    }
+  }, [eventName]);
 
   // Upload de evento
   const handleEventUpload = useCallback(async () => {
@@ -1332,18 +1428,33 @@ export default function StudioPage() {
 
               <div className="space-y-1">
                 <label className="text-xs text-slate-400">Fotos do evento</label>
-                <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-700 bg-slate-900/40 py-8 transition-colors hover:border-cyan-500/50 hover:bg-slate-900/60">
-                  <Upload size={32} className="text-slate-500" />
-                  <span className="text-sm text-slate-400">Clique para selecionar fotos</span>
-                  <span className="text-xs text-slate-600">ou arraste e solte aqui</span>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    onChange={(e) => e.target.files && setEventFiles(Array.from(e.target.files))}
-                    className="hidden"
-                  />
-                </label>
+                <div
+                  onDragOver={(e) => { e.preventDefault(); setEventDragOver(true); }}
+                  onDragLeave={() => setEventDragOver(false)}
+                  onDrop={(e) => void handleEventDrop(e)}
+                  className={cn(
+                    "flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed py-8 transition-colors",
+                    eventDragOver
+                      ? "border-cyan-400 bg-cyan-500/10"
+                      : "border-slate-700 bg-slate-900/40 hover:border-cyan-500/50 hover:bg-slate-900/60"
+                  )}
+                >
+                  <Upload size={32} className={eventDragOver ? "text-cyan-400" : "text-slate-500"} />
+                  <span className="text-sm text-slate-400">
+                    {eventDragOver ? "Solte aqui!" : "Arraste uma pasta ou clique para selecionar"}
+                  </span>
+                  <span className="text-xs text-slate-600">O nome da pasta vira o nome do evento</span>
+                  <label className="mt-2 cursor-pointer rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-700">
+                    Selecionar arquivos
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      onChange={(e) => e.target.files && setEventFiles(Array.from(e.target.files))}
+                      className="hidden"
+                    />
+                  </label>
+                </div>
                 {eventFiles.length > 0 && (
                   <p className="mt-2 text-xs text-cyan-400">{eventFiles.length} foto(s) selecionada(s)</p>
                 )}

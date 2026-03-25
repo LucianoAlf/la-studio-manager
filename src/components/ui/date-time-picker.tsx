@@ -80,9 +80,19 @@ function MiniCalendar({
     else setViewMonth((m) => m + 1);
   }, [viewMonth]);
 
+  // Anos disponíveis (10 anos para trás e 5 para frente)
+  const years = useMemo(() => {
+    const currentYear = new Date().getFullYear();
+    const result: number[] = [];
+    for (let y = currentYear - 10; y <= currentYear + 5; y++) {
+      result.push(y);
+    }
+    return result;
+  }, []);
+
   return (
     <div className="w-full">
-      {/* Header */}
+      {/* Header com dropdowns */}
       <div className="flex items-center justify-between mb-2">
         <button
           type="button"
@@ -91,9 +101,26 @@ function MiniCalendar({
         >
           <CaretLeft size={14} weight="bold" />
         </button>
-        <span className="text-sm font-semibold text-slate-200">
-          {MESES[viewMonth]} {viewYear}
-        </span>
+        <div className="flex items-center gap-1">
+          <select
+            value={viewMonth}
+            onChange={(e) => setViewMonth(Number(e.target.value))}
+            className="h-7 rounded-md border border-slate-700 bg-slate-800 px-1.5 text-xs font-medium text-slate-200 focus:outline-none focus:ring-1 focus:ring-ring appearance-none cursor-pointer"
+          >
+            {MESES.map((mes, idx) => (
+              <option key={idx} value={idx}>{mes}</option>
+            ))}
+          </select>
+          <select
+            value={viewYear}
+            onChange={(e) => setViewYear(Number(e.target.value))}
+            className="h-7 rounded-md border border-slate-700 bg-slate-800 px-1.5 text-xs font-medium text-slate-200 focus:outline-none focus:ring-1 focus:ring-ring appearance-none cursor-pointer"
+          >
+            {years.map((y) => (
+              <option key={y} value={y}>{y}</option>
+            ))}
+          </select>
+        </div>
         <button
           type="button"
           onClick={goNext}
