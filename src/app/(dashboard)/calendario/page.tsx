@@ -646,11 +646,15 @@ export default function CalendarioPage() {
           }}
           onDeleteItem={async (item) => {
             try {
-              await deleteCalendarItem(item.id);
+              // Optimistic update: remover da UI imediatamente
+              setItems((prev) => prev.filter((i) => i.id !== item.id));
               setSelectedItem(null);
-              reloadItems();
               toast.success(`"${item.title}" excluído`);
+              // Deletar no banco em background
+              await deleteCalendarItem(item.id);
             } catch {
+              // Se falhou, recarregar para restaurar estado correto
+              await reloadItems();
               toast.error("Erro ao excluir item");
             }
           }}
