@@ -1,0 +1,709 @@
+# Nina Studio PRD v2.0
+**LA Studio Manager — Agente Nina: Produção Autônoma de Conteúdo Visual**
+*Versão: 2.0 | Data: Março 2026 | Status: DECISÕES FINAIS CONSOLIDADAS*
+
+---
+
+## 1. Visão Geral
+
+A Nina é o agente de produção de conteúdo do LA Studio Manager, responsável por criar e publicar conteúdo visual de forma autônoma no Instagram da LA Music School e LA Music Kids. Toda interação com o Yuri (aprovador) ocorre via WhatsApp.
+
+**Missão:** Zero esforço manual na produção de conteúdo — Yuri aprova ou rejeita. Ponto.
+
+---
+
+## 2. Stack Técnico Definitivo
+
+| Componente | Tecnologia | Observação |
+|---|---|---|
+| Backend | Supabase Edge Functions (Deno) | já em produção |
+| Banco de dados | PostgreSQL (Supabase) | já em produção |
+| Storage | Supabase Storage (bucket `posts`) | já em produção |
+| WhatsApp | UAZAPI | já em produção |
+| Publicação | Meta Graph API v25.0 | já em produção |
+| Clips automáticos | Submagic API (`api.submagic.co/v1`) | ✅ funcionando — não mexer |
+| Aniversariantes | Canva MCP + Export API | decisão desta sessão |
+| Datas comemorativas | Gemini Nano Banana 2 API direta (`gemini-3.1-flash-image-preview`) | decisão desta sessão |
+| Carrossel tipográfico | HTML → Playwright → PNG | decisão desta sessão |
+| Carrossel com foto real | Gemini Nano Banana 2 API direta (`gemini-3.1-flash-image-preview`) | decisão desta sessão |
+
+---
+
+## 3. Identidade Visual (PRÉ-REQUISITO BLOQUEANTE)
+
+**Antes de qualquer implementação de carrossel, o time precisa definir e cadastrar no sistema:**
+
+### 3.1 O que precisa ser definido
+- Paleta de cores primárias e secundárias (LA Music School e LA Music Kids separadas)
+- Tipografias: display, corpo, acento
+- Logo em PNG com fundo transparente (ambas marcas)
+- Paleta de emojis/ícones aprovados
+- Tom visual: mais sério vs mais lúdico por formato de post
+
+### 3.2 Onde cadastrar no sistema
+Criar tabela `brand_identity` com:
+```sql
+CREATE TABLE brand_identity (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  brand TEXT NOT NULL, -- 'la_music_school' | 'la_music_kids'
+  primary_color TEXT,       -- ex: '#0D1B3E'
+  secondary_color TEXT,     -- ex: '#5B2D8E'
+  accent_color TEXT,        -- ex: '#FF6B2B'
+  background_color TEXT,
+  display_font TEXT,        -- ex: 'Fredoka'
+  body_font TEXT,           -- ex: 'Plus Jakarta Sans'
+  logo_url TEXT,            -- Supabase Storage URL
+  canva_brand_kit_id TEXT,  -- já existe em nina_config
+  style_guidelines JSONB,   -- regras adicionais
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+### 3.3 Configuração no Studio Manager (UI)
+Criar aba "Identidade Visual" nas configurações da Nina onde o time pode:
+- Visualizar e editar as cores (color picker)
+- Fazer upload das logos
+- Definir as tipografias (dropdown com Google Fonts)
+- Pré-visualizar um slide de exemplo com as configurações atuais
+
+---
+
+## 4. Módulo de Identidade Visual — Aba "Marcas" na UI
+
+### 4.1 Visão Geral
+
+Esta é a **fundação de toda a produção de conteúdo da Nina**. Antes de gerar qualquer carrossel, post ou aniversário, o sistema precisa saber exatamente quem é cada marca visualmente. Isso é configurado uma vez pelo time e fica disponível para todos os módulos da Nina.
+
+**3 marcas suportadas:**
+- LA Music School
+- LA Music Kids
+- Sonoramente
+
+### 4.2 Aba "Marcas" no Studio Manager
+
+Localização na UI: Menu lateral → **Marcas** (ícone de paleta de cores)
+
+**Layout da aba:**
+```
+┌─────────────────────────────────────────────────────────┐
+│  MARCAS                                                 │
+│  ┌──────────────────┐  ┌──────────────────┐            │
+│  │  LA Music School │  │  LA Music Kids   │  + Adicionar│
+│  └──────────────────┘  └──────────────────┘            │
+│  ┌──────────────────┐                                   │
+│  │  Sonoramente     │                                   │
+│  └──────────────────┘                                   │
+├─────────────────────────────────────────────────────────┤
+│  [CONTEÚDO DA MARCA SELECIONADA]                        │
+│                                                         │
+│  📁 Identidade Visual                                   │
+│  🎨 Paleta de Cores                                     │
+│  🔤 Tipografia                                          │
+│  🖼️ Templates de Referência                             │
+│  👁️ Preview ao Vivo                                     │
+└─────────────────────────────────────────────────────────┘
+```
+
+### 4.3 Seção 1 — Identidade Visual (Logos)
+
+**Upload de logos por marca:**
+- Logo principal (fundo transparente, PNG) — uso geral
+- Logo versão clara (para fundos escuros)
+- Logo versão escura (para fundos claros)
+- Logo símbolo/ícone isolado (quadrado, para avatar e perfil)
+- Logo horizontal (para rodapés de posts)
+
+**Specs técnicas exigidas na UI:**
+- Formato: PNG com transparência
+- Resolução mínima: 500px no menor lado
+- Tamanho máximo: 5MB
+- Preview imediato após upload
+
+**Armazenamento:** Supabase Storage bucket `brand-assets` (público, com CDN)
+
+### 4.4 Seção 2 — Paleta de Cores
+
+**Por marca, definir:**
+
+| Campo | Tipo | Exemplo LA Kids |
+|---|---|---|
+| Cor primária | Color picker + hex | `#0D1B3E` (Azul marinho) |
+| Cor secundária | Color picker + hex | `#5B2D8E` (Roxo) |
+| Cor de destaque | Color picker + hex | `#FF6B2B` (Laranja) |
+| Cor de fundo claro | Color picker + hex | `#FFFFFF` |
+| Cor de fundo escuro | Color picker + hex | `#0D1B3E` |
+| Cor de texto principal | Color picker + hex | `#1A1A2E` |
+| Cor de texto secundário | Color picker + hex | `#6B7280` |
+| Cor de texto claro | Color picker + hex | `#FFFFFF` |
+
+**UX do color picker:**
+- Input hex manual
+- Seletor visual de cor
+- Preview de como fica texto sobre fundo com aquela cor (legibilidade)
+- Paleta de "cores rápidas" (as já cadastradas da marca)
+- Auto-save com debounce de 800ms + toast "Salvo"
+
+**Paletas são diferentes por marca** — LA Music School é mais sóbria/profissional, LA Music Kids é mais vibrante/lúdica, Sonoramente tem sua própria identidade.
+
+### 4.5 Seção 3 — Tipografia
+
+**Por marca, definir:**
+
+| Campo | Opções | Exemplo |
+|---|---|---|
+| Fonte de display (títulos) | Google Fonts dropdown | Fredoka, Nunito, Poppins... |
+| Fonte de corpo (texto corrido) | Google Fonts dropdown | Plus Jakarta Sans, Open Sans... |
+| Fonte de acento (destaques) | Google Fonts dropdown | Opcional |
+| Peso padrão do título | 400/500/600/700/800 | 700 |
+| Peso padrão do corpo | 400/500/600 | 400 |
+
+**UX do seletor de fonte:**
+- Busca por nome (tipo Google Fonts)
+- Preview ao vivo da fonte selecionada
+- Texto de preview: "LA Music Kids — A música transforma vidas"
+- Fontes carregadas via Google Fonts API
+
+**Diferença entre marcas:**
+- LA Music Kids → fontes mais arredondadas, lúdicas (Fredoka, Nunito)
+- LA Music School → fontes mais elegantes, profissionais (Poppins, Montserrat)
+- Sonoramente → a definir pelo time
+
+> ✅ **Decisão:** Sonoramente tem Instagram separado (`@sonoramente.la`). Estrutura preparada no sistema (entrada na tabela `brand_identity`), mas implementação do fluxo de publicação **fora do escopo atual**. Foco em LA Music School e LA Music Kids. Sonoramente entra em fase futura.
+
+### 4.6 Seção 4 — Templates de Referência
+
+**O que é:** Uma mini-galeria dentro do Studio Manager onde o time pode salvar designs de referência visual para cada marca. A Nina usa isso como referência ao gerar conteúdo.
+
+**Funcionalidades:**
+- Upload de imagens de referência (posts já publicados que ficaram bons)
+- Categorização: `carrossel`, `feed`, `stories`, `aniversário`, `data comemorativa`
+- Toggle "Usar como referência para Nina" (ativa/desativa para geração)
+- Máximo 20 referências por categoria por marca
+
+**Como a Nina usa:** Ao gerar HTML para carrossel, o prompt inclui as referências da categoria como contexto visual — "siga o estilo destas imagens de referência".
+
+**Armazenamento:** Supabase Storage bucket `brand-assets/templates/{brand}/{category}/`
+
+### 4.7 Seção 5 — Preview ao Vivo
+
+**Gerado automaticamente** ao salvar configurações de cor + tipografia:
+
+Um post 1080x1350 de preview renderizado com:
+- Fundo na cor primária da marca
+- Logo da marca
+- Texto de exemplo com as fontes configuradas
+- Paleta de cores em destaque
+
+Isso permite que o time valide visualmente a identidade antes de usar em produção.
+
+**Botão "Regenerar preview"** que re-renderiza via HTML/Playwright (mesma engine dos carrosséis).
+
+### 4.8 Tabela `brand_identity` — Schema Completo
+
+```sql
+CREATE TABLE brand_identity (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  
+  -- Identificação
+  brand_key TEXT NOT NULL UNIQUE,
+  -- 'la_music_school' | 'la_music_kids' | 'sonoramente'
+  -- Nota: sonoramente preparado mas fora do escopo atual
+  brand_name TEXT NOT NULL,
+  is_active BOOLEAN DEFAULT true,
+  
+  -- Logos (URLs do Supabase Storage)
+  logo_primary_url TEXT,       -- PNG transparente, uso geral
+  logo_light_url TEXT,         -- Para fundos escuros (versão clara)
+  logo_dark_url TEXT,          -- Para fundos claros (versão escura)
+  logo_icon_url TEXT,          -- Símbolo quadrado (avatar/perfil)
+  logo_horizontal_url TEXT,    -- Versão horizontal (rodapés de posts)
+  
+  -- Paleta de cores
+  color_primary TEXT,          -- Cor principal da marca
+  color_secondary TEXT,        -- Cor secundária
+  color_accent TEXT,           -- Destaque/CTA
+  color_bg_light TEXT,         -- Fundo claro
+  color_bg_dark TEXT,          -- Fundo escuro
+  color_text_primary TEXT,     -- Texto principal
+  color_text_secondary TEXT,   -- Texto secundário
+  color_text_light TEXT,       -- Texto sobre fundo escuro
+  
+  -- Tipografia
+  font_display TEXT,           -- Fonte de títulos/display
+  font_body TEXT,              -- Fonte de corpo de texto
+  font_accent TEXT,            -- Fonte de acento (opcional)
+  font_weight_title INTEGER DEFAULT 700,
+  font_weight_body INTEGER DEFAULT 400,
+  
+  -- Config de geração
+  default_post_style JSONB,    -- Preferências de estilo por tipo de post
+  style_notes TEXT,            -- Notas de estilo para a Nina (texto livre)
+  
+  -- Canvas Canva
+  canva_brand_kit_id TEXT,     -- ID do brand kit no Canva
+  
+  -- Metadados
+  preview_url TEXT,            -- URL do preview gerado
+  preview_updated_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Templates de referência visual
+CREATE TABLE brand_reference_templates (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  brand_key TEXT NOT NULL REFERENCES brand_identity(brand_key),
+  category TEXT NOT NULL,
+  -- 'carousel' | 'feed' | 'stories' | 'birthday' | 'commemorative'
+  name TEXT,
+  image_url TEXT NOT NULL,
+  use_as_reference BOOLEAN DEFAULT true,
+  sort_order INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+### 4.9 Integração com a Nina
+
+Quando a Nina for gerar qualquer conteúdo, ela primeiro busca a identidade visual da marca:
+
+```typescript
+// Nina sempre faz isso antes de gerar qualquer arte
+const brand = await supabase
+  .from('brand_identity')
+  .select('*')
+  .eq('brand_key', 'la_music_kids')
+  .single();
+
+// Injeta no prompt de geração
+const brandContext = `
+  Cores: primária ${brand.color_primary}, 
+         secundária ${brand.color_secondary}, 
+         destaque ${brand.color_accent}
+  Fontes: título em ${brand.font_display}, 
+          corpo em ${brand.font_body}
+  Logo: ${brand.logo_primary_url}
+  Notas de estilo: ${brand.style_notes}
+`;
+```
+
+---
+
+## 5. Módulos de Produção de Conteúdo
+
+### 4.1 Aniversariantes dos Alunos
+**Status:** Implementado parcialmente — aguardando fix da fonte (`arialbd.ttf`)
+
+**Decisão final:** Fluxo híbrido via Canva MCP
+
+```
+EMUSYS webhook (foto + nome + data)
+    ↓
+Nina recebe intent: birthday_post
+    ↓
+Upload foto → Canva Assets API → asset_id
+    ↓
+Canva MCP: start-editing-transaction no template DAF1e07jGdY
+    ↓
+update_fill (frame da foto → asset_id)
+find_and_replace_text (nome do aluno)
+    ↓
+commit → Export API → JPG
+    ↓
+Upload → Supabase Storage → URL pública
+    ↓
+Meta Graph API → Instagram
+    ↓  
+WhatsApp Yuri: "✅ Aniversário de [Nome] publicado!"
+```
+
+**Templates Canva:**
+- LA Music Kids: `DAF1e07jGdY` ("Aniversariante do Dia")
+- LA Music School: a definir
+
+**Config em `nina_config`:**
+- `auto_publish_birthdays`: true/false
+- `birthday_approval_required`: true/false
+- `canva_brand_kit_school`: `kAFo5_-JW7Q`
+- `canva_brand_kit_kids`: `kADgy3Mn850` (confirmar)
+
+---
+
+### 4.2 Datas Comemorativas
+**Status:** Tabela `commemorative_dates` existe com 26 datas cadastradas
+
+**Decisão final:** Gemini Nano Banana 2 API direta (`gemini-3.1-flash-image-preview`) — sem Canva
+
+```
+Cron 08h00 do dia da data
+    ↓
+Nina busca data comemorativa do dia em commemorative_dates
+    ↓
+Gemini Nano Banana 2 (`gemini-3.1-flash-image-preview`) gera PNG 1080x1350 completo
+(imagem + texto + tipografia incorporados)
+    ↓
+Upload → Supabase Storage
+    ↓
+WhatsApp Yuri: preview + "Publicar agora ou agendar?"
+    ↓
+Aprovação → Meta Graph API → Instagram
+```
+
+**Por que Nano Banana 2 e não Canva:**
+- Cada data comemorativa é única visualmente (Dia do Guitarrista ≠ Dia do Autismo)
+- Não faz sentido criar template para cada uma
+- Nano Banana 2 consegue gerar arte temática premium com texto legível em PT-BR
+- Custo: ~$0.067/imagem — praticamente zero
+
+**Prompts:** Um prompt master por tipo de data, com variáveis substituídas pela Nina:
+```
+"Post Instagram 1080x1350px para {DATA_COMEMORATIVA}. 
+Escola de música infantil brasileira. 
+Cores: azul marinho, roxo, laranja e branco.
+Tipografia bold sans-serif legível em português.
+Texto: '{FRASE_DO_DIA}'.
+Estilo: premium, moderno, alegre. 
+Sem texto em inglês. Sem erros ortográficos."
+```
+
+---
+
+### 4.3 Carrosséis — Formato 1: Tipográfico/Educativo
+**Status:** Novo — a implementar
+
+**Quando usar:** Conteúdo educativo, dicas, informações, citações, listas — sem necessidade de foto real de pessoa.
+
+**Decisão final:** HTML premium → Playwright → PNG × N slides
+
+**Motor de geração do HTML:**
+- **Opção A:** Claude Sonnet 4.6 API (esta sessão provou que o resultado é excelente)
+- **Opção B:** Gemini Flash API
+- **Configurável via UI:** O usuário escolhe qual IA usa para gerar o HTML no Studio Manager
+
+**Variações visuais suportadas:**
+- Com ícones/emojis grandes como elemento decorativo
+- Limpo, apenas tipografia e geometria (sem ícones)
+- Letra grande transparente como elemento de fundo
+- Estilos geométricos com degradês
+- Sempre seguindo a identidade visual definida em `brand_identity`
+
+**Fluxo (carrossel gerado completo e enviado para aprovação):**
+```
+Yuri via WhatsApp: "Nina, faz um carrossel sobre X"
+    ↓
+Nina classifica: intent = create_content, type = carousel_informative
+    ↓
+IA gera JSON com conteúdo + HTML para todos os slides
+{ slides: [{titulo, corpo, tipo_visual}], caption, hashtags }
+    ↓
+Playwright renderiza todos os slides → PNGs prontos
+    ↓
+Nina envia preview completo para Yuri via WhatsApp
+"Aqui está o carrossel pronto. Publicar?"
+    ↓
+Yuri: SIM / NÃO / REFAZ O SLIDE 3
+    ↓
+IA gera HTML completo para cada slide (1080x1350px)
+    ↓
+Edge Function chama Browserless.io via WebSocket
+Playwright renderiza HTML → PNG por slide
+    ↓
+Upload PNGs → Supabase Storage → URLs públicas
+    ↓
+Meta Graph API: cria containers filhos → CAROUSEL → publica
+    ↓
+WhatsApp Yuri: preview + confirmação
+```
+
+**Browserless.io:** Free tier = 1.000 unidades/mês (~125 carrosséis de 8 slides). Suficiente para início.
+
+**Configuração na UI:** Aba de Produção de Conteúdo → Carrosséis → "IA para geração de HTML: [Sonnet 4.6] [Gemini Flash]"
+
+**Agendamento:** Usar tabela `studio_publish_queue` (já existe!) como fila unificada para todos os tipos de post. Campos: `post_id`, `brand`, `platform`, `scheduled_for`, `status`, `attempt_count`.
+
+---
+
+### 4.4 Carrosséis — Formato 2: Com Foto Real
+**Status:** Novo — a implementar
+
+**Quando usar:** Imagens de músicos tocando, crianças com instrumentos, bebês, pessoas em situação musical — conteúdo emocional e aspiracional.
+
+**Decisão final:** Gemini Nano Banana 2 API direta (`gemini-3.1-flash-image-preview`) — uma chamada por slide, texto incorporado na imagem
+
+**Fluxo:**
+```
+Yuri: "Nina, faz carrossel com foto de criança tocando piano"
+    ↓
+Nina classifica: intent = create_carousel, type = photo_realistic
+    ↓
+Gemini gera JSON: { slides: [{cena, texto_na_imagem, estilo}, ...] }
+    ↓
+Para cada slide: Nano Banana 2 gera PNG 1080x1350
+(foto ultrarrealista + texto incorporado na imagem)
+    ↓
+Upload → Supabase Storage → URLs públicas
+    ↓
+Meta Graph API: publica carrossel
+    ↓
+WhatsApp Yuri: preview dos slides gerados
+```
+
+**Custo por carrossel (7 slides):** ~$0.47
+
+---
+
+### 4.5 Magic Clips (Submagic)
+**Status:** ✅ Funcionando — NÃO MEXER
+
+O fluxo atual está estável:
+- John faz upload do vídeo bruto
+- Submagic processa via `process-video`
+- `submagic-webhook` recebe resultado
+- Clips salvos em `studio_clips`
+- Nina notifica Yuri para aprovação
+- Yuri aprova via WhatsApp (VER / número do clip / R/S/RS / SIM)
+- Nina publica via Meta Graph API
+
+---
+
+## 5. Configurações da UI — Studio Manager
+
+### 5.1 O que já existe em `nina_config`
+- `is_enabled`
+- `default_ai_model`
+- `auto_publish_birthdays`
+- `birthday_approval_required`
+- `default_post_time`
+- `default_brand`
+- `canva_brand_kit_school`
+- `canva_brand_kit_kids`
+- `gemini_image_style`
+- `auto_commemorative_posts`
+- `commemorative_approval_required`
+
+### 5.2 O que precisa ser adicionado em `nina_config`
+```sql
+ALTER TABLE nina_config ADD COLUMN IF NOT EXISTS
+  carousel_ai_model TEXT DEFAULT 'claude-sonnet-4-6',
+  -- 'claude-sonnet-4-6' | 'gemini-flash' | 'gemini-pro'
+  carousel_photo_model TEXT DEFAULT 'gemini-3.1-flash-image-preview',
+  -- modelo para carrosséis com foto real
+  commemorative_ai_model TEXT DEFAULT 'gemini-2.0-flash-preview-image-generation',
+  browserless_enabled BOOLEAN DEFAULT true,
+  auto_carousel_posts BOOLEAN DEFAULT false,
+  carousel_approval_required BOOLEAN DEFAULT true,
+  max_carousel_slides INTEGER DEFAULT 7;
+```
+
+### 5.3 Nova aba na UI: "Produção de Conteúdo"
+Organizada em seções:
+- **Aniversariantes:** toggle auto-publicar, aprovação necessária, template Canva
+- **Datas Comemorativas:** toggle, modelo de IA, aprovação necessária
+- **Carrosséis:** seletor de IA para HTML (Sonnet vs Gemini), toggle aprovação
+- **Identidade Visual:** cores, fontes, logos (ver seção 3.3)
+
+---
+
+## 6. Tabelas a Criar
+
+### 6.1 `brand_identity`
+Ver seção 3.2.
+
+### 6.2 `nina_content_library`
+Para o arquivo de conteúdo (TBTs, vídeos históricos):
+```sql
+CREATE TABLE nina_content_library (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  title TEXT NOT NULL,
+  content_url TEXT NOT NULL,
+  content_type TEXT NOT NULL, -- 'video' | 'image' | 'carousel'
+  brand TEXT NOT NULL,        -- 'la_music_school' | 'la_music_kids'
+  tags TEXT[],
+  category TEXT,
+  duration_seconds INTEGER,
+  last_used_at TIMESTAMPTZ,
+  use_count INTEGER DEFAULT 0,
+  status TEXT DEFAULT 'active',
+  submagic_project_id TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+### 6.3 `carousel_templates`
+Para salvar templates HTML reutilizáveis:
+```sql
+CREATE TABLE carousel_templates (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL,
+  description TEXT,
+  brand TEXT NOT NULL,
+  type TEXT NOT NULL,  -- 'typographic' | 'photo_realistic'
+  html_template TEXT, -- HTML com variáveis {{titulo}}, {{corpo}}, etc.
+  style_config JSONB, -- cores, fontes aplicadas
+  preview_url TEXT,
+  is_active BOOLEAN DEFAULT true,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+---
+
+## 7. Edge Functions a Criar
+
+### 7.1 `generate-carousel` (nova)
+Responsável por todo o pipeline de carrossel:
+- Recebe `{ type, topic, brand, slides_count, ai_model }`
+- Chama IA selecionada para gerar conteúdo JSON
+- Para tipo `typographic`: gera HTML → Browserless → PNGs
+- Para tipo `photo_realistic`: chama Nano Banana 2 por slide
+- Faz upload para Supabase Storage
+- Retorna `{ slide_urls[], caption, hashtags }`
+
+### 7.2 `publish-carousel` (nova ou expandir `publish-scheduled-posts`)
+- Recebe URLs dos slides
+- Cria containers filhos na Meta Graph API
+- Cria container CAROUSEL
+- Publica
+- Salva registro em `posts` com `post_type = 'carousel'`
+
+---
+
+## 8. Classificador da Nina — Novos Intents
+
+Adicionar ao `process-whatsapp-message`:
+
+```typescript
+// Intent unificado — DECISÃO: mais escalável, fácil de expandir
+// Adicionar novo tipo de conteúdo = apenas novo valor de type, sem novo intent
+'create_content' // com entidade type:
+  // type: 'carousel_informative' — "faz um carrossel sobre X"
+  // type: 'carousel_photo'       — "faz carrossel com foto de X"
+  // type: 'commemorative_post'   — "faz post do dia do guitarrista"
+
+// Intents de fluxo de aprovação (mantidos separados)
+'approve_structure'   // Yuri aprova o esqueleto/estrutura
+'reject_structure'    // Yuri pede ajuste na estrutura
+'approve_content'     // "SIM", "PUBLICAR" — após ver preview visual
+'reject_content'      // "NÃO", "REFAZ"
+'regenerate_slide'    // "refaz o slide 3"
+```
+
+---
+
+## 9. Publicação de Carrossel — Meta Graph API
+
+Fluxo confirmado (API v25.0):
+
+```
+1. POST /{ig-user-id}/media
+   ?image_url={URL_SLIDE_1}&is_carousel_item=true
+   → { id: "CONTAINER_1" }
+
+2. Repetir para cada slide (máx 10, mín 2)
+
+3. POST /{ig-user-id}/media
+   ?media_type=CAROUSEL
+   &children=CONTAINER_1,CONTAINER_2,...
+   &caption={LEGENDA}
+   → { id: "CAROUSEL_CONTAINER" }
+
+4. POST /{ig-user-id}/media_publish
+   ?creation_id=CAROUSEL_CONTAINER
+   → { id: "IG_MEDIA_ID" }
+```
+
+**Specs:** JPEG recomendado, máx 8MB/slide, formato 4:5 (1080x1350px), até 2.200 chars no caption, até 30 hashtags.
+
+---
+
+## 10. Roadmap de Implementação
+
+### FASE 0 — Pré-requisito crítico
+- [ ] Restaurar YURI_PHONE para `5521976861513` após validação
+- [ ] Confirmar brand kit Canva LA Music Kids (`kADgy3Mn850`)
+
+### FASE 1 — Aba "Marcas" na UI (FUNDAÇÃO)
+- [ ] Migration: criar tabelas `brand_identity` e `brand_reference_templates`
+- [ ] UI: aba "Marcas" no menu lateral com tabs por marca (LA Music School, LA Music Kids, Sonoramente)
+- [ ] UI: upload de logos (primária, clara, escura, ícone, horizontal) com preview imediato
+- [ ] UI: color picker por campo com preview de legibilidade
+- [ ] UI: seletor de tipografia com preview ao vivo (Google Fonts)
+- [ ] UI: galeria de templates de referência por categoria com toggle "usar como referência para Nina"
+- [ ] UI: preview ao vivo de post gerado com as configurações da marca
+- [ ] Migration: adicionar colunas em `nina_config` (carousel_ai_model, etc.)
+- [ ] Integrar `brand_identity` em todos os módulos de geração da Nina
+
+### FASE 2 — Desbloquear o que já foi construído
+- [ ] Fix `arialbd.ttf` → deploy via CLI com fonte bundled em `process-nina-request`
+- [ ] Ativar cron birthday-automation
+- [ ] Validar flow completo de aniversariante end-to-end
+
+### FASE 3 — Carrossel Tipográfico
+- [ ] Criar Edge Function `generate-carousel` (tipo `typographic`)
+- [ ] Integrar Browserless.io (WebSocket + Playwright)
+- [ ] Adicionar intents de carrossel ao classificador
+- [ ] Criar flow WhatsApp: pedido → geração → preview → publicação
+- [ ] UI: histórico de carrosséis gerados
+
+### FASE 4 — Carrossel com Foto Real
+- [ ] Expandir `generate-carousel` para tipo `photo_realistic`
+- [ ] Integrar Gemini para geração de slides com foto
+- [ ] Testar qualidade com texto em PT-BR (ã, ç, ô)
+- [ ] Definir prompts master por categoria
+
+### FASE 5 — TBT Automatizado via Submagic
+- [ ] Migration: criar tabela `nina_content_library`
+- [ ] UI: aba "Biblioteca de Conteúdo" para o time cadastrar vídeos históricos
+- [ ] Cron toda quinta-feira (TBT) — busca vídeo da `nina_content_library` por data/tema
+- [ ] Integração Submagic Create Project com `aiEditTemplate: "karl"` para editar clip
+- [ ] Nina seleciona melhor clip e gera caption contextual com Gemini
+- [ ] Flow WhatsApp: preview do clip → aprovação Yuri → publica como Reels com `#TBT`
+- [ ] Lógica anti-repetição: `last_used_at` garante que o mesmo clip não repete por 3 meses
+
+### FASE 6 — Datas Comemorativas
+- [ ] Criar cron `commemorative-post` (08h00 diário)
+- [ ] Integrar Gemini com prompts por data
+- [ ] Flow de aprovação via WhatsApp
+
+### FASE 8 — Analytics e Relatórios
+- [ ] Cron dominical: `collect-post-metrics` gera relatório semanal
+- [ ] Nina envia relatório todo domingo via WhatsApp para Yuri
+- [ ] Dashboard de métricas no Studio Manager (já tem `post_metrics`)
+
+---
+
+## 11. Decisões Técnicas Finais — Resumo
+
+| Decisão | Escolha | Motivo |
+|---|---|---|
+| Aniversariantes | Canva MCP | Template já existe, identidade visual garantida |
+| Datas comemorativas | Nano Banana 2 direto | Cada data é única, não faz sentido template |
+| Carrossel tipográfico | HTML + Playwright | Controle total de tipografia, custo zero |
+| IA para gerar HTML | Sonnet 4.6 OU Gemini (configurável na UI) | Testar e escolher o melhor |
+| Carrossel com foto | Nano Banana 2 direto | Foto ultrarrealista + texto integrado |
+| Clips | Submagic (manter) | Funcionando, não mexer |
+| Lovart API | ❌ Descartado | API apenas Enterprise, custo alto, fluxo interativo incompatível com automação |
+| Canva para carrossel | ❌ Descartado | font-family não suportada via API, Enterprise exigido para Autofill |
+
+---
+
+## 12. Pendências Críticas
+
+| Prioridade | Item | Responsável |
+|---|---|---|
+| 🔴 URGENTE | Restaurar YURI_PHONE para `5521976861513` | Alf |
+| 🔴 URGENTE | Fix `arialbd.ttf` (deploy via CLI) | Claude Code |
+| 🔴 URGENTE | Definir identidade visual das marcas | Time LA |
+| 🟡 PRÓXIMO | Confirmar brand kit Canva LA Music Kids | Alf |
+| 🟡 PRÓXIMO | Criar tabela `brand_identity` + migration `nina_config` | Claude Code |
+| 🟡 PRÓXIMO | Edge Function `generate-carousel` | Claude Code |
+| 🟡 PRÓXIMO | Conta Browserless.io (free tier) | Alf |
+| 🟢 FUTURO | Biblioteca de conteúdo (`nina_content_library`) | Claude Code |
+| 🟢 FUTURO | TBT automatizado | Claude Code |
+
+---
+
+*PRD gerado em Março 2026 após sessão de pesquisa e decisões com Alf.*
+*Próximo passo: enviar para Claude Code implementar Fase 1.*

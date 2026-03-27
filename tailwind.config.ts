@@ -193,6 +193,8 @@ const config: Config = {
         "slide-down": "slideDown 200ms ease-out",
         "scale-in": "scaleIn 200ms ease-out",
         shimmer: "shimmer 2s infinite linear",
+        "accordion-down": "accordionDown 0.2s ease-out",
+        "accordion-up": "accordionUp 0.2s ease-out",
       },
       keyframes: {
         fadeIn: {
@@ -214,6 +216,14 @@ const config: Config = {
         shimmer: {
           "0%": { backgroundPosition: "-200% 0" },
           "100%": { backgroundPosition: "200% 0" },
+        },
+        accordionDown: {
+          from: { height: "0" },
+          to: { height: "var(--radix-accordion-content-height)" },
+        },
+        accordionUp: {
+          from: { height: "var(--radix-accordion-content-height)" },
+          to: { height: "0" },
         },
       },
       transitionDuration: {

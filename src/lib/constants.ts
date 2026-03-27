@@ -17,6 +17,7 @@ import {
   PaintBrush,
   PenNib,
   MusicNotes,
+  Palette,
 } from "@phosphor-icons/react";
 
 // --- Navigation ---
@@ -25,6 +26,7 @@ export const SIDEBAR_NAV = [
   { label: "Projetos", href: "/projetos", icon: Kanban, disabled: false },
   { label: "Calendário", href: "/calendario", icon: CalendarDots, disabled: false },
   { label: "Studio", href: "/studio", icon: Lightning, disabled: false },
+  { label: "Marcas", href: "/marcas", icon: Palette, disabled: false },
   { label: "Agentes IA", href: "/agentes", icon: Robot, disabled: true },
   { label: "Ativos", href: "/ativos", icon: Images, disabled: true },
   { label: "Relatórios", href: "/relatorios", icon: ChartBar, disabled: true },

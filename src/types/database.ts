@@ -229,6 +229,80 @@ export interface Database {
           Database["public"]["Tables"]["mike_config"]["Insert"]
         >;
       };
+      brand_identity: {
+        Row: {
+          id: string;
+          brand_key: "la_music_school" | "la_music_kids" | "sonoramente";
+          brand_name: string;
+          is_active: boolean;
+          logo_primary_url: string | null;
+          logo_light_url: string | null;
+          logo_dark_url: string | null;
+          logo_icon_url: string | null;
+          logo_horizontal_url: string | null;
+          color_primary: string | null;
+          color_secondary: string | null;
+          color_accent: string | null;
+          color_background: string | null;
+          color_text_dark: string | null;
+          color_text_light: string | null;
+          color_gradient_start: string | null;
+          color_gradient_end: string | null;
+          font_display: string | null;
+          font_body: string | null;
+          font_accent: string | null;
+          font_weight_title: number | null;
+          font_weight_body: number | null;
+          preview_updated_at: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: Omit<
+          Database["public"]["Tables"]["brand_identity"]["Row"],
+          "id" | "created_at" | "updated_at"
+        >;
+        Update: Partial<
+          Database["public"]["Tables"]["brand_identity"]["Insert"]
+        >;
+      };
+      brand_reference_templates: {
+        Row: {
+          id: string;
+          brand_key: "la_music_school" | "la_music_kids" | "sonoramente";
+          category: "carousel" | "single_image" | "story" | "reels_cover" | "event_banner";
+          name: string | null;
+          image_url: string;
+          use_as_reference: boolean;
+          sort_order: number;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: Omit<
+          Database["public"]["Tables"]["brand_reference_templates"]["Row"],
+          "id" | "created_at" | "updated_at"
+        >;
+        Update: Partial<
+          Database["public"]["Tables"]["brand_reference_templates"]["Insert"]
+        >;
+      };
+      nina_config: {
+        Row: {
+          id: string;
+          carousel_ai_model: string | null;
+          carousel_system_prompt: string | null;
+          carousel_max_tokens: number | null;
+          carousel_temperature: number | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: Omit<
+          Database["public"]["Tables"]["nina_config"]["Row"],
+          "id" | "created_at" | "updated_at"
+        >;
+        Update: Partial<
+          Database["public"]["Tables"]["nina_config"]["Insert"]
+        >;
+      };
       // TODO: Run `npm run db:types` to generate complete types
       // after applying all Supabase migrations
     };
