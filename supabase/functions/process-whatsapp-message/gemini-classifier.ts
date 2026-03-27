@@ -35,6 +35,15 @@ export type Intent =
   | 'generate_report'
   | 'update_card'
   | 'notify_user'
+  | 'approve_clips'
+  | 'list_clips'
+  | 'select_clip'
+  | 'select_format'
+  | 'set_mentions'
+  | 'set_schedule'
+  | 'confirm_publish'
+  | 'cancel_publish'
+  | 'delegate_to_john'
   | 'general_chat'
   | 'help'
   | 'unknown'
@@ -95,6 +104,20 @@ export interface ExtractedEntities {
   notify_target?: string       // Nome da pessoa a notificar
   notify_message?: string      // Mensagem ou contexto a enviar
   card_title?: string          // Título do card relacionado (se mencionado)
+
+  // Clips approval (Submagic → Instagram) — LEGADO (mantido para compatibilidade)
+  approval_type?: 'all' | 'top_n' | 'specific'
+  approval_count?: number
+  approval_indices?: number[]
+  publish_format?: 'reels' | 'stories'
+
+  // Clips approval — NOVO FLUXO CONVERSACIONAL
+  clip_index?: number                            // Número do clip selecionado (1-10)
+  format?: 'R' | 'S' | 'RS'                      // R=Reels, S=Stories, RS=ambos
+  mentions?: string[]                            // @usernames para marcar
+  skip_mentions?: boolean                        // true se "pular" ou "sem marcação"
+  schedule_type?: 'now' | 'scheduled'            // Publicar agora ou agendar
+  schedule_datetime?: string                     // ISO datetime se agendado
 
   // Genérico
   raw_text?: string
@@ -319,13 +342,116 @@ Você é um classificador de intenções E consultor criativo. Sua função é:
     - "Manda mensagem pro John no privado" → notify_target: "John"
     - "Notifica ele" → notify_target: (pessoa mencionada no contexto anterior)
 
-16. **general_chat** — Conversa livre, brainstorm, opinião
+16. **select_clip** — Usuário escolhe número de clip para publicar (fluxo conversacional)
+    Gatilhos: números isolados ("1", "2", "5"), "clip 3", "quero o 2", "o primeiro", "o último", etc.
+    Entidades: clip_index (número 1-10, ou -1 para "último")
+    needs_confirmation: false
+
+    Exemplos (linguagem natural):
+    - "1" → clip_index: 1
+    - "5" → clip_index: 5
+    - "clip 3" → clip_index: 3
+    - "quero o 2" → clip_index: 2
+    - "quero o dois" → clip_index: 2
+    - "o primeiro" → clip_index: 1
+    - "o último" → clip_index: -1
+    - "esse primeiro" → clip_index: 1
+    - "manda o 3" → clip_index: 3
+    - "vai o 1" → clip_index: 1
+    - "bora com o 2" → clip_index: 2
+
+17. **select_format** — Usuário escolhe formato de publicação (Reels/Stories/ambos)
+    Gatilhos: "r", "s", "rs", "reels", "stories", "reels e stories", "ambos", "manda nos dois"
+    Entidades: format ('R' | 'S' | 'RS')
+    needs_confirmation: false
+
+    Exemplos (linguagem natural):
+    - "r" → format: 'R'
+    - "s" → format: 'S'
+    - "rs" → format: 'RS'
+    - "reels" → format: 'R'
+    - "stories" → format: 'S'
+    - "reels e stories" → format: 'RS'
+    - "ambos" → format: 'RS'
+    - "manda nos dois" → format: 'RS'
+    - "os dois" → format: 'RS'
+    - "nos dois formatos" → format: 'RS'
+    - "pode ser reels" → format: 'R'
+    - "só stories" → format: 'S'
+    - "bota no reels" → format: 'R'
+
+18. **set_mentions** — Usuário define @mentions ou pula etapa
+    Gatilhos: "@fulano", "pular", "pula", "sem marcação", "nenhum", "não", "nao"
+    Entidades: mentions (array de @usernames), skip_mentions (boolean)
+    needs_confirmation: false
+
+    Exemplos:
+    - "@fulano @ciclano" → mentions: ['@fulano', '@ciclano']
+    - "@lamusic" → mentions: ['@lamusic']
+    - "pular" → skip_mentions: true
+    - "pula" → skip_mentions: true
+    - "sem marcação" → skip_mentions: true
+    - "nenhum" → skip_mentions: true
+    - "não" → skip_mentions: true
+    - "nao" → skip_mentions: true
+    - "sem tag" → skip_mentions: true
+    - "não precisa" → skip_mentions: true
+
+19. **set_schedule** — Usuário define horário de publicação
+    Gatilhos: "agora", "18h", "amanhã", "seg", "próxima terça", horários
+    Entidades: schedule_type ('now' | 'scheduled'), schedule_datetime (ISO string)
+    needs_confirmation: false
+
+    Exemplos (considere a data/hora atual para calcular):
+    - "agora" → schedule_type: 'now'
+    - "18h" → schedule_type: 'scheduled', schedule_datetime: (hoje às 18h ISO)
+    - "amanhã" → schedule_type: 'scheduled', schedule_datetime: (amanhã às 10h ISO)
+    - "amanhã 15h" → schedule_type: 'scheduled', schedule_datetime: (amanhã às 15h ISO)
+    - "seg" → schedule_type: 'scheduled', schedule_datetime: (próxima segunda 10h ISO)
+    - "seg 18h" → schedule_type: 'scheduled', schedule_datetime: (próxima segunda 18h ISO)
+
+20. **confirm_publish** — Usuário confirma publicação
+    Gatilhos: "sim", "confirma", "pode", "manda", "vai", "ok", "beleza"
+    Entidades: nenhuma
+    needs_confirmation: false
+
+21. **cancel_publish** — Usuário cancela publicação (apenas na etapa de confirmação final)
+    Gatilhos: "não", "cancela", "cancelar", "voltar", "nao" (na etapa 'confirm')
+    Entidades: nenhuma
+    needs_confirmation: false
+    ⚠️ IMPORTANTE: "não" na etapa de mentions = set_mentions com skip_mentions: true (não cancel_publish)
+    ⚠️ "cancela" ou "voltar" em qualquer etapa = cancel_publish
+
+22. **delegate_to_john** — Usuário quer passar a publicação para o John decidir
+    Gatilhos: "passa pro john", "manda pro john", "deixa o john ver", "john decide", "pro john"
+    Entidades: nenhuma
+    needs_confirmation: false
+
+    Exemplos:
+    - "passa pro john" → delegate_to_john
+    - "manda pro john decidir" → delegate_to_john
+    - "deixa o john escolher" → delegate_to_john
+    - "john resolve" → delegate_to_john
+    - "pro john" → delegate_to_john
+
+23. **list_clips** — Usuário quer ver os clipes disponíveis
+    Gatilhos: "ver", "lista", "quais clipes", "mostra", "quais estão prontos"
+    Entidades: nenhuma
+    needs_confirmation: false
+
+24. **general_chat** — Conversa livre, brainstorm, opinião
     Gatilhos: saudações, perguntas gerais, brincadeiras, pedidos de opinião, brainstorm de conteúdo
-    ⚠️ NUNCA use general_chat para perguntas sobre agenda, calendário, eventos, reuniões ou compromissos — essas são SEMPRE query_calendar
-    ⚠️ NUNCA use general_chat quando o usuário pedir para notificar/avisar alguém — essas são SEMPRE notify_user
+    ⚠️ NUNCA use general_chat para perguntas sobre agenda, calendário, eventos — essas são query_calendar
+    ⚠️ NUNCA use general_chat quando o usuário pedir para notificar alguém — essas são notify_user
+    ⚠️ NUNCA use general_chat para números isolados (1-10) durante fluxo de clips — essas são select_clip
+    ⚠️ NUNCA use general_chat para "r", "s", "rs", "reels", "stories" — essas são select_format
+    ⚠️ NUNCA use general_chat para "pular", "@mentions" — essas são set_mentions
+    ⚠️ NUNCA use general_chat para "agora", "18h", "amanhã", "seg" — essas são set_schedule
+    ⚠️ NUNCA use general_chat para "sim", "confirma" — essas são confirm_publish
+    ⚠️ NUNCA use general_chat para "não", "cancela" — essas são cancel_publish
     Entidades: nenhuma
 
-17. **help** — Pedir ajuda
+25. **help** — Pedir ajuda
     Gatilhos: "ajuda", "o que você faz", "comandos", "como funciona"
     Entidades: nenhuma
 

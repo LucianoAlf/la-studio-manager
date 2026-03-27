@@ -1334,6 +1334,37 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
       return { text: classification.response_text, intent: 'general_chat', confidence: classification.confidence }
     }
 
+    // ========================================
+    // STUDIO: FLUXO CONVERSACIONAL DE CLIPS
+    // ========================================
+    case 'list_clips':
+      return handleListClips(firstName, supabase, userId)
+
+    case 'select_clip':
+      return handleSelectClip(classification, firstName, supabase, userId)
+
+    case 'select_format':
+      return handleSelectFormat(classification, firstName, supabase, userId)
+
+    case 'set_mentions':
+      return handleSetMentions(classification, firstName, supabase, userId)
+
+    case 'set_schedule':
+      return handleSetSchedule(classification, firstName, supabase, userId)
+
+    case 'confirm_publish':
+      return handleConfirmPublish(firstName, supabase, userId)
+
+    case 'cancel_publish':
+      return handleCancelPublish(firstName, supabase, userId)
+
+    case 'delegate_to_john':
+      return handleDelegateToJohn(firstName, supabase, userId)
+
+    // LEGADO: approve_clips (para compatibilidade)
+    case 'approve_clips':
+      return handleApproveClips(classification, firstName, supabase, userId)
+
     case 'unknown':
     default:
       return {
@@ -2762,6 +2793,28 @@ async function routeClassifiedMessage(
       return { text: getHelpText(), intent: 'help', confidence: 1.0 }
     case 'general_chat':
       return { text: classification.response_text, intent: 'general_chat', confidence: classification.confidence }
+
+    // STUDIO: FLUXO CONVERSACIONAL DE CLIPS (áudio)
+    case 'list_clips':
+      return handleListClips(firstName, supabase, userId)
+    case 'select_clip':
+      return handleSelectClip(classification, firstName, supabase, userId)
+    case 'select_format':
+      return handleSelectFormat(classification, firstName, supabase, userId)
+    case 'set_mentions':
+      return handleSetMentions(classification, firstName, supabase, userId)
+    case 'set_schedule':
+      return handleSetSchedule(classification, firstName, supabase, userId)
+    case 'confirm_publish':
+      return handleConfirmPublish(firstName, supabase, userId)
+    case 'cancel_publish':
+      return handleCancelPublish(firstName, supabase, userId)
+    case 'delegate_to_john':
+      return handleDelegateToJohn(firstName, supabase, userId)
+    // LEGADO
+    case 'approve_clips':
+      return handleApproveClips(classification, firstName, supabase, userId)
+
     default:
       return {
         text: classification.response_text || `Não entendi bem, ${firstName}. Pode reformular?`,
@@ -2941,4 +2994,972 @@ function formatCalendarType(t: string): string {
     task: '✅ Tarefa', meeting: '🤝 Reunião',
   }
   return map[t] || t
+}
+
+// ============================================
+// STUDIO: HANDLERS DE CLIPS (Submagic → Instagram)
+// ============================================
+
+// deno-lint-ignore no-explicit-any
+async function handleListClips(
+  userName: string,
+  supabase: any,
+  userId: string,
+): Promise<MessageResponse> {
+  // Buscar vídeo mais recente com clips prontos (incluindo brand)
+  const { data: latestVideo } = await supabase
+    .from('studio_videos')
+    .select('id, title, brand')
+    .eq('status', 'ready')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (!latestVideo) {
+    return {
+      text: `Nenhum vídeo com clipes prontos no momento, ${userName}.`,
+      intent: 'list_clips',
+      confidence: 1.0
+    }
+  }
+
+  // Determinar conta do Instagram
+  const igAccount = latestVideo.brand === 'la_music_kids' ? '@lamusickids' : '@lamusicschool'
+
+  // Buscar clips (incluindo file_url para preview)
+  const { data: clips } = await supabase
+    .from('studio_clips')
+    .select('id, title, file_url, metadata')
+    .eq('video_id', latestVideo.id)
+    .eq('status', 'ready')
+    .order('created_at', { ascending: false })
+    .limit(10)
+
+  if (!clips || clips.length === 0) {
+    return {
+      text: `Nenhum clipe pronto de "${latestVideo.title}".`,
+      intent: 'list_clips',
+      confidence: 1.0
+    }
+  }
+
+  // Sort by virality score in memory
+  const sortedClips = [...clips].sort((a: any, b: any) => {
+    const scoreA = a.metadata?.virality_score || 0
+    const scoreB = b.metadata?.virality_score || 0
+    return scoreB - scoreA
+  })
+
+  // Salvar contexto do fluxo conversacional
+  const clipIds = sortedClips.map((c: any) => c.id)
+  const clipTitles = sortedClips.map((c: any) => c.title || 'Sem título')
+
+  await supabase
+    .from('whatsapp_conversation_context')
+    .upsert({
+      user_id: userId,
+      context_type: 'clips_approval_flow',
+      context_data: {
+        step: 'select_clip',
+        video_id: latestVideo.id,
+        video_title: latestVideo.title,
+        brand: latestVideo.brand || 'la_music_school',
+        ig_account: igAccount,
+        clip_ids: clipIds,
+        clip_titles: clipTitles,
+      },
+      is_active: true,
+    }, { onConflict: 'user_id,context_type' })
+
+  console.log(`[CLIPS] Started approval flow for user ${userId}: ${clipIds.length} clips`)
+
+  // Formatar lista com preview URLs
+  const lines = sortedClips.map((c: any, i: number) => {
+    const score = c.metadata?.virality_score || '?'
+    const previewUrl = c.metadata?.preview_url || c.file_url
+    const previewLine = previewUrl ? `\n   👁 ${previewUrl}` : ''
+    return `${i + 1}. "${c.title || 'Sem título'}" — ${score}${previewLine}`
+  })
+
+  return {
+    text: `🎬 *Clipes de "${latestVideo.title}"*\n📍 ${igAccount}\n\n${lines.join('\n\n')}\n\n` +
+          `Manda o número do clip (ex: *1*).`,
+    intent: 'list_clips',
+    confidence: 1.0,
+  }
+}
+
+// ============================================
+// HANDLERS DO FLUXO CONVERSACIONAL DE CLIPS
+// ============================================
+
+// deno-lint-ignore no-explicit-any
+async function handleSelectClip(
+  classification: { entities: { clip_index?: number } },
+  userName: string,
+  supabase: any,
+  userId: string,
+): Promise<MessageResponse> {
+  const clipIndex = classification.entities.clip_index
+
+  // Buscar contexto do fluxo
+  const { data: ctx } = await supabase
+    .from('whatsapp_conversation_context')
+    .select('context_data')
+    .eq('user_id', userId)
+    .eq('context_type', 'clips_approval_flow')
+    .eq('is_active', true)
+    .single()
+
+  if (!ctx?.context_data?.clip_ids) {
+    return {
+      text: `Manda *VER* primeiro pra ver os clipes disponíveis, ${userName}.`,
+      intent: 'select_clip',
+      confidence: 1.0
+    }
+  }
+
+  const { clip_ids, clip_titles, ig_account } = ctx.context_data
+
+  // Tratar "o último" (clip_index: -1)
+  let resolvedIndex = clipIndex
+  if (clipIndex === -1) {
+    resolvedIndex = clip_ids.length // último clip
+  }
+
+  if (!resolvedIndex || resolvedIndex < 1 || resolvedIndex > clip_ids.length) {
+    return {
+      text: `Número inválido. Escolhe de 1 a ${clip_ids.length}.`,
+      intent: 'select_clip',
+      confidence: 1.0
+    }
+  }
+
+  const selectedClipId = clip_ids[resolvedIndex - 1]
+  const selectedClipTitle = clip_titles[resolvedIndex - 1] || 'Sem título'
+
+  // Atualizar contexto com clip selecionado
+  await supabase
+    .from('whatsapp_conversation_context')
+    .update({
+      context_data: {
+        ...ctx.context_data,
+        step: 'select_format',
+        selected_clip_id: selectedClipId,
+        selected_clip_title: selectedClipTitle,
+        selected_clip_index: resolvedIndex,
+      }
+    })
+    .eq('user_id', userId)
+    .eq('context_type', 'clips_approval_flow')
+
+  return {
+    text: `📱 *Clip ${resolvedIndex}:* "${selectedClipTitle}"\n📍 ${ig_account}\n\n` +
+          `Onde publicar?\n` +
+          `• *R* → Reels\n` +
+          `• *S* → Stories\n` +
+          `• *RS* → Reels + Stories`,
+    intent: 'select_clip',
+    confidence: 1.0
+  }
+}
+
+// deno-lint-ignore no-explicit-any
+async function handleSelectFormat(
+  classification: { entities: { format?: string } },
+  userName: string,
+  supabase: any,
+  userId: string,
+): Promise<MessageResponse> {
+  const format = (classification.entities.format || 'R').toUpperCase()
+
+  // Buscar contexto do fluxo
+  const { data: ctx } = await supabase
+    .from('whatsapp_conversation_context')
+    .select('context_data')
+    .eq('user_id', userId)
+    .eq('context_type', 'clips_approval_flow')
+    .eq('is_active', true)
+    .single()
+
+  if (!ctx?.context_data?.selected_clip_id) {
+    return {
+      text: `Primeiro escolhe um clip. Manda *VER* pra ver a lista.`,
+      intent: 'select_format',
+      confidence: 1.0
+    }
+  }
+
+  // Validar formato
+  const validFormats = ['R', 'S', 'RS']
+  const normalizedFormat = format === 'REELS' ? 'R' : format === 'STORIES' ? 'S' : format
+
+  if (!validFormats.includes(normalizedFormat)) {
+    return {
+      text: `Formato inválido. Manda *R* (Reels), *S* (Stories) ou *RS* (ambos).`,
+      intent: 'select_format',
+      confidence: 1.0
+    }
+  }
+
+  // Atualizar contexto
+  await supabase
+    .from('whatsapp_conversation_context')
+    .update({
+      context_data: {
+        ...ctx.context_data,
+        step: 'set_mentions',
+        format: normalizedFormat,
+      }
+    })
+    .eq('user_id', userId)
+    .eq('context_type', 'clips_approval_flow')
+
+  const formatLabel = normalizedFormat === 'RS' ? 'Reels + Stories' : normalizedFormat === 'S' ? 'Stories' : 'Reels'
+
+  return {
+    text: `✅ Formato: *${formatLabel}*\n\n` +
+          `Quer marcar alguém no post?\n\n` +
+          `Manda os @usernames (ex: *@fulano @ciclano*)\n` +
+          `ou *PULAR* para publicar sem marcações.`,
+    intent: 'select_format',
+    confidence: 1.0
+  }
+}
+
+// deno-lint-ignore no-explicit-any
+async function handleSetMentions(
+  classification: { entities: { mentions?: string[]; skip_mentions?: boolean } },
+  userName: string,
+  supabase: any,
+  userId: string,
+): Promise<MessageResponse> {
+  const mentions = classification.entities.mentions || []
+  const skipMentions = classification.entities.skip_mentions || false
+
+  // Buscar contexto do fluxo
+  const { data: ctx } = await supabase
+    .from('whatsapp_conversation_context')
+    .select('context_data')
+    .eq('user_id', userId)
+    .eq('context_type', 'clips_approval_flow')
+    .eq('is_active', true)
+    .single()
+
+  if (!ctx?.context_data?.format) {
+    return {
+      text: `Primeiro escolhe o formato. Manda *R*, *S* ou *RS*.`,
+      intent: 'set_mentions',
+      confidence: 1.0
+    }
+  }
+
+  // Atualizar contexto
+  await supabase
+    .from('whatsapp_conversation_context')
+    .update({
+      context_data: {
+        ...ctx.context_data,
+        step: 'set_schedule',
+        mentions: skipMentions ? [] : mentions,
+      }
+    })
+    .eq('user_id', userId)
+    .eq('context_type', 'clips_approval_flow')
+
+  const mentionsText = skipMentions || mentions.length === 0
+    ? 'Sem marcações'
+    : mentions.join(' ')
+
+  return {
+    text: `✅ Marcações: *${mentionsText}*\n\n` +
+          `Publicar agora ou agendar?\n\n` +
+          `• *AGORA* → publica imediatamente\n` +
+          `• Ou manda horário: *18h*, *amanhã 10h*, *seg 15h*`,
+    intent: 'set_mentions',
+    confidence: 1.0
+  }
+}
+
+// deno-lint-ignore no-explicit-any
+async function handleSetSchedule(
+  classification: { entities: { schedule_type?: string; schedule_datetime?: string } },
+  userName: string,
+  supabase: any,
+  userId: string,
+): Promise<MessageResponse> {
+  const scheduleType = classification.entities.schedule_type || 'now'
+  const scheduleDatetime = classification.entities.schedule_datetime
+
+  // Buscar contexto do fluxo
+  const { data: ctx } = await supabase
+    .from('whatsapp_conversation_context')
+    .select('context_data')
+    .eq('user_id', userId)
+    .eq('context_type', 'clips_approval_flow')
+    .eq('is_active', true)
+    .single()
+
+  if (!ctx?.context_data?.mentions === undefined) {
+    return {
+      text: `Primeiro define as marcações. Manda @usernames ou *PULAR*.`,
+      intent: 'set_schedule',
+      confidence: 1.0
+    }
+  }
+
+  // Atualizar contexto
+  await supabase
+    .from('whatsapp_conversation_context')
+    .update({
+      context_data: {
+        ...ctx.context_data,
+        step: 'confirm',
+        schedule: {
+          type: scheduleType,
+          datetime: scheduleDatetime || null,
+        }
+      }
+    })
+    .eq('user_id', userId)
+    .eq('context_type', 'clips_approval_flow')
+
+  const { selected_clip_title, selected_clip_index, format, mentions, ig_account } = ctx.context_data
+  const formatLabel = format === 'RS' ? 'Reels + Stories' : format === 'S' ? 'Stories' : 'Reels'
+  const mentionsText = mentions && mentions.length > 0 ? mentions.join(' ') : 'Nenhuma'
+
+  let scheduleText = 'Agora'
+  if (scheduleType === 'scheduled' && scheduleDatetime) {
+    const dt = new Date(scheduleDatetime)
+    const dias = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb']
+    scheduleText = `${dias[dt.getDay()]} ${dt.getDate()}/${dt.getMonth()+1} às ${dt.getHours()}h`
+  }
+
+  return {
+    text: `📋 *Confirma publicação:*\n\n` +
+          `📹 Clip: "${selected_clip_title}"\n` +
+          `📱 Formato: ${formatLabel}\n` +
+          `👥 Marcações: ${mentionsText}\n` +
+          `🕐 Horário: ${scheduleText}\n` +
+          `📍 Conta: ${ig_account}\n\n` +
+          `*SIM* para confirmar ou *NÃO* para cancelar.`,
+    intent: 'set_schedule',
+    confidence: 1.0
+  }
+}
+
+// deno-lint-ignore no-explicit-any
+async function handleConfirmPublish(
+  userName: string,
+  supabase: any,
+  userId: string,
+): Promise<MessageResponse> {
+  // Buscar contexto do fluxo
+  const { data: ctx } = await supabase
+    .from('whatsapp_conversation_context')
+    .select('context_data')
+    .eq('user_id', userId)
+    .eq('context_type', 'clips_approval_flow')
+    .eq('is_active', true)
+    .single()
+
+  if (!ctx?.context_data?.schedule) {
+    return {
+      text: `Nenhuma publicação pendente. Manda *VER* pra começar.`,
+      intent: 'confirm_publish',
+      confidence: 1.0
+    }
+  }
+
+  const {
+    selected_clip_id,
+    selected_clip_title,
+    format,
+    mentions,
+    schedule,
+    brand,
+    ig_account
+  } = ctx.context_data
+
+  // Buscar clip do banco
+  const { data: clip } = await supabase
+    .from('studio_clips')
+    .select('*')
+    .eq('id', selected_clip_id)
+    .single()
+
+  if (!clip) {
+    return {
+      text: `Clip não encontrado. Manda *VER* pra ver os disponíveis.`,
+      intent: 'confirm_publish',
+      confidence: 1.0
+    }
+  }
+
+  // Buscar credenciais do Instagram
+  const integrationName = brand === 'la_music_kids' ? 'instagram_kids' : 'instagram_school'
+  const igUserId = brand === 'la_music_kids' ? '17841404041835860' : '17841401761485758'
+
+  const { data: cred } = await supabase
+    .from('integration_credentials')
+    .select('*')
+    .eq('integration_name', integrationName)
+    .single()
+
+  if (!cred) {
+    return {
+      text: `❌ Credenciais do Instagram não encontradas.`,
+      intent: 'confirm_publish',
+      confidence: 1.0
+    }
+  }
+
+  const credData = cred as { credentials?: { access_token?: string } }
+  const accessToken = credData.credentials?.access_token
+
+  if (!accessToken) {
+    return {
+      text: `❌ Token do Instagram não configurado.`,
+      intent: 'confirm_publish',
+      confidence: 1.0
+    }
+  }
+
+  // Se agendado, salvar para publicação futura
+  if (schedule.type === 'scheduled' && schedule.datetime) {
+    await supabase
+      .from('studio_clips')
+      .update({
+        status: 'scheduled',
+        metadata: {
+          ...clip.metadata,
+          scheduled_at: schedule.datetime,
+          scheduled_format: format,
+          scheduled_mentions: mentions || [],
+          scheduled_ig_account: ig_account,
+        }
+      })
+      .eq('id', selected_clip_id)
+
+    // Limpar contexto
+    await supabase
+      .from('whatsapp_conversation_context')
+      .delete()
+      .eq('user_id', userId)
+      .eq('context_type', 'clips_approval_flow')
+
+    const dt = new Date(schedule.datetime)
+    const dias = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb']
+    const scheduleText = `${dias[dt.getDay()]} ${dt.getDate()}/${dt.getMonth()+1} às ${dt.getHours()}h`
+
+    return {
+      text: `✅ Agendado para ${scheduleText}!\n📍 ${ig_account}`,
+      intent: 'confirm_publish',
+      confidence: 1.0
+    }
+  }
+
+  // Publicar agora
+  const formatsToPublish = format === 'RS' ? ['REELS', 'STORIES'] : [format === 'S' ? 'STORIES' : 'REELS']
+  const results: string[] = []
+  const errors: string[] = []
+
+  // Montar caption com mentions
+  let caption = clip.title || '🎵 #LAMusic'
+  if (mentions && mentions.length > 0) {
+    caption += '\n\n' + mentions.join(' ')
+  }
+
+  // Função auxiliar para publicar um formato
+  async function publishFormat(mediaType: string): Promise<{ success: boolean; label: string; error?: string }> {
+    const label = mediaType === 'REELS' ? 'Reels' : 'Stories'
+    try {
+      // Criar container
+      const createPayload: Record<string, any> = {
+        video_url: clip.file_url,
+        media_type: mediaType,
+        access_token: accessToken,
+      }
+      if (mediaType === 'REELS') {
+        createPayload.caption = caption
+      }
+
+      const createRes = await fetch(
+        `https://graph.facebook.com/v19.0/${igUserId}/media`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(createPayload),
+        }
+      )
+      const createData = await createRes.json()
+
+      if (!createRes.ok || !createData.id) {
+        return { success: false, label, error: createData.error?.message || 'Erro ao criar' }
+      }
+
+      // Polling: aguardar FINISHED (max 45s = 9 × 5s)
+      let containerReady = false
+      for (let attempt = 0; attempt < 9; attempt++) {
+        await new Promise(r => setTimeout(r, 5000))
+        const statusRes = await fetch(
+          `https://graph.facebook.com/v19.0/${createData.id}?fields=status_code&access_token=${accessToken}`
+        )
+        const statusData = await statusRes.json()
+        console.log(`[CLIPS] ${mediaType} status (attempt ${attempt + 1}): ${statusData.status_code}`)
+
+        if (statusData.status_code === 'FINISHED') {
+          containerReady = true
+          break
+        }
+        if (statusData.status_code === 'ERROR') {
+          return { success: false, label, error: 'Erro no processamento' }
+        }
+      }
+
+      if (!containerReady) {
+        return { success: false, label, error: 'Timeout no processamento' }
+      }
+
+      // Publicar
+      const publishRes = await fetch(
+        `https://graph.facebook.com/v19.0/${igUserId}/media_publish`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ creation_id: createData.id, access_token: accessToken }),
+        }
+      )
+      const publishData = await publishRes.json()
+
+      if (publishRes.ok && publishData.id) {
+        return { success: true, label }
+      } else {
+        return { success: false, label, error: publishData.error?.message || 'Erro ao publicar' }
+      }
+    } catch (e) {
+      return { success: false, label, error: String(e).substring(0, 50) }
+    }
+  }
+
+  // Processar formatos em PARALELO (crítico para RS não dar timeout)
+  const publishResults = await Promise.all(formatsToPublish.map(publishFormat))
+
+  for (const result of publishResults) {
+    if (result.success) {
+      results.push(result.label)
+    } else {
+      errors.push(`${result.label}: ${result.error}`)
+    }
+  }
+
+  // Atualizar status do clip
+  if (results.length > 0) {
+    await supabase
+      .from('studio_clips')
+      .update({
+        status: 'published',
+        published_at: new Date().toISOString(),
+        metadata: {
+          ...clip.metadata,
+          published_formats: results,
+          published_mentions: mentions || [],
+        }
+      })
+      .eq('id', selected_clip_id)
+  }
+
+  // Limpar contexto
+  await supabase
+    .from('whatsapp_conversation_context')
+    .delete()
+    .eq('user_id', userId)
+    .eq('context_type', 'clips_approval_flow')
+
+  // Nota sobre Stories + mentions
+  const hasMentions = mentions && mentions.length > 0
+  const hasStories = results.includes('Stories')
+  const hasReels = results.includes('Reels')
+  const storiesNote = (hasMentions && hasStories)
+    ? `\n\nℹ️ Marcações adicionadas no Reels.${hasReels ? '' : '\nStories não suportam tags via API.'}`
+    : ''
+
+  // Resposta
+  if (results.length > 0 && errors.length === 0) {
+    return {
+      text: `✅ Publicado como ${results.join(' + ')}! 🎉\n📍 ${ig_account}${storiesNote}`,
+      intent: 'confirm_publish',
+      confidence: 1.0
+    }
+  } else if (results.length > 0) {
+    return {
+      text: `✅ Publicado: ${results.join(' + ')}\n⚠️ Erros: ${errors.join(', ')}\n📍 ${ig_account}${storiesNote}`,
+      intent: 'confirm_publish',
+      confidence: 1.0
+    }
+  } else {
+    return {
+      text: `❌ Falha na publicação: ${errors.join(', ')}`,
+      intent: 'confirm_publish',
+      confidence: 1.0
+    }
+  }
+}
+
+// deno-lint-ignore no-explicit-any
+async function handleCancelPublish(
+  userName: string,
+  supabase: any,
+  userId: string,
+): Promise<MessageResponse> {
+  // Limpar contexto
+  await supabase
+    .from('whatsapp_conversation_context')
+    .delete()
+    .eq('user_id', userId)
+    .eq('context_type', 'clips_approval_flow')
+
+  return {
+    text: `❌ Publicação cancelada. Manda *VER* quando quiser recomeçar.`,
+    intent: 'cancel_publish',
+    confidence: 1.0
+  }
+}
+
+// deno-lint-ignore no-explicit-any
+async function handleDelegateToJohn(
+  userName: string,
+  supabase: any,
+  userId: string,
+): Promise<MessageResponse> {
+  // Buscar contexto atual
+  const { data: ctx } = await supabase
+    .from('whatsapp_conversation_context')
+    .select('context_data')
+    .eq('user_id', userId)
+    .eq('context_type', 'clips_approval_flow')
+    .eq('is_active', true)
+    .single()
+
+  if (!ctx?.context_data) {
+    return {
+      text: `Não tem nenhum clip em andamento pra passar pro John. Manda *VER* pra começar.`,
+      intent: 'delegate_to_john',
+      confidence: 1.0
+    }
+  }
+
+  const { video_title, ig_account, clip_ids } = ctx.context_data as {
+    video_title?: string
+    ig_account?: string
+    clip_ids?: string[]
+  }
+
+  // Enviar notificação para o John
+  const UAZAPI_SERVER_URL = Deno.env.get('UAZAPI_SERVER_URL')
+  const UAZAPI_TOKEN = Deno.env.get('UAZAPI_TOKEN')
+  const JOHN_PHONE = Deno.env.get('JOHN_PHONE')
+
+  if (UAZAPI_SERVER_URL && UAZAPI_TOKEN && JOHN_PHONE) {
+    const clipsCount = clip_ids?.length || 0
+    const msg =
+      `📩 *${userName} passou pra você!*\n\n` +
+      `🎬 Vídeo: "${video_title || 'Sem título'}"\n` +
+      `📍 Conta: ${ig_account || '@lamusicschool'}\n` +
+      `📊 ${clipsCount} clips disponíveis\n\n` +
+      `Manda *VER* pra escolher qual publicar.`
+
+    await fetch(`${UAZAPI_SERVER_URL}/send/text`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'token': UAZAPI_TOKEN },
+      body: JSON.stringify({ number: JOHN_PHONE, text: msg, delay: 500 })
+    }).catch(e => console.error('[DELEGATE] WhatsApp error:', e))
+  }
+
+  // Limpar contexto do usuário atual
+  await supabase
+    .from('whatsapp_conversation_context')
+    .delete()
+    .eq('user_id', userId)
+    .eq('context_type', 'clips_approval_flow')
+
+  return {
+    text: `✅ Passei pro John! Ele vai receber a notificação e pode escolher qual clip publicar.`,
+    intent: 'delegate_to_john',
+    confidence: 1.0
+  }
+}
+
+// deno-lint-ignore no-explicit-any
+async function handleApproveClips(
+  classification: ClassificationResult,
+  userName: string,
+  supabase: any,
+  userId: string,
+): Promise<MessageResponse> {
+  const approvalType = classification.entities.approval_type || 'all'
+  const approvalCount = classification.entities.approval_count || 2
+  const approvalIndices = classification.entities.approval_indices as number[] | undefined
+  const publishFormat = classification.entities.publish_format || 'reels'
+  const mediaType = publishFormat === 'stories' ? 'STORIES' : 'REELS'
+
+  console.log(`[CLIPS] handleApproveClips: type=${approvalType}, indices=${JSON.stringify(approvalIndices)}, format=${publishFormat}`)
+
+  // 1. Se for seleção específica, buscar contexto salvo
+  let savedClipIds: string[] = []
+  if (approvalType === 'specific' && approvalIndices?.length) {
+    const { data: ctx } = await supabase
+      .from('whatsapp_conversation_context')
+      .select('context_data')
+      .eq('user_id', userId)
+      .eq('context_type', 'clips_list')
+      .eq('is_active', true)
+      .single()
+
+    if (ctx?.context_data?.clip_ids) {
+      savedClipIds = ctx.context_data.clip_ids
+      console.log(`[CLIPS] Found saved context with ${savedClipIds.length} clip IDs`)
+    }
+  }
+
+  // 2. Buscar vídeo mais recente com clips prontos
+  const { data: latestVideo } = await supabase
+    .from('studio_videos')
+    .select('id, title, brand')
+    .eq('status', 'ready')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (!latestVideo) {
+    return {
+      text: `Não encontrei vídeos com clipes prontos, ${userName}.`,
+      intent: 'approve_clips',
+      confidence: 1.0
+    }
+  }
+
+  // 3. Buscar clips prontos
+  const { data: allClips, error: clipsError } = await supabase
+    .from('studio_clips')
+    .select('*')
+    .eq('video_id', latestVideo.id)
+    .eq('status', 'ready')
+    .order('created_at', { ascending: false })
+
+  if (clipsError || !allClips || allClips.length === 0) {
+    return {
+      text: `Nenhum clipe pronto para publicar.`,
+      intent: 'approve_clips',
+      confidence: 1.0
+    }
+  }
+
+  // Sort by virality score in memory (maior primeiro)
+  const sortedClips = [...allClips].sort((a: any, b: any) => {
+    const scoreA = a.metadata?.virality_score || 0
+    const scoreB = b.metadata?.virality_score || 0
+    return scoreB - scoreA
+  })
+
+  // 4. Selecionar clips baseado no approval_type
+  let selectedClips: any[]
+  let selectionDesc: string
+
+  if (approvalType === 'specific' && approvalIndices?.length) {
+    // Usar contexto salvo se disponível, senão usar ordem atual
+    if (savedClipIds.length > 0) {
+      // Resolver por IDs salvos
+      selectedClips = approvalIndices
+        .map((idx: number) => {
+          const clipId = savedClipIds[idx - 1] // índice baseado em 1
+          return allClips.find((c: any) => c.id === clipId)
+        })
+        .filter(Boolean)
+    } else {
+      // Fallback: usar ordem atual (sortedClips)
+      selectedClips = approvalIndices
+        .map((idx: number) => sortedClips[idx - 1])
+        .filter(Boolean)
+    }
+    selectionDesc = `clips ${approvalIndices.join(', ')}`
+  } else if (approvalType === 'top_n') {
+    selectedClips = sortedClips.slice(0, approvalCount)
+    selectionDesc = `top ${approvalCount}`
+  } else {
+    // 'all' → pegar os 2 melhores (limite de segurança)
+    selectedClips = sortedClips.slice(0, 2)
+    selectionDesc = 'melhores clips'
+  }
+
+  // LIMITE DE 2 CLIPS POR EXECUÇÃO (para evitar timeout)
+  const MAX_CLIPS_PER_RUN = 2
+  if (selectedClips.length > MAX_CLIPS_PER_RUN) {
+    selectedClips = selectedClips.slice(0, MAX_CLIPS_PER_RUN)
+    selectionDesc += ` (limitado a ${MAX_CLIPS_PER_RUN})`
+  }
+
+  if (selectedClips.length === 0) {
+    return {
+      text: `Não encontrei os clips selecionados. Manda *VER* pra ver a lista atualizada.`,
+      intent: 'approve_clips',
+      confidence: 1.0
+    }
+  }
+
+  console.log(`[CLIPS] Selected ${selectedClips.length} clips (${selectionDesc}) to publish as ${mediaType}`)
+
+  // 3. Buscar token do Instagram
+  const integrationName = latestVideo.brand === 'la_music_kids' ? 'instagram_kids' : 'instagram_school'
+  const igUserId = latestVideo.brand === 'la_music_kids' ? '17841404041835860' : '17841401761485758'
+
+  const { data: cred } = await supabase
+    .from('integration_credentials')
+    .select('*')
+    .eq('integration_name', integrationName)
+    .single()
+
+  if (!cred) {
+    return {
+      text: `❌ Credenciais do Instagram não encontradas para ${integrationName}.`,
+      intent: 'approve_clips',
+      confidence: 1.0
+    }
+  }
+
+  // Token está em credentials.access_token (JSONB column)
+  const credData = cred as { credentials?: { access_token?: string }; metadata?: { access_token?: string } }
+  const accessToken = credData.credentials?.access_token || credData.metadata?.access_token
+
+  if (!accessToken) {
+    return {
+      text: `❌ Token do Instagram não configurado.`,
+      intent: 'approve_clips',
+      confidence: 1.0
+    }
+  }
+
+  // 5. Publicar cada clip via Meta Graph API
+  let published = 0
+  const errors: string[] = []
+
+  for (const clip of selectedClips) {
+    try {
+      console.log(`[CLIPS] Publishing clip ${clip.id}: ${clip.title} as ${mediaType}`)
+
+      // Passo 1: Criar container
+      // Stories NÃO suporta caption
+      const createPayload: Record<string, any> = {
+        video_url: clip.file_url,
+        media_type: mediaType,
+        access_token: accessToken,
+      }
+
+      // Só adiciona caption se for Reels
+      if (mediaType === 'REELS') {
+        createPayload.caption = clip.title || '🎵 Novo clipe! #LAMusic'
+      }
+
+      const createRes = await fetch(
+        `https://graph.facebook.com/v19.0/${igUserId}/media`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(createPayload),
+        }
+      )
+
+      const createData = await createRes.json()
+
+      if (!createRes.ok || !createData.id) {
+        const errMsg = createData.error?.message || JSON.stringify(createData)
+        console.error(`[CLIPS] Create failed for ${clip.id}:`, errMsg)
+        errors.push(`${clip.title}: ${errMsg.substring(0, 60)}`)
+        continue
+      }
+
+      console.log(`[CLIPS] Container created: ${createData.id}`)
+
+      // Polling: aguardar container ficar FINISHED (max 25s = 5 x 5s)
+      let containerReady = false
+      for (let attempt = 0; attempt < 5; attempt++) {
+        await new Promise(r => setTimeout(r, 5000))
+        const statusRes = await fetch(
+          `https://graph.facebook.com/v19.0/${createData.id}?fields=status_code&access_token=${accessToken}`
+        )
+        const statusData = await statusRes.json()
+        console.log(`[CLIPS] Container status (attempt ${attempt + 1}): ${statusData.status_code}`)
+
+        if (statusData.status_code === 'FINISHED') {
+          containerReady = true
+          break
+        }
+        if (statusData.status_code === 'ERROR') {
+          errors.push(`${clip.title}: Instagram processing failed`)
+          break
+        }
+      }
+
+      if (!containerReady) {
+        errors.push(`${clip.title}: Timeout - Instagram não processou`)
+        continue
+      }
+
+      // Passo 2: Publicar
+      const publishRes = await fetch(
+        `https://graph.facebook.com/v19.0/${igUserId}/media_publish`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            creation_id: createData.id,
+            access_token: accessToken,
+          }),
+        }
+      )
+
+      const publishData = await publishRes.json()
+
+      if (publishRes.ok && publishData.id) {
+        published++
+        console.log(`[CLIPS] Published: ${publishData.id}`)
+
+        await supabase
+          .from('studio_clips')
+          .update({
+            status: 'published',
+            published_at: new Date().toISOString(),
+            metadata: {
+              ...clip.metadata,
+              instagram_media_id: publishData.id,
+              published_as: mediaType.toLowerCase(),
+            }
+          })
+          .eq('id', clip.id)
+      } else {
+        const errMsg = publishData.error?.message || JSON.stringify(publishData)
+        console.error(`[CLIPS] Publish failed for ${clip.id}:`, errMsg)
+        errors.push(`${clip.title}: ${errMsg.substring(0, 60)}`)
+      }
+    } catch (e) {
+      console.error(`[CLIPS] Exception for ${clip.id}:`, e)
+      errors.push(`${clip.title}: ${String(e).substring(0, 50)}`)
+    }
+  }
+
+  const errText = errors.length > 0 ? `\n\n⚠️ Erros:\n${errors.join('\n')}` : ''
+  const formatLabel = mediaType === 'STORIES' ? 'Stories' : 'Reels'
+
+  // Limpar contexto de clips após publicar
+  await supabase
+    .from('whatsapp_conversation_context')
+    .delete()
+    .eq('user_id', userId)
+    .eq('context_type', 'clips_list')
+
+  return {
+    text: `✅ Publiquei *${published}* ${formatLabel} no Instagram! (${selectionDesc})${errText}`,
+    intent: 'approve_clips',
+    confidence: 1.0,
+  }
 }

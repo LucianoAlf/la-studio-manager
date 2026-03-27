@@ -4,9 +4,15 @@
   "private": true,
   "description": "Marketing Hub — LA Music School",
   "scripts": {
-    "dev": "next dev",
+    "predev": "npm run clean:next",
+    "dev": "next dev -p 3001",
+    "dev:3001": "next dev -p 3001",
+    "clean:next": "node -e \"require('fs').rmSync('.next',{recursive:true,force:true})\"",
+    "dev:stable": "npm run clean:next && npm run dev:3001",
+    "prebuild": "npm run clean:next",
     "build": "next build",
     "start": "next start",
+    "start:3001": "next start -p 3001",
     "lint": "next lint",
     "db:types": "npx supabase gen types typescript --project-id $SUPABASE_PROJECT_ID --schema public > src/types/database.ts"
   },
@@ -44,6 +50,7 @@
     "sonner": "^1.7.4",
     "tailwind-merge": "^2.5.0",
     "tailwindcss-animate": "^1.0.7",
+    "tus-js-client": "^4.3.1",
     "zustand": "^4.5.0"
   },
   "devDependencies": {

@@ -37,4 +37,4 @@ next-env.d.ts
 # supabase
 supabase/.temp/
 
-certificates
+certificatestmp-e2e/

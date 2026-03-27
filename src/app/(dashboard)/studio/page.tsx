@@ -7,6 +7,7 @@ import {
   CalendarDots,
   Sparkle,
   Images,
+  VideoCamera,
   Lightning,
   ChartBar,
   Link,
@@ -21,6 +22,7 @@ import {
   Plus,
   SpinnerGap,
   Folder,
+  Trash,
 } from "@phosphor-icons/react";
 import type { Icon } from "@phosphor-icons/react";
 import {
@@ -31,15 +33,28 @@ import {
   getPendingApprovalsCount,
   getPerformanceSummaryByBrand,
   getPhotoAssets,
+  getGroupedEvents,
+  getEventPhotos,
+  deleteEvent,
+  getStudioVideosByBrand,
+  getStudioVideoPollingById,
+  getStudioClipPollingById,
+  getStudioClipsByVideoId,
   getStudioPostsByBrand,
   type AssetFilterType,
   type CommemorativeDateItem,
+  type GroupedEvent,
   type IntegrationCredentialItem,
+  type StudioClipItem,
+  type StudioClipStatus,
   type NinaConfig,
   type PhotoAsset,
   type StudioBrand,
   type StudioPlatform,
   type StudioPost,
+  type StudioVideoItem,
+  type StudioVideoPollingItem,
+  type StudioVideoStatus,
 } from "@/lib/queries/studio";
 import {
   Select,
@@ -49,25 +64,464 @@ import {
   SelectValue,
 } from "@/components/ui/shadcn/select";
 import { createClient } from "@/lib/supabase/client";
+import * as tus from "tus-js-client";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { DatePicker } from "@/components/ui/date-time-picker";
+import { DatePicker, TimePicker } from "@/components/ui/date-time-picker";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/shadcn/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/shadcn/dialog";
+import { Switch } from "@/components/ui/switch";
 
-type StudioTab = "calendario" | "criar" | "banco" | "automacoes" | "performance" | "conexoes";
+type StudioTab = "calendario" | "criar" | "banco" | "video" | "automacoes" | "performance" | "conexoes";
 type AutomationTab = "aniversarios" | "datas";
 
 type PostStatus = StudioPost["status"];
+type VideoUploadStage = "idle" | "validating" | "uploading" | "processing";
 type NinaGenerationResponse = {
   image_url?: string | null;
   caption?: string | null;
   hashtags?: string[] | string | null;
   generation_method?: string | null;
+  main_phrase?: string | null;
+  needs_text_overlay?: boolean;
+  text_config?: {
+    phrase: string;
+    brand_name: string;
+    is_kids: boolean;
+    accent_color: string;
+  };
 };
+
+// Submagic templates disponíveis para Magic Clips
+const SUBMAGIC_TEMPLATES = [
+  'Sara', 'Matt', 'Jess', 'Jack', 'Nick', 'Laura', 'Kelly 2', 'Caleb', 'Kendrick',
+  'Lewis', 'Doug', 'Carlos', 'Luke', 'Leila', 'Mark', 'Daniel', 'Dan 2', 'Hormozi 4',
+  'Dan', 'Devin', 'Tayo', 'Ella', 'Tracy', 'Hormozi 1', 'Hormozi 2', 'Hormozi 3',
+  'Hormozi 5', 'Jason', 'William', 'Leon', 'Ali', 'Beast', 'Maya', 'Karl', 'Iman',
+  'Umi', 'David', 'Noah', 'Gstaad', 'Malta', 'Nema', 'seth'
+] as const;
+
+const CONTENT_PRESETS = {
+  workshop: {
+    label: '🎓 Workshop',
+    templateName: 'Hormozi 2',
+    minClipLength: 30,
+    maxClipLength: 90,
+    faceTracking: true,
+    disableCaptions: false,
+    maxClips: 8,
+  },
+  aula: {
+    label: '👨‍🏫 Aula',
+    templateName: 'Karl',
+    minClipLength: 20,
+    maxClipLength: 60,
+    faceTracking: true,
+    disableCaptions: false,
+    maxClips: 6,
+  },
+  entrevista: {
+    label: '🎙️ Entrevista',
+    templateName: 'Sara',
+    minClipLength: 25,
+    maxClipLength: 75,
+    faceTracking: true,
+    disableCaptions: false,
+    maxClips: 8,
+  },
+  show: {
+    label: '🎵 Show',
+    templateName: 'Beast',
+    minClipLength: 15,
+    maxClipLength: 45,
+    faceTracking: true,  // Sempre true para enquadrar 9:16 corretamente
+    disableCaptions: true,
+    maxClips: 5,
+  },
+  custom: {
+    label: '⚙️ Custom',
+    templateName: 'Hormozi 2',
+    minClipLength: 15,
+    maxClipLength: 60,
+    faceTracking: true,
+    disableCaptions: false,
+    maxClips: 10,
+  },
+} as const;
+
+type ContentPresetKey = keyof typeof CONTENT_PRESETS;
+
+type SubmagicConfig = {
+  // Fase 1: Magic Clips
+  templateName: string;
+  minClipLength: number;
+  maxClipLength: number;
+  faceTracking: boolean;
+  disableCaptions: boolean;
+  maxClips: number;
+  // Fase 2: Pós-processamento
+  cleanAudio: boolean;
+  removeSilencePace: 'natural' | 'fast' | 'extra-fast' | null;
+  removeBadTakes: boolean;
+  magicZooms: boolean;
+  magicBrolls: boolean;
+  magicBrollsPercentage: number;
+};
+
+type PublishScheduledPostsResponse = {
+  success?: boolean;
+  published?: number;
+  failed?: number;
+  message?: string;
+  error?: string;
+  results?: Array<{
+    error?: unknown;
+  }>;
+};
+
+function tryParseJson(value: string): unknown | null {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+function extractNestedErrorMessage(value: unknown, depth = 0): string | null {
+  if (value == null || depth > 4) return null;
+
+  if (value instanceof Error) {
+    return value.message;
+  }
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+
+    const parsed = tryParseJson(trimmed);
+    if (parsed !== null) {
+      const nestedMessage = extractNestedErrorMessage(parsed, depth + 1);
+      if (nestedMessage) return nestedMessage;
+    }
+
+    return trimmed;
+  }
+
+  if (typeof value !== "object") {
+    return String(value);
+  }
+
+  const record = value as Record<string, unknown>;
+  const nestedError = extractNestedErrorMessage(record.error, depth + 1);
+  const directMessage = extractNestedErrorMessage(record.message, depth + 1);
+  const detailMessage = extractNestedErrorMessage(record.details, depth + 1);
+  const errorDescription = extractNestedErrorMessage(record.error_description, depth + 1);
+  const type =
+    typeof record.type === "string"
+      ? record.type
+      : typeof record.error === "object" && record.error && typeof (record.error as Record<string, unknown>).type === "string"
+        ? String((record.error as Record<string, unknown>).type)
+        : null;
+
+  const message = nestedError ?? directMessage ?? detailMessage ?? errorDescription;
+  if (message && type && !message.includes(type)) {
+    return `${type}: ${message}`;
+  }
+
+  return message;
+}
+
+function isExpiredMetaSessionMessage(message: string) {
+  return /OAuthException/i.test(message) && /Session has expired/i.test(message);
+}
+
+function formatMetaSessionExpiredMessage(message: string) {
+  const expiresAt = message.match(/Session has expired on ([^.]+)\./i)?.[1];
+  if (expiresAt) {
+    return `Sessao da Meta expirada em ${expiresAt}. Reconecte o Instagram da marca antes de publicar.`;
+  }
+
+  return "Sessao da Meta expirada. Reconecte o Instagram da marca antes de publicar.";
+}
+
+function getPublishErrorMessage(
+  fnError: unknown,
+  data?: PublishScheduledPostsResponse,
+) {
+  const rawError = data?.results?.[0]?.error ?? data?.error ?? data?.message ?? fnError;
+  const message = extractNestedErrorMessage(rawError);
+  if (!message) return null;
+
+  if (isExpiredMetaSessionMessage(message)) {
+    return formatMetaSessionExpiredMessage(message);
+  }
+
+  return message;
+}
+
+function getIntegrationExpiryDate(metadata: Record<string, unknown> | null) {
+  if (!metadata) return null;
+
+  const candidates = [
+    metadata.expires_at,
+    metadata.token_expires_at,
+    metadata.tokenExpiresAt,
+    metadata.expiresAt,
+    metadata.expiration_date,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") continue;
+    const parsed = new Date(candidate);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
+function getIntegrationErrorMessage(metadata: Record<string, unknown> | null) {
+  if (!metadata) return null;
+
+  const candidates = [
+    metadata.error,
+    metadata.error_message,
+    metadata.last_error,
+    metadata.validation_error,
+  ];
+
+  for (const candidate of candidates) {
+    const message = extractNestedErrorMessage(candidate);
+    if (message) return message;
+  }
+
+  return null;
+}
+
+function getIntegrationStatus(item: IntegrationCredentialItem) {
+  if (!item.is_active) {
+    return {
+      color: "#F97316",
+      label: "Inativo",
+      detail: "Integracao desativada.",
+    };
+  }
+
+  const metadata = item.metadata ?? null;
+  const expiresAt = getIntegrationExpiryDate(metadata);
+  if (expiresAt && expiresAt.getTime() <= Date.now()) {
+    return {
+      color: "#EF4444",
+      label: "Expirado",
+      detail: `Token expirado em ${expiresAt.toLocaleDateString("pt-BR")}.`,
+    };
+  }
+
+  const integrationError = getIntegrationErrorMessage(metadata);
+  if (integrationError && isExpiredMetaSessionMessage(integrationError)) {
+    return {
+      color: "#EF4444",
+      label: "Expirado",
+      detail: formatMetaSessionExpiredMessage(integrationError),
+    };
+  }
+
+  if (!item.last_validated_at) {
+    return {
+      color: "#EF4444",
+      label: "Sem validacao",
+      detail: "Sem validacao recente.",
+    };
+  }
+
+  const days = (Date.now() - new Date(item.last_validated_at).getTime()) / (1000 * 60 * 60 * 24);
+  if (days <= 30) {
+    return {
+      color: "#22C55E",
+      label: "Ativo",
+      detail: `Validado em ${new Date(item.last_validated_at).toLocaleDateString("pt-BR")}.`,
+    };
+  }
+
+  if (days <= 60) {
+    return {
+      color: "#F97316",
+      label: "Atencao",
+      detail: `Validado em ${new Date(item.last_validated_at).toLocaleDateString("pt-BR")}.`,
+    };
+  }
+
+  return {
+    color: "#EF4444",
+    label: "Validacao antiga",
+    detail: `Ultima validacao em ${new Date(item.last_validated_at).toLocaleDateString("pt-BR")}.`,
+  };
+}
+
+// Função para criar arte completa usando Canvas API (foto + gradiente + texto)
+// Instagram safe zones: Feed 1080x1080, Stories 1080x1920 (com 250px top/bottom safe)
+async function createArtWithCanvas(
+  imageUrl: string,
+  phrase: string,
+  brandName: string,
+  isKids: boolean,
+  format: "feed" | "story" = "feed"
+): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        reject(new Error("Canvas context not available"));
+        return;
+      }
+
+      // Dimensões por formato
+      const W = 1080;
+      const H = format === "story" ? 1920 : 1080;
+      canvas.width = W;
+      canvas.height = H;
+
+      // Margens seguras (Instagram safe zone)
+      const MARGIN_X = 80; // 80px de cada lado
+      const SAFE_BOTTOM = format === "story" ? 280 : 100; // Stories precisam de mais espaço embaixo
+
+      // Desenha a imagem base (cover)
+      const imgRatio = img.width / img.height;
+      const canvasRatio = W / H;
+      let sx = 0, sy = 0, sw = img.width, sh = img.height;
+
+      if (imgRatio > canvasRatio) {
+        sw = img.height * canvasRatio;
+        sx = (img.width - sw) / 2;
+      } else {
+        sh = img.width / canvasRatio;
+        sy = (img.height - sh) / 2;
+      }
+      ctx.drawImage(img, sx, sy, sw, sh, 0, 0, W, H);
+
+      // Gradiente escuro na base
+      const gradientStart = format === "story" ? H * 0.5 : H * 0.55;
+      const gradient = ctx.createLinearGradient(0, gradientStart, 0, H);
+      gradient.addColorStop(0, "rgba(0, 0, 0, 0)");
+      gradient.addColorStop(0.25, "rgba(0, 0, 0, 0.45)");
+      gradient.addColorStop(1, "rgba(0, 0, 0, 0.88)");
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, W, H);
+
+      // Quebrar frase em linhas respeitando margens
+      const maxTextWidth = W - (MARGIN_X * 2) - 40; // 40px extra de segurança
+      const fontSize = Math.round(W * 0.055); // Reduzido de 0.065 para 0.055
+      ctx.font = `bold ${fontSize}px Arial, sans-serif`;
+
+      const words = phrase.split(" ");
+      const lines: string[] = [];
+      let currentLine = "";
+
+      for (const word of words) {
+        const testLine = currentLine ? `${currentLine} ${word}` : word;
+        const metrics = ctx.measureText(testLine);
+        if (metrics.width > maxTextWidth && currentLine) {
+          lines.push(currentLine);
+          currentLine = word;
+        } else {
+          currentLine = testLine;
+        }
+      }
+      if (currentLine) lines.push(currentLine);
+
+      // Configuração do texto principal
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+
+      // Calcular posição Y para texto ficar na safe zone
+      const lineHeight = fontSize * 1.35;
+      const totalTextHeight = lines.length * lineHeight;
+      const barHeight = 60;
+      const textAreaBottom = H - SAFE_BOTTOM - barHeight - 20;
+      const textStartY = textAreaBottom - totalTextHeight + lineHeight / 2;
+
+      // Renderiza cada linha com sombra e stroke
+      lines.forEach((line, index) => {
+        const y = textStartY + index * lineHeight;
+        const x = W / 2;
+
+        // Sombra
+        ctx.shadowColor = "rgba(0, 0, 0, 0.9)";
+        ctx.shadowBlur = 25;
+        ctx.shadowOffsetX = 3;
+        ctx.shadowOffsetY = 3;
+
+        // Stroke preto (contorno)
+        ctx.strokeStyle = "black";
+        ctx.lineWidth = 10;
+        ctx.lineJoin = "round";
+        ctx.strokeText(line, x, y);
+
+        // Fill branco
+        ctx.fillStyle = "white";
+        ctx.fillText(line, x, y);
+      });
+
+      // Reseta sombra
+      ctx.shadowColor = "transparent";
+      ctx.shadowBlur = 0;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 0;
+
+      // Barra da marca no fundo (dentro da safe zone)
+      const barY = H - SAFE_BOTTOM - barHeight;
+      ctx.fillStyle = "rgba(0, 0, 0, 0.65)";
+      ctx.fillRect(MARGIN_X, barY, W - MARGIN_X * 2, barHeight);
+
+      // Texto da marca
+      const brandFontSize = Math.round(W * 0.028);
+      ctx.font = `bold ${brandFontSize}px Arial, sans-serif`;
+      ctx.fillStyle = "white";
+      ctx.fillText(brandName.toUpperCase(), W / 2, barY + barHeight / 2);
+
+      // SEM linha de acento - removida completamente
+
+      // Converte para blob
+      canvas.toBlob(
+        (blob) => {
+          if (blob) resolve(blob);
+          else reject(new Error("Failed to create blob"));
+        },
+        "image/jpeg",
+        0.92
+      );
+    };
+
+    img.onerror = () => reject(new Error("Failed to load image"));
+    img.src = imageUrl;
+  });
+}
 
 const TABS: { id: StudioTab; label: string; icon: Icon }[] = [
   { id: "calendario", label: "Calendário", icon: CalendarDots },
   { id: "criar", label: "Criar", icon: Sparkle },
   { id: "banco", label: "Banco de Fotos", icon: Images },
+  { id: "video", label: "Vídeo", icon: VideoCamera },
   { id: "automacoes", label: "Automações", icon: Lightning },
   { id: "performance", label: "Performance", icon: ChartBar },
   { id: "conexoes", label: "Conexões", icon: Link },
@@ -93,6 +547,49 @@ const STATUS_LABELS: Record<PostStatus, string> = {
   rejected: "Rejeitado",
 };
 
+const VIDEO_STATUS_COLORS: Record<StudioVideoStatus, string> = {
+  uploaded: "#94A3B8",
+  transcribing: "#F59E0B",
+  transcribed: "#38BDF8",
+  analyzing: "#F59E0B",
+  ready: "#22C55E",
+  failed: "#EF4444",
+};
+
+const VIDEO_STATUS_LABELS: Record<StudioVideoStatus, string> = {
+  uploaded: "Uploaded",
+  transcribing: "Transcribing",
+  transcribed: "Transcribed",
+  analyzing: "Analyzing",
+  ready: "Ready",
+  failed: "Failed",
+};
+
+const CLIP_STATUS_COLORS: Record<StudioClipStatus, string> = {
+  pending: "#94A3B8",
+  rendering: "#F59E0B",
+  ready: "#38BDF8",
+  approved: "#22C55E",
+  published: "#14B8A6",
+  failed: "#EF4444",
+};
+
+const CLIP_STATUS_LABELS: Record<StudioClipStatus, string> = {
+  pending: "Pending",
+  rendering: "Rendering",
+  ready: "Ready",
+  approved: "Approved",
+  published: "Published",
+  failed: "Failed",
+};
+
+const ALLOWED_VIDEO_MIME_TYPES = ["video/mp4", "video/quicktime", "video/mov"];
+const MAX_VIDEO_SIZE_BYTES = 2 * 1024 * 1024 * 1024; // 2GB
+const POLL_INTERVALS = [3000, 3000, 3000, 5000, 5000, 8000, 8000] as const;
+const TRANSITIONAL_STATUSES: StudioVideoStatus[] = ["transcribing", "transcribed", "analyzing"];
+const TRANSITIONAL_CLIP_STATUSES: StudioClipStatus[] = ["rendering"];
+const MAX_PROCESS_VIDEO_BYTES = 500 * 1024 * 1024;
+
 const BRAND_OPTIONS: { value: StudioBrand; label: string }[] = [
   { value: "la_music_school", label: "LA Music School" },
   { value: "la_music_kids", label: "LA Music Kids" },
@@ -109,16 +606,32 @@ function toIsoDate(input: Date) {
   return `${input.getFullYear()}-${String(input.getMonth() + 1).padStart(2, "0")}-${String(input.getDate()).padStart(2, "0")}`;
 }
 
-function getStatusBadgeColor(isActive: boolean, lastValidatedAt: string | null) {
-  if (!isActive) return "#F97316";
-  if (!lastValidatedAt) return "#EF4444";
-  const days = (Date.now() - new Date(lastValidatedAt).getTime()) / (1000 * 60 * 60 * 24);
-  if (days <= 30) return "#22C55E";
-  if (days <= 60) return "#F97316";
-  return "#EF4444";
+function getBrazilNowDateAndHour() {
+  const parts = new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(new Date());
+
+  const map = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const year = map.year ?? "2000";
+  const month = map.month ?? "01";
+  const day = map.day ?? "01";
+  const hour = map.hour ?? "00";
+
+  return {
+    date: `${year}-${month}-${day}`,
+    time: `${hour}:00`,
+  };
 }
 
 export default function StudioPage() {
+  const brazilNow = useMemo(() => getBrazilNowDateAndHour(), []);
+
   const [activeTab, setActiveTab] = useState<StudioTab>("calendario");
   const [automationTab, setAutomationTab] = useState<AutomationTab>("aniversarios");
   const [brand, setBrand] = useState<StudioBrand>("la_music_school");
@@ -127,6 +640,65 @@ export default function StudioPage() {
   const [ninaConfig, setNinaConfig] = useState<NinaConfig | null>(null);
   const [pendingApprovals, setPendingApprovals] = useState(0);
   const [posts, setPosts] = useState<StudioPost[]>([]);
+  const [videos, setVideos] = useState<StudioVideoItem[]>([]);
+  const [clipsByVideo, setClipsByVideo] = useState<Record<string, StudioClipItem[]>>({});
+  const [expandedVideoIds, setExpandedVideoIds] = useState<Record<string, boolean>>({});
+  const [loadingClipsByVideo, setLoadingClipsByVideo] = useState<Record<string, boolean>>({});
+  const [videoUploadTitle, setVideoUploadTitle] = useState("");
+  const [videoUploadBrand, setVideoUploadBrand] = useState<StudioBrand>("la_music_school");
+  const [videoUploadEventName, setVideoUploadEventName] = useState("");
+  const [videoUploadFile, setVideoUploadFile] = useState<File | null>(null);
+  const [videoUploadYouTubeUrl, setVideoUploadYouTubeUrl] = useState("");
+  const [videoUploadDragOver, setVideoUploadDragOver] = useState(false);
+  const [videoUploadStage, setVideoUploadStage] = useState<VideoUploadStage>("idle");
+  const [videoUploadProgress, setVideoUploadProgress] = useState(0);
+  const [videoPollingMessages, setVideoPollingMessages] = useState<Record<string, string>>({});
+  const [videoPollingBusyIds, setVideoPollingBusyIds] = useState<Record<string, boolean>>({});
+  const [clipPollingBusyIds, setClipPollingBusyIds] = useState<Record<string, boolean>>({});
+  const [clipRenderInvokingIds, setClipRenderInvokingIds] = useState<Record<string, boolean>>({});
+  const [clipModeratingIds, setClipModeratingIds] = useState<Record<string, boolean>>({});
+  const [clipPublishingIds, setClipPublishingIds] = useState<Record<string, boolean>>({});
+
+  // Submagic config (Fase 1 + 2)
+  const [selectedPreset, setSelectedPreset] = useState<ContentPresetKey>('workshop');
+  const [submagicConfig, setSubmagicConfig] = useState<SubmagicConfig>({
+    // Fase 1: Magic Clips
+    templateName: 'Hormozi 2',
+    minClipLength: 30,
+    maxClipLength: 90,
+    faceTracking: true,
+    disableCaptions: false,
+    maxClips: 8,
+    // Fase 2: Pós-processamento
+    cleanAudio: false,
+    removeSilencePace: null,
+    removeBadTakes: false,
+    magicZooms: false,
+    magicBrolls: false,
+    magicBrollsPercentage: 50,
+  });
+  const [showSubmagicConfig, setShowSubmagicConfig] = useState(false);
+
+  // Modal "Publicar vídeo direto"
+  const [showPublishVideoModal, setShowPublishVideoModal] = useState(false);
+  const [selectedVideoForPublish, setSelectedVideoForPublish] = useState<StudioVideoItem | null>(null);
+  const [publishVideoCaption, setPublishVideoCaption] = useState("");
+  const [publishVideoBrand, setPublishVideoBrand] = useState<StudioBrand>("la_music_school");
+  const [publishVideoFormat, setPublishVideoFormat] = useState<"reels" | "story">("reels");
+  const [isPublishingVideo, setIsPublishingVideo] = useState(false);
+
+  // Modal de preview de clipe
+  const [previewClip, setPreviewClip] = useState<{ url: string; title: string } | null>(null);
+
+  // Modal de publicação de clipe (Reels / Stories)
+  const [clipPublishModal, setClipPublishModal] = useState<{
+    open: boolean;
+    clip: StudioClipItem | null;
+    format: 'REELS' | 'STORIES';
+    isPublishing: boolean;
+    error: string | null;
+  }>({ open: false, clip: null, format: 'REELS', isPublishing: false, error: null });
+
   const [birthdays, setBirthdays] = useState<PhotoAsset[]>([]);
   const [birthdayHistory, setBirthdayHistory] = useState<Array<{ id: string; student_name: string; approval_status: string; created_at: string }>>([]);
   const [commemorativeDates, setCommemorativeDates] = useState<CommemorativeDateItem[]>([]);
@@ -150,12 +722,35 @@ export default function StudioPage() {
   // Modal de upload de evento
   const [showEventUploadModal, setShowEventUploadModal] = useState(false);
   const [eventName, setEventName] = useState("");
-  const [eventDate, setEventDate] = useState(toIsoDate(new Date()));
+  const [eventDate, setEventDate] = useState(() => brazilNow.date);
   const [eventBrand, setEventBrand] = useState<StudioBrand>("la_music_school");
   const [eventFiles, setEventFiles] = useState<File[]>([]);
   const [isEventUploading, setIsEventUploading] = useState(false);
   const [eventUploadProgress, setEventUploadProgress] = useState(0);
+  const [eventUploadedCount, setEventUploadedCount] = useState(0);
+  const [eventFailedCount, setEventFailedCount] = useState(0);
   const [eventDragOver, setEventDragOver] = useState(false);
+
+  // Grouped events for "Eventos" tab
+  const [groupedEvents, setGroupedEvents] = useState<GroupedEvent[]>([]);
+  const [eventsTotal, setEventsTotal] = useState(0);
+
+  // Event detail modal
+  const [selectedEvent, setSelectedEvent] = useState<GroupedEvent | null>(null);
+  const [showEventDetailModal, setShowEventDetailModal] = useState(false);
+  const [eventDetailPhotos, setEventDetailPhotos] = useState<PhotoAsset[]>([]);
+  const [loadingEventPhotos, setLoadingEventPhotos] = useState(false);
+
+  // Delete confirmation
+  const [eventToDelete, setEventToDelete] = useState<GroupedEvent | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  // Add photos to existing event
+  const [showAddPhotosModal, setShowAddPhotosModal] = useState(false);
+  const [targetEventForPhotos, setTargetEventForPhotos] = useState<GroupedEvent | null>(null);
+  const [additionalPhotos, setAdditionalPhotos] = useState<File[]>([]);
+  const [isAddingPhotos, setIsAddingPhotos] = useState(false);
+  const [addPhotosProgress, setAddPhotosProgress] = useState(0);
 
   const [platformFilter, setPlatformFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
@@ -164,14 +759,20 @@ export default function StudioPage() {
   const [postPlatform, setPostPlatform] = useState<StudioPlatform>("story");
   const [postCaption, setPostCaption] = useState("");
   const [postBrief, setPostBrief] = useState("");
-  const [postDate, setPostDate] = useState(toIsoDate(new Date()));
-  const [postTime, setPostTime] = useState("14:00");
+  const [postDate, setPostDate] = useState(() => brazilNow.date);
+  const [postTime, setPostTime] = useState(() => brazilNow.time);
   const [creationMode, setCreationMode] = useState<"nina" | "manual">("nina");
   const [ninaPreviewUrl, setNinaPreviewUrl] = useState<string | null>(null);
   const [ninaHashtags, setNinaHashtags] = useState<string[]>([]);
   const [ninaGenerationMethod, setNinaGenerationMethod] = useState<string | null>(null);
   const [isGeneratingWithNina, setIsGeneratingWithNina] = useState(false);
   const [isPublishingNow, setIsPublishingNow] = useState(false);
+  const [isScheduling, setIsScheduling] = useState(false);
+
+  // Event photos for Nina (aba Criar)
+  const [eventPhotosForNina, setEventPhotosForNina] = useState<PhotoAsset[]>([]);
+  const [selectedEventPhotoForNina, setSelectedEventPhotoForNina] = useState<PhotoAsset | null>(null);
+  const [loadingEventPhotosForNina, setLoadingEventPhotosForNina] = useState(false);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -179,6 +780,8 @@ export default function StudioPage() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [selectedAssetForUpload, setSelectedAssetForUpload] = useState<PhotoAsset | null>(null);
+  const videoPollingTimersRef = useRef<Record<string, ReturnType<typeof setTimeout> | null>>({});
+  const clipPollingTimersRef = useRef<Record<string, ReturnType<typeof setTimeout> | null>>({});
 
   const supabase = useMemo(() => createClient(), []);
 
@@ -201,6 +804,514 @@ export default function StudioPage() {
   const monthLabel = useMemo(
     () => calendarDate.toLocaleDateString("pt-BR", { month: "long", year: "numeric" }),
     [calendarDate]
+  );
+
+  const renderVideoTab = () => (
+    <div className="grid gap-4 xl:grid-cols-[420px_1fr]">
+      <Card variant="default" className="space-y-4">
+        <h3 className="text-sm font-semibold text-slate-100">Upload de vídeo</h3>
+
+        <div
+          onDragOver={(event) => {
+            event.preventDefault();
+            setVideoUploadDragOver(true);
+          }}
+          onDragLeave={() => setVideoUploadDragOver(false)}
+          onDrop={(event) => {
+            event.preventDefault();
+            setVideoUploadDragOver(false);
+            const file = event.dataTransfer.files?.[0] ?? null;
+            handleVideoFileSelected(file);
+          }}
+          className={cn(
+            "rounded-xl border-2 border-dashed p-4 text-center transition-colors",
+            videoUploadDragOver ? "border-cyan-400 bg-cyan-500/10" : "border-slate-700 bg-slate-900/40"
+          )}
+        >
+          <Upload size={24} className="mx-auto mb-2 text-slate-400" />
+          <p className="text-sm text-slate-300">Arraste um MP4/MOV ou clique para selecionar</p>
+          <p className="text-xs text-slate-500">Tamanho máximo: 2GB</p>
+          <label className="mt-3 inline-flex cursor-pointer rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800">
+            Selecionar vídeo
+            <input
+              type="file"
+              accept="video/mp4,video/quicktime,video/mov,.mp4,.mov"
+              className="hidden"
+              onChange={(event) => handleVideoFileSelected(event.target.files?.[0] ?? null)}
+            />
+          </label>
+          {videoUploadFile ? (
+            <p className="mt-3 text-xs text-cyan-400">
+              {videoUploadFile.name} • {(videoUploadFile.size / (1024 * 1024)).toFixed(1)}MB
+            </p>
+          ) : null}
+        </div>
+
+        {/* Divider "ou" */}
+        <div className="flex items-center gap-3">
+          <div className="h-px flex-1 bg-slate-700" />
+          <span className="text-xs text-slate-500">ou</span>
+          <div className="h-px flex-1 bg-slate-700" />
+        </div>
+
+        {/* YouTube URL */}
+        <div className="space-y-2">
+          <label className="text-xs text-slate-400">URL do YouTube</label>
+          <input
+            value={videoUploadYouTubeUrl}
+            onChange={(event) => {
+              setVideoUploadYouTubeUrl(event.target.value);
+              if (event.target.value.trim()) setVideoUploadFile(null);
+            }}
+            className="h-10 w-full rounded-lg border border-slate-700 bg-slate-900/70 px-3 text-sm text-slate-100"
+            placeholder="https://www.youtube.com/watch?v=..."
+          />
+          {videoUploadYouTubeUrl && /^https?:\/\/(www\.)?(youtube\.com|youtu\.be)\/.+/.test(videoUploadYouTubeUrl) && (
+            <p className="text-xs text-cyan-400">URL válida do YouTube detectada</p>
+          )}
+        </div>
+
+        <div className="space-y-2">
+          <label className="text-xs text-slate-400">Título</label>
+          <input
+            value={videoUploadTitle}
+            onChange={(event) => setVideoUploadTitle(event.target.value)}
+            className="h-10 w-full rounded-lg border border-slate-700 bg-slate-900/70 px-3 text-sm text-slate-100"
+            placeholder="Ex: Aula de guitarra - highlights"
+          />
+        </div>
+
+        <div className="grid grid-cols-2 gap-2">
+          <div className="space-y-2">
+            <label className="text-xs text-slate-400">Marca</label>
+            <Select value={videoUploadBrand} onValueChange={(value) => setVideoUploadBrand(value as StudioBrand)}>
+              <SelectTrigger className="h-10 border-slate-700 bg-slate-900/70 text-slate-200"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="la_music_school">LA Music School</SelectItem>
+                <SelectItem value="la_music_kids">LA Music Kids</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-xs text-slate-400">Evento (opcional)</label>
+            <input
+              value={videoUploadEventName}
+              onChange={(event) => setVideoUploadEventName(event.target.value)}
+              className="h-10 w-full rounded-lg border border-slate-700 bg-slate-900/70 px-3 text-sm text-slate-100"
+              placeholder="Nome do evento"
+            />
+          </div>
+        </div>
+
+        {videoUploadStage !== "idle" ? (
+          <div className="rounded-lg border border-slate-700 bg-slate-900/60 p-3">
+            <div className="mb-2 flex items-center gap-2 text-cyan-300">
+              <SpinnerGap size={14} className="animate-spin" />
+              <span className="text-sm font-medium">
+                {videoUploadStage === "validating" && "Validando arquivo..."}
+                {videoUploadStage === "uploading" && `Enviando vídeo... ${videoUploadProgress}%`}
+                {videoUploadStage === "processing" && "Registrando vídeo no Studio..."}
+              </span>
+            </div>
+            <div className="h-1.5 overflow-hidden rounded-full bg-slate-800">
+              <div
+                className="h-full rounded-full bg-cyan-500 transition-all duration-300"
+                style={{ width: videoUploadStage === "uploading" ? `${videoUploadProgress}%` : "33%" }}
+              />
+            </div>
+          </div>
+        ) : null}
+
+        <Button
+          className="w-full"
+          variant="primary"
+          disabled={videoUploadStage !== "idle"}
+          onClick={() => void handleVideoUpload()}
+        >
+          <Upload size={14} /> {/^https?:\/\/(www\.)?(youtube\.com|youtu\.be)\/.+/.test(videoUploadYouTubeUrl.trim()) ? "Adicionar YouTube" : "Enviar vídeo"}
+        </Button>
+
+        {/* Preset Selector */}
+        <div className="border-t border-slate-800 pt-4">
+          <p className="text-xs text-slate-400 mb-2">Tipo de conteúdo</p>
+          <div className="grid grid-cols-5 gap-2">
+            {(Object.entries(CONTENT_PRESETS) as [ContentPresetKey, typeof CONTENT_PRESETS[ContentPresetKey]][]).map(([key, preset]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => {
+                  setSelectedPreset(key);
+                  setSubmagicConfig(prev => ({
+                    ...prev,
+                    templateName: preset.templateName,
+                    minClipLength: preset.minClipLength,
+                    maxClipLength: preset.maxClipLength,
+                    faceTracking: preset.faceTracking,
+                    disableCaptions: preset.disableCaptions,
+                    maxClips: preset.maxClips,
+                  }));
+                }}
+                className={cn(
+                  "flex flex-col items-center p-2 rounded-lg border text-xs transition-all",
+                  selectedPreset === key
+                    ? "border-cyan-500 bg-cyan-500/10 text-cyan-400"
+                    : "border-slate-700 text-slate-400 hover:border-slate-500"
+                )}
+              >
+                <span className="text-base">{preset.label.split(' ')[0]}</span>
+                <span className="mt-0.5 text-center leading-tight text-[10px]">{preset.label.split(' ').slice(1).join(' ')}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Painel de Configuração Submagic */}
+        <div className="border-t border-slate-800 pt-4">
+          <button
+            type="button"
+            onClick={() => setShowSubmagicConfig(!showSubmagicConfig)}
+            className="flex w-full items-center justify-between"
+          >
+            <h3 className="text-sm font-semibold text-slate-100 flex items-center gap-2">
+              <Sparkle size={16} className="text-cyan-400" />
+              Ajustes Avançados
+            </h3>
+            <CaretRight size={14} className={cn("text-slate-400 transition-transform", showSubmagicConfig && "rotate-90")} />
+          </button>
+
+          {showSubmagicConfig && (
+            <div className="space-y-4 pt-4">
+              {/* Max Clips Slider */}
+              <div className="space-y-2">
+                <label className="text-xs text-slate-400">Máximo de clips: {submagicConfig.maxClips}</label>
+                <input
+                  type="range"
+                  min={3}
+                  max={20}
+                  step={1}
+                  value={submagicConfig.maxClips}
+                  onChange={(e) => setSubmagicConfig(prev => ({ ...prev, maxClips: Number(e.target.value) }))}
+                  className="w-full accent-cyan-500"
+                />
+                <div className="flex justify-between text-[10px] text-slate-500">
+                  <span>3 melhores</span>
+                  <span>20 clips</span>
+                </div>
+              </div>
+
+              {/* Toggle Legendas */}
+              <Switch
+                checked={!submagicConfig.disableCaptions}
+                onCheckedChange={(checked) => setSubmagicConfig((prev) => ({ ...prev, disableCaptions: !checked }))}
+                label="Legendas"
+                description="Desativar para vídeos sem legenda"
+              />
+
+              {/* Template de Legenda - só mostrar se legendas ativas */}
+              {!submagicConfig.disableCaptions && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs text-slate-400">Template de Legenda</label>
+                    <a
+                      href="https://www.submagic.co/templates"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs text-cyan-400 hover:text-cyan-300"
+                    >
+                      Ver previews reais →
+                    </a>
+                  </div>
+                  <Select
+                    value={submagicConfig.templateName}
+                    onValueChange={(v) => setSubmagicConfig(prev => ({ ...prev, templateName: v }))}
+                  >
+                    <SelectTrigger className="h-10 border-slate-700 bg-slate-900/70">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {SUBMAGIC_TEMPLATES.map((t) => (
+                        <SelectItem key={t} value={t}>{t}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
+              {/* Duração dos Clips */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <label className="text-xs text-slate-400">Duração Mínima (s)</label>
+                  <input
+                    type="number"
+                    min={15}
+                    max={300}
+                    value={submagicConfig.minClipLength}
+                    onChange={(e) => setSubmagicConfig(prev => ({ ...prev, minClipLength: Number(e.target.value) }))}
+                    className="h-10 w-full rounded-lg border border-slate-700 bg-slate-900/70 px-3 text-sm text-slate-100"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs text-slate-400">Duração Máxima (s)</label>
+                  <input
+                    type="number"
+                    min={15}
+                    max={300}
+                    value={submagicConfig.maxClipLength}
+                    onChange={(e) => setSubmagicConfig(prev => ({ ...prev, maxClipLength: Number(e.target.value) }))}
+                    className="h-10 w-full rounded-lg border border-slate-700 bg-slate-900/70 px-3 text-sm text-slate-100"
+                  />
+                </div>
+              </div>
+
+              {/* Face Tracking */}
+              <Switch
+                checked={submagicConfig.faceTracking}
+                onCheckedChange={(checked) => setSubmagicConfig((prev) => ({ ...prev, faceTracking: checked }))}
+                label="Face Tracking"
+                description="Mantém o rosto centralizado no formato 9:16"
+              />
+
+              {/* Seção: Pós-processamento (Em breve) */}
+              <div className="space-y-3 pt-3 border-t border-slate-800 opacity-50">
+                <div className="flex items-center gap-2">
+                  <p className="text-xs font-medium text-slate-400">Pós-processamento</p>
+                  <span className="rounded bg-slate-700 px-1.5 py-0.5 text-[10px] font-medium text-slate-400">Em breve</span>
+                </div>
+
+                <Switch
+                  checked={false}
+                  disabled
+                  onCheckedChange={() => {}}
+                  label="Limpar Áudio"
+                  description="Remove ruído de fundo via IA"
+                />
+
+                <Switch
+                  checked={false}
+                  disabled
+                  onCheckedChange={() => {}}
+                  label="Remover Bad Takes"
+                  description="IA detecta e remove tomadas ruins"
+                />
+
+                <Switch
+                  checked={false}
+                  disabled
+                  onCheckedChange={() => {}}
+                  label="Magic Zooms"
+                  description="Zoom automático para engajamento"
+                />
+
+                <Switch
+                  checked={false}
+                  disabled
+                  onCheckedChange={() => {}}
+                  label="B-Roll Automático"
+                  description="IA insere imagens de contexto"
+                />
+              </div>
+            </div>
+          )}
+        </div>
+      </Card>
+
+      <Card variant="default" className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-slate-100">Vídeos</h3>
+          <Button variant="outline" size="sm" onClick={() => void loadVideos()}>
+            Atualizar
+          </Button>
+        </div>
+
+        {videos.length === 0 ? (
+          <p className="text-sm text-slate-500">Nenhum vídeo encontrado para esta marca.</p>
+        ) : (
+          <div className="space-y-2">
+            {videos.map((video) => {
+              const isExpanded = Boolean(expandedVideoIds[video.id]);
+              const isLoadingClips = Boolean(loadingClipsByVideo[video.id]);
+              const clips = clipsByVideo[video.id] ?? [];
+              const isVideoBusy = video.status === "transcribing" || video.status === "analyzing";
+
+              return (
+                <div key={video.id} className="rounded-lg border border-slate-800 bg-slate-900/50 p-3">
+                  <button
+                    type="button"
+                    onClick={() => void toggleVideoExpansion(video.id)}
+                    className="flex w-full items-center justify-between gap-3 text-left"
+                  >
+                    <div>
+                      <p className="text-sm font-medium text-slate-100">{video.title || "Vídeo sem título"}</p>
+                      <p className="text-xs text-slate-500">
+                        {video.event_name ? `${video.event_name} • ` : ""}
+                        {video.duration_seconds ? `${video.duration_seconds}s • ` : ""}
+                        {new Date(video.created_at).toLocaleString("pt-BR")}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Badge
+                        variant="status"
+                        color={VIDEO_STATUS_COLORS[video.status]}
+                        className={isVideoBusy ? "animate-pulse" : undefined}
+                      >
+                        {VIDEO_STATUS_LABELS[video.status]}
+                      </Badge>
+                      <CaretRight size={14} className={cn("text-slate-400 transition-transform", isExpanded ? "rotate-90" : "")}/>
+                    </div>
+                  </button>
+
+                  {(video.status === "uploaded" || video.status === "ready") ? (
+                    <div className="mt-2 flex items-center justify-end gap-2">
+                      {video.status === "uploaded" && (
+                        <Button
+                          size="sm"
+                          variant="accent"
+                          disabled={Boolean(videoPollingBusyIds[video.id])}
+                          onClick={() => void handleProcessVideo(video)}
+                        >
+                          <Sparkle size={14} /> Processar com Nina ✨
+                        </Button>
+                      )}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          setSelectedVideoForPublish(video);
+                          setPublishVideoBrand(video.brand ?? "la_music_school");
+                          setPublishVideoCaption("");
+                          setShowPublishVideoModal(true);
+                        }}
+                      >
+                        Publicar direto →
+                      </Button>
+                    </div>
+                  ) : null}
+
+                  {videoPollingMessages[video.id] ? (
+                    <p className="mt-2 text-xs text-cyan-300">{videoPollingMessages[video.id]}</p>
+                  ) : null}
+
+                  {isExpanded ? (
+                    <div className="mt-3 space-y-2 border-t border-slate-800 pt-3">
+                      {isLoadingClips ? (
+                        <p className="text-xs text-slate-500">Carregando clipes...</p>
+                      ) : clips.length === 0 ? (
+                        <p className="text-xs text-slate-500">Nenhum clipe encontrado para este vídeo.</p>
+                      ) : (
+                        clips.map((clip) => {
+                          const isClipBusy = clip.status === "rendering";
+                          const isRenderingInvoke = Boolean(clipRenderInvokingIds[clip.id]);
+                          const isModerating = Boolean(clipModeratingIds[clip.id]);
+                          const isPollingClip = Boolean(clipPollingBusyIds[clip.id]);
+                          const isPublishing = Boolean(clipPublishingIds[clip.id]);
+                          return (
+                            <div key={clip.id} className="flex items-center justify-between rounded-md border border-slate-800 bg-slate-900/60 p-2">
+                              <div>
+                                <p className="text-xs text-slate-200">{clip.title || "Sem frase"}</p>
+                                <p className="text-[11px] text-slate-500">{clip.duration_seconds ? `${clip.duration_seconds}s` : "Duração não informada"}</p>
+                                {clip.status === "published" && clip.published_at ? (
+                                  <p className="text-[11px] text-teal-300">Publicado em {new Date(clip.published_at).toLocaleString("pt-BR")}</p>
+                                ) : null}
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Badge
+                                  variant="status"
+                                  color={CLIP_STATUS_COLORS[clip.status]}
+                                  className={isClipBusy ? "animate-pulse" : undefined}
+                                >
+                                  {CLIP_STATUS_LABELS[clip.status]}
+                                </Badge>
+
+                                {clip.status === "pending" ? (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    disabled={isRenderingInvoke || isPollingClip}
+                                    onClick={() => void handleRenderClip(clip)}
+                                  >
+                                    {isRenderingInvoke ? <SpinnerGap size={12} className="animate-spin" /> : null}
+                                    Renderizar
+                                  </Button>
+                                ) : null}
+
+                                {clip.status === "rendering" ? (
+                                  <span className="inline-flex items-center gap-1 text-xs text-amber-300">
+                                    <SpinnerGap size={12} className="animate-spin" /> Renderizando...
+                                  </span>
+                                ) : null}
+
+                                {clip.status === "ready" ? (
+                                  <>
+                                    {clip.file_url ? (
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          console.log("[DEBUG] Ver clicked:", clip.file_url);
+                                          setPreviewClip({ url: clip.file_url as string, title: clip.title || "Clipe" });
+                                        }}
+                                      >
+                                        ▶ Ver
+                                      </Button>
+                                    ) : null}
+                                    <Button
+                                      size="sm"
+                                      variant="accent"
+                                      disabled={isModerating}
+                                      onClick={() => void handleClipModeration(clip.id, "approved")}
+                                    >
+                                      ✓ Aprovar
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      disabled={isModerating}
+                                      onClick={() => void handleClipModeration(clip.id, "failed")}
+                                    >
+                                      ✗ Recusar
+                                    </Button>
+                                  </>
+                                ) : null}
+
+                                {clip.status === "approved" ? (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    disabled={isPublishing}
+                                    onClick={() => setClipPublishModal({ open: true, clip, format: 'REELS', isPublishing: false, error: null })}
+                                  >
+                                    {isPublishing ? <SpinnerGap size={12} className="animate-spin" /> : null}
+                                    Publicar →
+                                  </Button>
+                                ) : null}
+
+                                {clip.status === "failed" ? (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    disabled={isRenderingInvoke || isPollingClip}
+                                    onClick={() => void handleRenderClip(clip)}
+                                  >
+                                    {isRenderingInvoke ? <SpinnerGap size={12} className="animate-spin" /> : null}
+                                    Tentar novamente
+                                  </Button>
+                                ) : null}
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Card>
+    </div>
   );
 
   const monthDays = useMemo(() => {
@@ -239,6 +1350,7 @@ export default function StudioPage() {
   }, [filteredPosts]);
 
   const assetsPages = Math.max(1, Math.ceil(assetsTotal / 48));
+  const eventsPages = Math.max(1, Math.ceil(eventsTotal / 24));
 
   const loadBaseData = useCallback(async () => {
     setLoading(true);
@@ -290,6 +1402,785 @@ export default function StudioPage() {
     }
   }, [assetsOnlyWithPhoto, assetsPage, assetsSearch, brand, assetsFilterType]);
 
+  const loadGroupedEvents = useCallback(async () => {
+    try {
+      const response = await getGroupedEvents(brand, assetsPage, 24, assetsSearch);
+      setGroupedEvents(response.events);
+      setEventsTotal(response.total);
+    } catch (err) {
+      console.error(err);
+      toast.error("Erro ao carregar eventos.");
+    }
+  }, [brand, assetsPage, assetsSearch]);
+
+  const loadVideos = useCallback(async () => {
+    try {
+      const rows = await getStudioVideosByBrand(brand);
+      setVideos(rows);
+    } catch (err) {
+      console.error(err);
+      toast.error("Erro ao carregar vídeos.");
+    }
+  }, [brand]);
+
+  // Carrega fotos de eventos para seleção na aba Criar
+  const loadEventPhotosForNina = useCallback(async () => {
+    setLoadingEventPhotosForNina(true);
+    try {
+      // Busca fotos de eventos (source != emusys, event_name IS NOT NULL)
+      const { rows } = await getPhotoAssets(brand, 1, 18, true, "", "eventos");
+      setEventPhotosForNina(rows);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoadingEventPhotosForNina(false);
+    }
+  }, [brand]);
+
+  const loadVideoClips = useCallback(async (videoId: string) => {
+    setLoadingClipsByVideo((prev) => ({ ...prev, [videoId]: true }));
+    try {
+      const clips = await getStudioClipsByVideoId(videoId);
+      setClipsByVideo((prev) => ({ ...prev, [videoId]: clips }));
+    } catch (err) {
+      console.error(err);
+      toast.error("Erro ao carregar clipes do vídeo.");
+    } finally {
+      setLoadingClipsByVideo((prev) => ({ ...prev, [videoId]: false }));
+    }
+  }, []);
+
+  const updateClipInState = useCallback((clipId: string, patch: Partial<StudioClipItem>) => {
+    setClipsByVideo((prev) => {
+      const next: Record<string, StudioClipItem[]> = {};
+      for (const [videoId, clips] of Object.entries(prev)) {
+        next[videoId] = clips.map((clip) => (clip.id === clipId ? { ...clip, ...patch } : clip));
+      }
+      return next;
+    });
+  }, []);
+
+  const toggleVideoExpansion = useCallback(async (videoId: string) => {
+    setExpandedVideoIds((prev) => ({ ...prev, [videoId]: !prev[videoId] }));
+
+    if (clipsByVideo[videoId]) {
+      return;
+    }
+
+    await loadVideoClips(videoId);
+  }, [clipsByVideo, loadVideoClips]);
+
+  const clearVideoPolling = useCallback((videoId: string) => {
+    const timer = videoPollingTimersRef.current[videoId];
+    if (timer) {
+      clearTimeout(timer);
+    }
+    videoPollingTimersRef.current[videoId] = null;
+    setVideoPollingBusyIds((prev) => ({ ...prev, [videoId]: false }));
+  }, []);
+
+  const clearClipPolling = useCallback((clipId: string) => {
+    const timer = clipPollingTimersRef.current[clipId];
+    if (timer) {
+      clearTimeout(timer);
+    }
+    clipPollingTimersRef.current[clipId] = null;
+    setClipPollingBusyIds((prev) => ({ ...prev, [clipId]: false }));
+  }, []);
+
+  const countKeyMoments = useCallback((keyMoments: StudioVideoPollingItem["key_moments"]): number => {
+    if (Array.isArray(keyMoments)) return keyMoments.length;
+    if (keyMoments && typeof keyMoments === "object") {
+      const maybeRecord = keyMoments as Record<string, unknown>;
+      if (Array.isArray(maybeRecord.moments)) return maybeRecord.moments.length;
+      return Object.keys(maybeRecord).length;
+    }
+    return 0;
+  }, []);
+
+  const pollVideoStatus = useCallback(async (
+    videoId: string,
+    noChangeAttempts = 0,
+    lastStatus?: StudioVideoStatus,
+  ) => {
+    try {
+      const row = await getStudioVideoPollingById(videoId);
+      if (!row) {
+        clearVideoPolling(videoId);
+        return;
+      }
+
+      const currentStatus = row.status;
+
+      setVideos((prev) => prev.map((video) => (
+        video.id === videoId
+          ? { ...video, status: currentStatus }
+          : video
+      )));
+
+      if (currentStatus === "transcribing") {
+        setVideoPollingMessages((prev) => ({ ...prev, [videoId]: "Transcrevendo áudio em PT-BR..." }));
+      }
+
+      if (currentStatus === "transcribed") {
+        setVideoPollingMessages((prev) => ({ ...prev, [videoId]: "Transcrição concluída. Analisando momentos..." }));
+      }
+
+      if (currentStatus === "analyzing") {
+        setVideoPollingMessages((prev) => ({ ...prev, [videoId]: "Identificando os melhores momentos..." }));
+      }
+
+      if (currentStatus === "ready") {
+        const totalMoments = countKeyMoments(row.key_moments);
+        const message = `✅ ${totalMoments} clipes identificados`;
+        setVideoPollingMessages((prev) => ({ ...prev, [videoId]: message }));
+        toast.success(message);
+        setExpandedVideoIds((prev) => ({ ...prev, [videoId]: true }));
+        await loadVideoClips(videoId);
+        clearVideoPolling(videoId);
+        return;
+      }
+
+      if (currentStatus === "failed") {
+        setVideoPollingMessages((prev) => ({ ...prev, [videoId]: "❌ Erro no processamento" }));
+        toast.error("❌ Erro no processamento");
+        clearVideoPolling(videoId);
+        return;
+      }
+
+      if (!TRANSITIONAL_STATUSES.includes(currentStatus)) {
+        clearVideoPolling(videoId);
+        return;
+      }
+
+      const nextNoChangeAttempts = currentStatus === lastStatus ? noChangeAttempts + 1 : 0;
+      if (nextNoChangeAttempts >= POLL_INTERVALS.length) {
+        clearVideoPolling(videoId);
+        return;
+      }
+
+      const delay = POLL_INTERVALS[nextNoChangeAttempts];
+      const timer = setTimeout(() => {
+        void pollVideoStatus(videoId, nextNoChangeAttempts, currentStatus);
+      }, delay);
+      videoPollingTimersRef.current[videoId] = timer;
+    } catch (err) {
+      console.error(err);
+      clearVideoPolling(videoId);
+      toast.error("Falha ao monitorar processamento do vídeo.");
+    }
+  }, [clearVideoPolling, countKeyMoments, loadVideoClips]);
+
+  const handleProcessVideo = useCallback(async (video: StudioVideoItem) => {
+    if (typeof video.file_size === "number" && video.file_size > MAX_PROCESS_VIDEO_BYTES) {
+      toast.error("Vídeo muito grande para processamento automático. Use um arquivo de até 2GB.");
+      return;
+    }
+
+    if (video.error_message) {
+      toast.error(`Último erro: ${video.error_message}`);
+    }
+
+    clearVideoPolling(video.id);
+    setVideoPollingBusyIds((prev) => ({ ...prev, [video.id]: true }));
+
+    try {
+      const { error: fnError } = await supabase.functions.invoke("process-video", {
+        body: {
+          video_id: video.id,
+          config: submagicConfig,
+        },
+      });
+
+      if (fnError) {
+        throw new Error(fnError.message);
+      }
+
+      toast.success("Processamento iniciado.");
+      await loadVideos();
+      void pollVideoStatus(video.id, 0, undefined);
+    } catch (err) {
+      console.error(err);
+      setVideoPollingBusyIds((prev) => ({ ...prev, [video.id]: false }));
+      toast.error(err instanceof Error ? err.message : "Erro ao iniciar processamento do vídeo.");
+    }
+  }, [clearVideoPolling, loadVideos, pollVideoStatus, supabase, submagicConfig]);
+
+  // Handler para publicar vídeo diretamente (sem pipeline Nina)
+  const handlePublishVideoDirect = useCallback(async () => {
+    if (!selectedVideoForPublish) return;
+
+    setIsPublishingVideo(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        toast.error("Usuário não autenticado.");
+        return;
+      }
+
+      const postType = publishVideoFormat === "story" ? "story" : "reels";
+      const { data: postData, error: postError } = await supabase
+        .from("posts")
+        .insert({
+          title: selectedVideoForPublish.title || "Vídeo",
+          caption: publishVideoCaption,
+          post_type: postType,
+          status: "draft",
+          brand: publishVideoBrand,
+          created_by: user.id,
+          created_by_ai: false,
+          metadata: { video_url: selectedVideoForPublish.file_url },
+        } as never)
+        .select("id")
+        .single();
+
+      if (postError || !postData) {
+        console.error("[STUDIO] Post insert error:", postError);
+        toast.error("Erro ao criar post.");
+        return;
+      }
+
+      const createdPostId = (postData as { id: string }).id;
+
+      // Inserir na fila de publicação
+      const { error: queueError } = await supabase
+        .from("studio_publish_queue")
+        .insert({
+          post_id: createdPostId,
+          brand: publishVideoBrand,
+          platform: "instagram",
+          scheduled_for: new Date().toISOString(),
+          status: "pending",
+        } as never);
+
+      if (queueError) {
+        console.error("[STUDIO] Queue insert error:", queueError);
+        toast.error("Erro ao adicionar à fila.");
+        return;
+      }
+
+      // Publicar imediatamente
+      const { data: publishData, error: fnError } = await supabase.functions.invoke<PublishScheduledPostsResponse>("publish-scheduled-posts", {
+        body: { post_id: createdPostId },
+      });
+
+      if (fnError) {
+        toast.error(getPublishErrorMessage(fnError, publishData ?? undefined) ?? "Erro ao publicar vídeo.");
+        return;
+      }
+
+      if (!publishData?.success || (publishData.published ?? 0) < 1) {
+        toast.error(getPublishErrorMessage(null, publishData ?? undefined) ?? "Erro ao publicar vídeo.");
+        return;
+      }
+
+      toast.success("Vídeo enviado para publicação!");
+      setShowPublishVideoModal(false);
+      setSelectedVideoForPublish(null);
+      setPublishVideoCaption("");
+    } catch (err) {
+      console.error(err);
+      toast.error("Falha ao publicar vídeo.");
+    } finally {
+      setIsPublishingVideo(false);
+    }
+  }, [selectedVideoForPublish, publishVideoCaption, publishVideoBrand, publishVideoFormat, supabase]);
+
+  const pollClipStatus = useCallback(async (
+    clipId: string,
+    noChangeAttempts = 0,
+    lastStatus?: StudioClipStatus,
+  ) => {
+    try {
+      const row = await getStudioClipPollingById(clipId);
+      if (!row) {
+        clearClipPolling(clipId);
+        return;
+      }
+
+      const currentStatus = row.status;
+      updateClipInState(clipId, {
+        status: currentStatus,
+        file_url: row.file_url,
+      });
+
+      if (currentStatus === "ready" || currentStatus === "failed") {
+        clearClipPolling(clipId);
+        return;
+      }
+
+      if (!TRANSITIONAL_CLIP_STATUSES.includes(currentStatus)) {
+        clearClipPolling(clipId);
+        return;
+      }
+
+      const nextNoChangeAttempts = currentStatus === lastStatus ? noChangeAttempts + 1 : 0;
+      if (nextNoChangeAttempts >= POLL_INTERVALS.length) {
+        clearClipPolling(clipId);
+        return;
+      }
+
+      const delay = POLL_INTERVALS[nextNoChangeAttempts];
+      const timer = setTimeout(() => {
+        void pollClipStatus(clipId, nextNoChangeAttempts, currentStatus);
+      }, delay);
+      clipPollingTimersRef.current[clipId] = timer;
+    } catch (err) {
+      console.error(err);
+      clearClipPolling(clipId);
+      toast.error("Falha ao monitorar render do clipe.");
+    }
+  }, [clearClipPolling, updateClipInState]);
+
+  const handleRenderClip = useCallback(async (clip: StudioClipItem) => {
+    clearClipPolling(clip.id);
+    setClipRenderInvokingIds((prev) => ({ ...prev, [clip.id]: true }));
+
+    try {
+      updateClipInState(clip.id, { status: "rendering" });
+      const { error: fnError } = await supabase.functions.invoke("render-clip", {
+        body: { clip_id: clip.id },
+      });
+
+      if (fnError) {
+        throw new Error(fnError.message);
+      }
+
+      setClipPollingBusyIds((prev) => ({ ...prev, [clip.id]: true }));
+      void pollClipStatus(clip.id, 0, undefined);
+    } catch (err) {
+      console.error(err);
+      updateClipInState(clip.id, { status: "pending" });
+      toast.error(err instanceof Error ? err.message : "Erro ao iniciar render do clipe.");
+    } finally {
+      setClipRenderInvokingIds((prev) => ({ ...prev, [clip.id]: false }));
+    }
+  }, [clearClipPolling, pollClipStatus, supabase, updateClipInState]);
+
+  const handleClipModeration = useCallback(async (clipId: string, status: "approved" | "failed") => {
+    setClipModeratingIds((prev) => ({ ...prev, [clipId]: true }));
+    try {
+      const { error } = await supabase
+        .from("studio_clips")
+        .update({ status } as never)
+        .eq("id", clipId);
+
+      if (error) throw new Error(error.message);
+
+      updateClipInState(clipId, { status });
+      toast.success(status === "approved" ? "Clipe aprovado." : "Clipe recusado.");
+    } catch (err) {
+      console.error(err);
+      toast.error(err instanceof Error ? err.message : "Erro ao atualizar status do clipe.");
+    } finally {
+      setClipModeratingIds((prev) => ({ ...prev, [clipId]: false }));
+    }
+  }, [supabase, updateClipInState]);
+
+  const handlePublishClip = useCallback(async (clip: StudioClipItem) => {
+    setClipPublishingIds((prev) => ({ ...prev, [clip.id]: true }));
+    try {
+      const { data: authData } = await supabase.auth.getUser();
+      const createdBy = authData.user?.id;
+      if (!createdBy) {
+        toast.error("Sessão inválida. Faça login novamente para publicar.");
+        return;
+      }
+
+      // Etapa 1: criar post
+      const { data: postData, error: postErr } = await supabase
+        .from("posts")
+        .insert({
+          title: clip.title || "Clipe LA Music",
+          caption: clip.title || "",
+          post_type: "reels",
+          status: "draft",
+          brand: clip.brand ?? brand,
+          created_by: createdBy,
+          created_by_ai: true,
+          ai_agent_name: "Nina",
+          metadata: {
+            video_url: clip.file_url,
+            image_url: clip.file_url,
+            clip_id: clip.id,
+            video_id: clip.video_id,
+            start_seconds: clip.start_seconds,
+            end_seconds: clip.end_seconds,
+          },
+        } as never)
+        .select("id")
+        .single();
+
+      if (postErr || !postData) {
+        toast.error(postErr?.message || "Erro ao criar post");
+        return;
+      }
+
+      const createdPostId = (postData as { id: string }).id;
+
+      // Etapa 1.5: colocar na fila de publicação imediata
+      const { error: queueErr } = await supabase
+        .from("studio_publish_queue")
+        .insert({
+          post_id: createdPostId,
+          brand: clip.brand ?? brand,
+          platform: "instagram",
+          scheduled_for: new Date().toISOString(),
+          status: "pending",
+        } as never);
+
+      if (queueErr) {
+        toast.error(queueErr.message || "Erro ao enfileirar publicação");
+        return;
+      }
+
+      // Etapa 2: publicar
+      const { data: publishData, error: pubErr } = await supabase.functions.invoke<PublishScheduledPostsResponse>("publish-scheduled-posts", {
+        body: { post_id: createdPostId },
+      });
+
+      if (pubErr) {
+        toast.error(getPublishErrorMessage(pubErr, publishData ?? undefined) ?? "Erro ao publicar no Instagram");
+        return;
+      }
+
+      if (!publishData?.success || (publishData.published ?? 0) < 1) {
+        toast.error(getPublishErrorMessage(null, publishData ?? undefined) ?? "Publicação não concluída. Verifique credenciais/fila.");
+        return;
+      }
+
+      // Etapa 3: atualizar clipe
+      const publishedAt = new Date().toISOString();
+      const { error: clipUpdateErr } = await supabase
+        .from("studio_clips")
+        .update({
+          status: "published",
+          post_id: createdPostId,
+          published_at: publishedAt,
+        } as never)
+        .eq("id", clip.id);
+
+      if (clipUpdateErr) {
+        toast.error("Publicado, mas falhou ao atualizar o status do clipe.");
+        return;
+      }
+
+      updateClipInState(clip.id, {
+        status: "published",
+        post_id: createdPostId,
+        published_at: publishedAt,
+      });
+      toast.success("Clipe publicado no Instagram! 🎬");
+      await loadVideoClips(clip.video_id);
+    } catch (err) {
+      console.error(err);
+      toast.error("Erro ao publicar no Instagram");
+    } finally {
+      setClipPublishingIds((prev) => ({ ...prev, [clip.id]: false }));
+    }
+  }, [supabase, brand, updateClipInState, loadVideoClips]);
+
+  // Publicar clip com formato (Reels / Stories) via Meta Graph API direta
+  const publishClipWithFormat = useCallback(async () => {
+    const { clip, format } = clipPublishModal;
+    if (!clip) return;
+
+    setClipPublishModal(prev => ({ ...prev, isPublishing: true, error: null }));
+
+    try {
+      // 1. Buscar credenciais do Instagram
+      const clipBrand = clip.brand || brand;
+      const integrationName = clipBrand === 'la_music_kids' ? 'instagram_kids' : 'instagram_school';
+      const igUserId = clipBrand === 'la_music_kids' ? '17841404041835860' : '17841401761485758';
+
+      const { data: cred, error: credError } = await supabase
+        .from('integration_credentials')
+        .select('*')
+        .eq('integration_name', integrationName)
+        .single();
+
+      if (credError || !cred) {
+        throw new Error('Credenciais do Instagram não encontradas');
+      }
+
+      const credData = cred as { credentials?: { access_token?: string }; metadata?: { access_token?: string } };
+      const accessToken = credData.credentials?.access_token || credData.metadata?.access_token;
+      if (!accessToken) {
+        throw new Error('Token do Instagram não configurado');
+      }
+
+      // 2. Criar container na Meta API
+      if (!clip.file_url) {
+        throw new Error('Clipe sem URL de vídeo');
+      }
+      const createBody: Record<string, string> = {
+        video_url: clip.file_url,
+        media_type: format,
+        access_token: accessToken,
+      };
+      // Stories NÃO aceitam caption
+      if (format === 'REELS') {
+        createBody.caption = clip.title || '🎵 #LAMusic';
+      }
+
+      const createRes = await fetch(
+        `https://graph.facebook.com/v19.0/${igUserId}/media`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(createBody) }
+      );
+      const createData = await createRes.json() as { id?: string; error?: { message?: string } };
+      if (!createRes.ok || !createData.id) {
+        throw new Error(createData.error?.message || 'Erro ao criar container no Instagram');
+      }
+
+      // 3. Polling: aguardar container ficar pronto (max 60s)
+      const maxAttempts = 12;
+      let isReady = false;
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        await new Promise(r => setTimeout(r, 5000));
+        const statusRes = await fetch(
+          `https://graph.facebook.com/v19.0/${createData.id}?fields=status_code&access_token=${accessToken}`
+        );
+        const statusData = await statusRes.json() as { status_code?: string; error?: { message?: string } };
+        console.log(`[IG] Container status (attempt ${attempt + 1}):`, statusData.status_code);
+
+        if (statusData.status_code === 'FINISHED') {
+          isReady = true;
+          break;
+        }
+        if (statusData.status_code === 'ERROR') {
+          throw new Error('Instagram falhou ao processar o vídeo');
+        }
+      }
+
+      if (!isReady) {
+        throw new Error('Timeout: Instagram não terminou de processar o vídeo');
+      }
+
+      const publishRes = await fetch(
+        `https://graph.facebook.com/v19.0/${igUserId}/media_publish`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ creation_id: createData.id, access_token: accessToken })
+        }
+      );
+      const publishData = await publishRes.json() as { id?: string; error?: { message?: string } };
+      if (!publishRes.ok || !publishData.id) {
+        throw new Error(publishData.error?.message || 'Erro ao publicar no Instagram');
+      }
+
+      // 4. Atualizar banco
+      const publishedAt = new Date().toISOString();
+      await supabase
+        .from('studio_clips')
+        .update({
+          status: 'published',
+          published_at: publishedAt,
+        } as never)
+        .eq('id', clip.id);
+
+      // 5. Atualizar estado local
+      updateClipInState(clip.id, {
+        status: 'published',
+        published_at: publishedAt,
+      });
+
+      setClipPublishModal({ open: false, clip: null, format: 'REELS', isPublishing: false, error: null });
+      toast.success(`Clipe publicado como ${format === 'REELS' ? 'Reels' : 'Stories'}! 🎬`);
+      await loadVideoClips(clip.video_id);
+
+    } catch (err) {
+      console.error('[publishClipWithFormat]', err);
+      setClipPublishModal(prev => ({
+        ...prev,
+        isPublishing: false,
+        error: err instanceof Error ? err.message : 'Erro ao publicar'
+      }));
+    }
+  }, [clipPublishModal, supabase, brand, updateClipInState, loadVideoClips]);
+
+  const validateVideoFile = useCallback((file: File): string | null => {
+    const lowerName = file.name.toLowerCase();
+    const hasAllowedExtension = lowerName.endsWith(".mp4") || lowerName.endsWith(".mov");
+    const hasAllowedMime = ALLOWED_VIDEO_MIME_TYPES.includes(file.type);
+
+    if (!hasAllowedMime && !hasAllowedExtension) {
+      return "Formato inválido. Envie apenas MP4 ou MOV.";
+    }
+
+    if (file.size > MAX_VIDEO_SIZE_BYTES) {
+      return "Arquivo maior que 2GB. Envie um vídeo menor.";
+    }
+
+    return null;
+  }, []);
+
+  const handleVideoFileSelected = useCallback((file: File | null) => {
+    if (!file) {
+      setVideoUploadFile(null);
+      return;
+    }
+
+    const validationError = validateVideoFile(file);
+    if (validationError) {
+      setVideoUploadFile(null);
+      toast.error(validationError);
+      return;
+    }
+
+    setVideoUploadFile(file);
+  }, [validateVideoFile]);
+
+  const handleVideoUpload = useCallback(async () => {
+    if (!videoUploadTitle.trim()) {
+      toast.error("Informe o título do vídeo.");
+      return;
+    }
+
+    const isYouTubeUrl = /^https?:\/\/(www\.)?(youtube\.com|youtu\.be)\/.+/.test(videoUploadYouTubeUrl.trim());
+
+    if (!videoUploadFile && !isYouTubeUrl) {
+      toast.error("Selecione um arquivo de vídeo ou informe uma URL do YouTube.");
+      return;
+    }
+
+    try {
+      const { data: authData } = await supabase.auth.getUser();
+      const uploadedBy = authData.user?.id ?? null;
+
+      // ========== FLUXO YOUTUBE ==========
+      if (isYouTubeUrl) {
+        setVideoUploadStage("processing");
+
+        const youtubeUrl = videoUploadYouTubeUrl.trim();
+        const { error: insertError } = await supabase.from("studio_videos").insert({
+          title: videoUploadTitle.trim(),
+          brand: videoUploadBrand,
+          event_name: videoUploadEventName.trim() || null,
+          file_url: youtubeUrl,
+          storage_path: youtubeUrl,
+          file_size: null,
+          mime_type: "video/youtube",
+          status: "uploaded",
+          uploaded_by: uploadedBy,
+          metadata: { source: "youtube", youtube_url: youtubeUrl },
+        } as never);
+
+        if (insertError) throw new Error(insertError.message);
+
+        toast.success("Vídeo do YouTube adicionado!");
+        setVideoUploadTitle("");
+        setVideoUploadEventName("");
+        setVideoUploadYouTubeUrl("");
+        setVideoUploadFile(null);
+
+        if (brand !== videoUploadBrand) {
+          setBrand(videoUploadBrand);
+        }
+
+        const refreshedVideos = await getStudioVideosByBrand(videoUploadBrand);
+        setVideos(refreshedVideos);
+        setVideoUploadStage("idle");
+        return;
+      }
+
+      // ========== FLUXO UPLOAD ARQUIVO ==========
+      setVideoUploadStage("validating");
+      const validationError = validateVideoFile(videoUploadFile!);
+      if (validationError) {
+        setVideoUploadStage("idle");
+        toast.error(validationError);
+        return;
+      }
+
+      setVideoUploadStage("uploading");
+      setVideoUploadProgress(0);
+
+      const safeName = videoUploadFile!.name
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/\s+/g, "-")
+        .replace(/[^a-zA-Z0-9._-]/g, "");
+
+      const storagePath = `raw/${Date.now()}-${safeName}`;
+
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+      if (!accessToken) throw new Error("Sessão expirada. Faça login novamente.");
+
+      const projectId = process.env.NEXT_PUBLIC_SUPABASE_URL?.replace("https://", "").replace(".supabase.co", "") ?? "";
+
+      await new Promise<void>((resolve, reject) => {
+        const upload = new tus.Upload(videoUploadFile!, {
+          endpoint: `https://${projectId}.storage.supabase.co/storage/v1/upload/resumable`,
+          retryDelays: [0, 3000, 5000, 10000, 20000],
+          headers: {
+            authorization: `Bearer ${accessToken}`,
+            apikey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "",
+          },
+          uploadDataDuringCreation: false,
+          removeFingerprintOnSuccess: true,
+          metadata: {
+            bucketName: "videos",
+            objectName: storagePath,
+            contentType: videoUploadFile!.type || "video/mp4",
+            cacheControl: "3600",
+          },
+          chunkSize: 6 * 1024 * 1024,
+          onError: (error) => reject(error),
+          onProgress: (bytesUploaded, bytesTotal) => {
+            const pct = Math.round((bytesUploaded / bytesTotal) * 100);
+            setVideoUploadProgress(pct);
+          },
+          onSuccess: () => resolve(),
+        });
+
+        upload.findPreviousUploads().then((previousUploads) => {
+          if (previousUploads.length) {
+            upload.resumeFromPreviousUpload(previousUploads[0]);
+          }
+          upload.start();
+        });
+      });
+
+      const { data: publicData } = supabase.storage.from("videos").getPublicUrl(storagePath);
+
+      setVideoUploadStage("processing");
+
+      const { error: insertError } = await supabase.from("studio_videos").insert({
+        title: videoUploadTitle.trim(),
+        brand: videoUploadBrand,
+        event_name: videoUploadEventName.trim() || null,
+        file_url: publicData.publicUrl,
+        storage_path: storagePath,
+        file_size: videoUploadFile!.size,
+        mime_type: videoUploadFile!.type || "video/mp4",
+        status: "uploaded",
+        uploaded_by: uploadedBy,
+      } as never);
+
+      if (insertError) throw new Error(insertError.message);
+
+      toast.success("Vídeo enviado com sucesso!");
+      setVideoUploadTitle("");
+      setVideoUploadEventName("");
+      setVideoUploadFile(null);
+      setVideoUploadYouTubeUrl("");
+
+      if (brand !== videoUploadBrand) {
+        setBrand(videoUploadBrand);
+      }
+
+      const refreshedVideos = await getStudioVideosByBrand(videoUploadBrand);
+      setVideos(refreshedVideos);
+    } catch (err) {
+      console.error(err);
+      toast.error(err instanceof Error ? err.message : "Erro ao enviar vídeo.");
+    } finally {
+      setVideoUploadStage("idle");
+    }
+  }, [videoUploadTitle, videoUploadFile, videoUploadYouTubeUrl, validateVideoFile, supabase, videoUploadBrand, videoUploadEventName, brand]);
+
   // Comprime imagem se > 2MB usando canvas
   const compressImage = useCallback(async (file: File, maxSizeMB = 2): Promise<Blob> => {
     if (file.size <= maxSizeMB * 1024 * 1024) {
@@ -337,6 +2228,40 @@ export default function StudioPage() {
       img.onerror = () => reject(new Error("Erro ao carregar imagem"));
       img.src = URL.createObjectURL(file);
     });
+  }, []);
+
+  // Upload paralelo com controle de concorrência
+  const uploadFilesInParallel = useCallback(async <T,>(
+    files: File[],
+    uploadFn: (file: File, index: number) => Promise<T>,
+    onProgress: (completed: number, failed: number, total: number) => void,
+    concurrency = 5
+  ): Promise<{ succeeded: number; failed: number; results: T[] }> => {
+    const total = files.length;
+    let completed = 0;
+    let failed = 0;
+    const results: T[] = [];
+
+    // Processa em chunks para não sobrecarregar memória
+    for (let i = 0; i < files.length; i += concurrency) {
+      const chunk = files.slice(i, i + concurrency);
+      const chunkPromises = chunk.map(async (file, chunkIndex) => {
+        const globalIndex = i + chunkIndex;
+        try {
+          const result = await uploadFn(file, globalIndex);
+          results.push(result);
+          completed++;
+        } catch (err) {
+          console.error(`Erro no arquivo ${file.name}:`, err);
+          failed++;
+        }
+        onProgress(completed, failed, total);
+      });
+
+      await Promise.all(chunkPromises);
+    }
+
+    return { succeeded: completed, failed, results };
   }, []);
 
   // Upload de foto para um asset específico
@@ -620,77 +2545,248 @@ export default function StudioPage() {
 
     setIsEventUploading(true);
     setEventUploadProgress(0);
+    setEventUploadedCount(0);
+    setEventFailedCount(0);
+
+    // Pega o user ID do usuário autenticado
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      toast.error("Você precisa estar logado para fazer upload.");
+      setIsEventUploading(false);
+      return;
+    }
 
     const slug = generateEventSlug(eventName);
-    let uploaded = 0;
+    const trimmedName = eventName.trim();
 
-    for (const file of eventFiles) {
-      try {
-        const blob = await compressImage(file);
-        const ext = file.name.split(".").pop()?.toLowerCase() || "jpg";
-        const timestamp = Date.now();
-        const storagePath = `events/${slug}/${timestamp}-${uploaded}.${ext}`;
+    // Função de upload de cada arquivo
+    const uploadSingleFile = async (file: File, index: number) => {
+      const blob = await compressImage(file);
+      const ext = file.name.split(".").pop()?.toLowerCase() || "jpg";
+      const timestamp = Date.now();
+      const storagePath = `events/${slug}/${timestamp}-${index}.${ext}`;
 
-        // Upload para Storage
-        const { error: uploadError } = await supabase.storage
-          .from("posts")
-          .upload(storagePath, blob, {
-            contentType: "image/jpeg",
-            upsert: false,
-          });
+      // Upload para Storage
+      const { error: uploadError } = await supabase.storage
+        .from("posts")
+        .upload(storagePath, blob, {
+          contentType: "image/jpeg",
+          upsert: false,
+        });
 
-        if (uploadError) throw new Error(uploadError.message);
+      if (uploadError) throw new Error(uploadError.message);
 
-        // Pega URL pública
-        const { data: urlData } = supabase.storage
-          .from("posts")
-          .getPublicUrl(storagePath);
+      // Pega URL pública
+      const { data: urlData } = supabase.storage
+        .from("posts")
+        .getPublicUrl(storagePath);
 
-        // Insere registro em assets
-        const { error: insertError } = await supabase
-          .from("assets")
-          .insert({
-            file_name: file.name,
-            file_url: urlData.publicUrl,
-            file_size: blob.size,
-            mime_type: "image/jpeg",
-            asset_type: "image",
-            source: "upload",
-            storage_path: storagePath,
-            storage_provider: "supabase",
-            event_name: eventName.trim(),
-            event_date: eventDate,
-            brand: eventBrand,
-            is_approved: true,
-          } as never);
+      // Insere registro em assets
+      const { error: insertError } = await supabase
+        .from("assets")
+        .insert({
+          file_name: file.name,
+          file_url: urlData.publicUrl,
+          file_size: blob.size,
+          mime_type: "image/jpeg",
+          asset_type: "image",
+          source: "upload",
+          storage_path: storagePath,
+          storage_provider: "supabase",
+          event_name: trimmedName,
+          event_date: eventDate,
+          brand: eventBrand,
+          is_approved: true,
+          uploaded_by: user.id,
+        } as never);
 
-        if (insertError) throw new Error(insertError.message);
+      if (insertError) throw new Error(insertError.message);
 
-        uploaded++;
-        setEventUploadProgress(Math.round((uploaded / eventFiles.length) * 100));
-      } catch (err) {
-        console.error(`Erro ao fazer upload de ${file.name}:`, err);
-      }
-    }
+      return storagePath;
+    };
+
+    // Upload paralelo com 5 simultâneos
+    const { succeeded, failed } = await uploadFilesInParallel(
+      eventFiles,
+      uploadSingleFile,
+      (completed, failedCount, total) => {
+        setEventUploadedCount(completed);
+        setEventFailedCount(failedCount);
+        setEventUploadProgress(Math.round(((completed + failedCount) / total) * 100));
+      },
+      5
+    );
 
     setIsEventUploading(false);
     setShowEventUploadModal(false);
     setEventName("");
     setEventFiles([]);
-    toast.success(`${uploaded} foto(s) do evento enviada(s)!`);
+
+    if (failed > 0) {
+      toast.warning(`${succeeded} foto(s) enviada(s), ${failed} falharam.`);
+    } else {
+      toast.success(`${succeeded} foto(s) do evento enviada(s)!`);
+    }
 
     // Muda para aba de eventos e recarrega
     setAssetsFilterType("eventos");
-    void loadAssets();
-  }, [eventName, eventDate, eventBrand, eventFiles, compressImage, supabase, loadAssets]);
+    void loadGroupedEvents();
+  }, [eventName, eventDate, eventBrand, eventFiles, compressImage, supabase, loadGroupedEvents, uploadFilesInParallel]);
 
   useEffect(() => {
     void loadBaseData();
   }, [loadBaseData]);
 
   useEffect(() => {
-    void loadAssets();
-  }, [loadAssets]);
+    if (assetsFilterType === "eventos") {
+      void loadGroupedEvents();
+    } else {
+      void loadAssets();
+    }
+  }, [loadAssets, loadGroupedEvents, assetsFilterType]);
+
+  useEffect(() => {
+    if (activeTab === "video") {
+      void loadVideos();
+    }
+  }, [activeTab, loadVideos]);
+
+  useEffect(() => {
+    setVideoUploadBrand(brand);
+  }, [brand]);
+
+  useEffect(() => {
+    return () => {
+      Object.values(videoPollingTimersRef.current).forEach((timer) => {
+        if (timer) clearTimeout(timer);
+      });
+      Object.values(clipPollingTimersRef.current).forEach((timer) => {
+        if (timer) clearTimeout(timer);
+      });
+    };
+  }, []);
+
+  // Carregar fotos de eventos quando abrir aba Criar
+  useEffect(() => {
+    if (activeTab === "criar") {
+      void loadEventPhotosForNina();
+    }
+  }, [activeTab, loadEventPhotosForNina, brand]);
+
+  // Handler para abrir detalhes do evento
+  const handleOpenEventDetail = useCallback(async (event: GroupedEvent) => {
+    setSelectedEvent(event);
+    setShowEventDetailModal(true);
+    setLoadingEventPhotos(true);
+    try {
+      const photos = await getEventPhotos(event.event_name, brand);
+      setEventDetailPhotos(photos);
+    } catch (err) {
+      console.error(err);
+      toast.error("Erro ao carregar fotos do evento.");
+    } finally {
+      setLoadingEventPhotos(false);
+    }
+  }, [brand]);
+
+  // Handler para excluir evento
+  const handleDeleteEvent = useCallback(async () => {
+    if (!eventToDelete) return;
+    setIsDeleting(true);
+    try {
+      await deleteEvent(eventToDelete.asset_ids, eventToDelete.storage_paths);
+      toast.success(`Evento "${eventToDelete.event_name}" excluído!`);
+      setEventToDelete(null);
+      setShowEventDetailModal(false);
+      void loadGroupedEvents();
+    } catch (err) {
+      console.error(err);
+      toast.error("Erro ao excluir evento.");
+    } finally {
+      setIsDeleting(false);
+    }
+  }, [eventToDelete, loadGroupedEvents]);
+
+  // Handler para adicionar fotos a evento existente
+  const handleAddPhotosToEvent = useCallback(async () => {
+    if (!targetEventForPhotos || additionalPhotos.length === 0) return;
+    setIsAddingPhotos(true);
+    setAddPhotosProgress(0);
+
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      toast.error("Você precisa estar logado.");
+      setIsAddingPhotos(false);
+      return;
+    }
+
+    const slug = generateEventSlug(targetEventForPhotos.event_name);
+    const eventData = targetEventForPhotos;
+
+    // Função de upload de cada arquivo
+    const uploadSingleFile = async (file: File, index: number) => {
+      const blob = await compressImage(file);
+      const ext = file.name.split(".").pop()?.toLowerCase() || "jpg";
+      const timestamp = Date.now();
+      const storagePath = `events/${slug}/${timestamp}-${index}.${ext}`;
+
+      const { error: storageError } = await supabase.storage
+        .from("posts")
+        .upload(storagePath, blob, { contentType: "image/jpeg", upsert: false });
+
+      if (storageError) throw new Error(storageError.message);
+
+      const { data: urlData } = supabase.storage.from("posts").getPublicUrl(storagePath);
+
+      const { error: insertError } = await supabase.from("assets").insert({
+        file_name: file.name,
+        file_url: urlData.publicUrl,
+        storage_path: storagePath,
+        event_name: eventData.event_name,
+        event_date: eventData.event_date,
+        brand: eventData.brand,
+        source: "upload",
+        uploaded_by: user.id,
+      } as never);
+
+      if (insertError) throw new Error(insertError.message);
+
+      return storagePath;
+    };
+
+    // Upload paralelo com 5 simultâneos
+    const { succeeded, failed } = await uploadFilesInParallel(
+      additionalPhotos,
+      uploadSingleFile,
+      (completed, failedCount, total) => {
+        setAddPhotosProgress(Math.round(((completed + failedCount) / total) * 100));
+      },
+      5
+    );
+
+    setIsAddingPhotos(false);
+    setShowAddPhotosModal(false);
+    setAdditionalPhotos([]);
+    setTargetEventForPhotos(null);
+
+    if (failed > 0) {
+      toast.warning(`${succeeded} foto(s) adicionada(s), ${failed} falharam.`);
+    } else {
+      toast.success(`${succeeded} foto(s) adicionada(s) ao evento!`);
+    }
+
+    void loadGroupedEvents();
+
+    // Atualizar a galeria se estiver aberta
+    if (selectedEvent && selectedEvent.event_name === eventData.event_name) {
+      const photos = await getEventPhotos(eventData.event_name, brand);
+      setEventDetailPhotos(photos);
+      setSelectedEvent({
+        ...selectedEvent,
+        photo_count: selectedEvent.photo_count + succeeded,
+      });
+    }
+  }, [targetEventForPhotos, additionalPhotos, supabase, compressImage, loadGroupedEvents, selectedEvent, brand, uploadFilesInParallel]);
 
   const handleGenerateWithNina = async () => {
     setIsGeneratingWithNina(true);
@@ -701,6 +2797,10 @@ export default function StudioPage() {
           brand,
           brief: postBrief,
           post_type: postPlatform,
+          // Passa foto do evento se selecionada
+          event_asset_id: selectedEventPhotoForNina?.id ?? null,
+          reference_image_url: selectedEventPhotoForNina?.file_url ?? null,
+          event_name: selectedEventPhotoForNina?.event_name ?? null,
         },
       });
 
@@ -717,7 +2817,42 @@ export default function StudioPage() {
               .filter((item) => item.startsWith("#") && item.trim().length > 1)
           : [];
 
-      setNinaPreviewUrl(data?.image_url ?? null);
+      let finalImageUrl = data?.image_url ?? null;
+
+      // Se a Nina retornou configuração para criar arte, faz via Canvas no frontend
+      if (data?.needs_text_overlay && data?.image_url && data?.text_config?.phrase) {
+        try {
+          // Determina formato baseado no tipo de post
+          const artFormat = postPlatform === "story" ? "story" : "feed";
+          console.log("[STUDIO] Creating art via Canvas...", { format: artFormat });
+          const imageBlob = await createArtWithCanvas(
+            data.image_url,
+            data.text_config.phrase,
+            data.text_config.brand_name,
+            data.text_config.is_kids,
+            artFormat
+          );
+
+          // Upload da arte final para o Storage
+          const fileName = `nina/art-${brand}-${Date.now()}.jpg`;
+          const { error: uploadErr } = await supabase.storage
+            .from("posts")
+            .upload(fileName, imageBlob, { contentType: "image/jpeg", upsert: true });
+
+          if (!uploadErr) {
+            const { data: urlData } = supabase.storage.from("posts").getPublicUrl(fileName);
+            finalImageUrl = urlData.publicUrl;
+            console.log("[STUDIO] Art created successfully:", finalImageUrl);
+          } else {
+            console.error("[STUDIO] Upload error:", uploadErr);
+          }
+        } catch (overlayErr) {
+          console.error("[STUDIO] Canvas art error:", overlayErr);
+          // Continua com a imagem original sem overlay
+        }
+      }
+
+      setNinaPreviewUrl(finalImageUrl);
       setNinaHashtags(hashtags);
       setNinaGenerationMethod(data?.generation_method ?? null);
 
@@ -735,23 +2870,86 @@ export default function StudioPage() {
   };
 
   const handlePublishNow = async () => {
-    if (!publishTargetPost) {
-      toast.info("Nenhum post disponível para publicação imediata.");
+    if (!ninaPreviewUrl) {
+      toast.info("Gere uma arte com a Nina antes de publicar.");
       return;
     }
 
     setIsPublishingNow(true);
     try {
-      const { error: fnError } = await supabase.functions.invoke("publish-scheduled-posts", {
-        body: { post_id: publishTargetPost.id },
-      });
-
-      if (fnError) {
-        toast.error("Não foi possível publicar agora.");
+      // Obtém o usuário atual
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        toast.error("Usuário não autenticado.");
         return;
       }
 
-      toast.success("Publicação disparada com sucesso.");
+      // Cria o post com status draft
+      // Converte "feed" para "image" (valor aceito pelo enum do banco)
+      const dbPostType = postPlatform === "feed" ? "image" : postPlatform;
+      const scheduledFor = `${postDate}T${postTime}:00`;
+      const { data: postData, error: insertError } = await supabase
+        .from("posts")
+        .insert({
+          title: postBrief.slice(0, 100) || "Post Nina",
+          caption: postCaption,
+          post_type: dbPostType,
+          status: "draft",
+          brand,
+          scheduled_for: scheduledFor,
+          created_by_ai: true,
+          created_by: user.id,
+          ai_agent_name: "Nina",
+          metadata: { image_url: ninaPreviewUrl },
+        } as never)
+        .select("id")
+        .single();
+
+      if (insertError || !postData) {
+        console.error("[STUDIO] Insert error:", insertError);
+        toast.error("Erro ao criar post.");
+        return;
+      }
+
+      const createdPostId = (postData as { id: string }).id;
+
+      // Insere na fila de publicação
+      const { error: queueError } = await supabase
+        .from("studio_publish_queue")
+        .insert({
+          post_id: createdPostId,
+          brand,
+          scheduled_for: new Date().toISOString(),
+          status: "pending",
+        } as never);
+
+      if (queueError) {
+        console.error("[STUDIO] Queue insert error:", queueError);
+        toast.error("Erro ao adicionar à fila de publicação.");
+        return;
+      }
+
+      // Publica imediatamente
+      const { data: publishData, error: fnError } = await supabase.functions.invoke<PublishScheduledPostsResponse>("publish-scheduled-posts", {
+        body: { post_id: createdPostId },
+      });
+
+      if (fnError) {
+        toast.error(getPublishErrorMessage(fnError, publishData ?? undefined) ?? "Não foi possível publicar agora.");
+        return;
+      }
+
+      if (!publishData?.success || (publishData.published ?? 0) < 1) {
+        toast.error(getPublishErrorMessage(null, publishData ?? undefined) ?? "Não foi possível publicar agora.");
+        return;
+      }
+
+      toast.success("Publicação disparada com sucesso!");
+      // Limpa os campos
+      setNinaPreviewUrl(null);
+      setPostCaption("");
+      setPostBrief("");
+      setSelectedEventPhotoForNina(null);
       await loadBaseData();
     } catch {
       toast.error("Falha ao publicar agora.");
@@ -759,6 +2957,86 @@ export default function StudioPage() {
       setIsPublishingNow(false);
     }
   };
+
+  const handleSchedulePost = async () => {
+    if (!ninaPreviewUrl) {
+      toast.info("Gere uma arte com a Nina antes de agendar.");
+      return;
+    }
+
+    setIsScheduling(true);
+    try {
+      // Obtém o usuário atual
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        toast.error("Usuário não autenticado.");
+        return;
+      }
+
+      // Converte "feed" para "image" (valor aceito pelo enum do banco)
+      const dbPostType = postPlatform === "feed" ? "image" : postPlatform;
+      const scheduledFor = `${postDate}T${postTime}:00`;
+      const { data: postData, error: insertError } = await supabase
+        .from("posts")
+        .insert({
+          title: postBrief.slice(0, 100) || "Post Nina",
+          caption: postCaption,
+          post_type: dbPostType,
+          status: "scheduled",
+          brand,
+          scheduled_for: scheduledFor,
+          created_by_ai: true,
+          created_by: user.id,
+          ai_agent_name: "Nina",
+          metadata: { image_url: ninaPreviewUrl },
+        } as never)
+        .select("id")
+        .single();
+
+      if (insertError || !postData) {
+        console.error("[STUDIO] Schedule error:", insertError);
+        toast.error("Erro ao agendar post.");
+        return;
+      }
+
+      const createdId = (postData as { id: string }).id;
+
+      // Insere na fila de publicação para o horário agendado
+      const { error: queueError } = await supabase
+        .from("studio_publish_queue")
+        .insert({
+          post_id: createdId,
+          brand,
+          scheduled_for: scheduledFor,
+          status: "pending",
+        } as never);
+
+      if (queueError) {
+        console.error("[STUDIO] Queue insert error:", queueError);
+        toast.error("Erro ao adicionar à fila.");
+        return;
+      }
+
+      toast.success(`Post agendado para ${postDate} às ${postTime}!`);
+      // Limpa os campos
+      setNinaPreviewUrl(null);
+      setPostCaption("");
+      setPostBrief("");
+      setSelectedEventPhotoForNina(null);
+      await loadBaseData();
+    } catch {
+      toast.error("Falha ao agendar post.");
+    } finally {
+      setIsScheduling(false);
+    }
+  };
+
+  // Seleciona uma foto aleatória do array
+  const handleSelectRandomEventPhoto = useCallback(() => {
+    if (eventPhotosForNina.length === 0) return;
+    const randomIndex = Math.floor(Math.random() * eventPhotosForNina.length);
+    setSelectedEventPhotoForNina(eventPhotosForNina[randomIndex]);
+  }, [eventPhotosForNina]);
 
   const renderCalendarTab = () => (
     <div className="space-y-4">
@@ -875,8 +3153,71 @@ export default function StudioPage() {
         </div>
 
         <div className="space-y-2">
-          <label className="block text-xs text-slate-400">Buscar aluno</label>
-          <input className="h-10 w-full rounded-lg border border-slate-700 bg-slate-900/70 px-3 text-sm text-slate-100" placeholder="Nome do aluno..." />
+          <div className="flex items-center justify-between">
+            <label className="block text-xs text-slate-400">Foto do evento</label>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleSelectRandomEventPhoto}
+              disabled={eventPhotosForNina.length === 0}
+              className="h-6 px-2 text-[11px]"
+            >
+              <Sparkle size={12} /> Aleatória
+            </Button>
+          </div>
+          {loadingEventPhotosForNina ? (
+            <div className="flex h-24 items-center justify-center">
+              <SpinnerGap size={20} className="animate-spin text-slate-400" />
+            </div>
+          ) : eventPhotosForNina.length > 0 ? (
+            <div className="grid grid-cols-3 gap-1.5">
+              {eventPhotosForNina.slice(0, 6).map((photo) => (
+                <button
+                  key={photo.id}
+                  type="button"
+                  onClick={() => setSelectedEventPhotoForNina(photo)}
+                  className={cn(
+                    "relative aspect-square overflow-hidden rounded-lg transition-all",
+                    selectedEventPhotoForNina?.id === photo.id
+                      ? "ring-2 ring-teal-500 ring-offset-2 ring-offset-slate-900"
+                      : "ring-1 ring-slate-700 hover:ring-slate-500"
+                  )}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={photo.file_url}
+                    alt={photo.event_name || ""}
+                    className="h-full w-full object-cover"
+                  />
+                  {selectedEventPhotoForNina?.id === photo.id && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-teal-500/20">
+                      <CheckCircle size={24} weight="fill" className="text-teal-400" />
+                    </div>
+                  )}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-slate-500">Nenhuma foto de evento disponível. Faça upload na aba Banco de Fotos.</p>
+          )}
+          {selectedEventPhotoForNina && (
+            <div className="flex items-center gap-2 rounded-lg border border-teal-500/30 bg-teal-500/10 p-2">
+              <div className="h-10 w-10 flex-shrink-0 overflow-hidden rounded-lg">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={selectedEventPhotoForNina.file_url} alt="" className="h-full w-full object-cover" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs text-slate-200 truncate">{selectedEventPhotoForNina.event_name || "Foto selecionada"}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedEventPhotoForNina(null)}
+                className="p-1 rounded hover:bg-slate-700"
+              >
+                <X size={14} className="text-slate-400" />
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="space-y-2">
@@ -891,7 +3232,7 @@ export default function StudioPage() {
 
         <div className="grid grid-cols-2 gap-2">
           <DatePicker value={postDate} onChange={setPostDate} placeholder="Data" className="h-10 border-slate-700 bg-slate-900/70" />
-          <input type="time" value={postTime} onChange={(e) => setPostTime(e.target.value)} className="h-10 rounded-lg border border-slate-700 bg-slate-900/70 px-3 text-sm text-slate-100" />
+          <TimePicker value={postTime} onChange={setPostTime} minuteStep={1} className="h-10" />
         </div>
       </Card>
 
@@ -932,7 +3273,15 @@ export default function StudioPage() {
             <p className="text-xs text-slate-400">Preview da arte gerada aparecerá aqui.</p>
           )}
           <div className="mt-3 flex gap-2">
-            <Button variant="outline" size="sm" disabled>Regenerar</Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={isGeneratingWithNina || !postBrief.trim()}
+              onClick={() => void handleGenerateWithNina()}
+            >
+              {isGeneratingWithNina ? <SpinnerGap size={12} className="animate-spin" /> : null}
+              Regenerar
+            </Button>
             <Button variant="outline" size="sm" disabled>Editar no Canva ↗</Button>
           </div>
         </div>
@@ -955,15 +3304,31 @@ export default function StudioPage() {
         </div>
 
         <div className="space-y-2">
-          <Button className="w-full" variant="outline" size="sm">Enviar para aprovação</Button>
-          <Button className="w-full" variant="accent" size="sm" disabled={isPublishingNow || !publishTargetPost} onClick={() => void handlePublishNow()}>
+          <Button className="w-full" variant="outline" size="sm" disabled>Enviar para aprovação</Button>
+          <Button
+            className="w-full"
+            variant="accent"
+            size="sm"
+            disabled={isPublishingNow || !ninaPreviewUrl}
+            onClick={() => void handlePublishNow()}
+          >
+            {isPublishingNow ? <SpinnerGap size={14} className="animate-spin" /> : null}
             {isPublishingNow ? "Publicando..." : "Publicar agora"}
           </Button>
-          <Button className="w-full" variant="primary" size="sm">Agendar ▾</Button>
+          <Button
+            className="w-full"
+            variant="primary"
+            size="sm"
+            disabled={isScheduling || !ninaPreviewUrl}
+            onClick={() => void handleSchedulePost()}
+          >
+            {isScheduling ? <SpinnerGap size={14} className="animate-spin" /> : <Clock size={14} />}
+            {isScheduling ? "Agendando..." : `Agendar ${postDate} ${postTime}`}
+          </Button>
         </div>
 
         <p className="text-[11px] text-slate-500">
-          {publishTargetPost ? `Post alvo: ${publishTargetPost.title}` : "Sem post disponível para publicar agora."}
+          {ninaPreviewUrl ? "Arte pronta para publicar ou agendar." : "Gere uma arte com a Nina primeiro."}
         </p>
       </Card>
     </div>
@@ -1075,9 +3440,9 @@ export default function StudioPage() {
           })}
         </div>
       ) : (
-        /* Grid de eventos */
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
-          {assets.length === 0 ? (
+        /* Grid de eventos agrupados */
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-4">
+          {groupedEvents.length === 0 ? (
             <div className="col-span-full flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-slate-700 bg-slate-900/40 py-12">
               <Folder size={48} className="text-slate-600" />
               <p className="text-sm text-slate-400">Nenhum evento cadastrado</p>
@@ -1086,20 +3451,70 @@ export default function StudioPage() {
               </Button>
             </div>
           ) : (
-            assets.map((asset) => (
-              <Card key={asset.id} variant="compact" className="space-y-2 p-3">
-                <div className="aspect-video overflow-hidden rounded-lg bg-slate-800">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={asset.file_url} alt={asset.event_name ?? "Evento"} className="h-full w-full object-cover" />
+            groupedEvents.map((event) => (
+              <Card
+                key={event.event_name}
+                variant="interactive"
+                className="group relative space-y-2 p-3 cursor-pointer"
+                onClick={() => handleOpenEventDetail(event)}
+              >
+                {/* Preview Grid - 2x2 collage */}
+                <div className="grid grid-cols-2 gap-1 aspect-square overflow-hidden rounded-lg bg-slate-800">
+                  {event.preview_photos.slice(0, 4).map((photo) => (
+                    <div key={photo.id} className="relative overflow-hidden">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={photo.file_url}
+                        alt=""
+                        className="h-full w-full object-cover"
+                      />
+                    </div>
+                  ))}
+                  {/* Fill empty slots */}
+                  {Array.from({ length: Math.max(0, 4 - event.preview_photos.length) }).map((_, i) => (
+                    <div key={`empty-${i}`} className="bg-slate-700" />
+                  ))}
                 </div>
-                <p className="line-clamp-1 text-xs font-semibold text-slate-200">{asset.event_name ?? "Sem nome"}</p>
+
+                {/* Event Info */}
+                <p className="line-clamp-1 text-sm font-semibold text-slate-200">
+                  {event.event_name}
+                </p>
+
                 <div className="flex items-center justify-between">
-                  <Badge variant="neutral" size="sm">{asset.brand === "la_music_kids" ? "Kids" : "School"}</Badge>
-                  {asset.event_date && (
+                  <Badge variant="neutral" size="sm">
+                    {event.photo_count} foto{event.photo_count !== 1 ? "s" : ""}
+                  </Badge>
+                  {event.event_date && (
                     <span className="text-[10px] text-slate-500">
-                      {new Date(asset.event_date).toLocaleDateString("pt-BR")}
+                      {new Date(event.event_date).toLocaleDateString("pt-BR")}
                     </span>
                   )}
+                </div>
+
+                {/* Hover Actions */}
+                <div className="absolute right-2 top-2 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setTargetEventForPhotos(event);
+                      setShowAddPhotosModal(true);
+                    }}
+                    className="rounded-md bg-slate-800/90 p-1.5 text-slate-300 hover:bg-cyan-500 hover:text-white transition-colors"
+                    title="Adicionar fotos"
+                  >
+                    <Plus size={14} />
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setEventToDelete(event);
+                    }}
+                    className="rounded-md bg-slate-800/90 p-1.5 text-slate-300 hover:bg-red-500 hover:text-white transition-colors"
+                    title="Excluir evento"
+                  >
+                    <Trash size={14} />
+                  </button>
                 </div>
               </Card>
             ))
@@ -1108,12 +3523,300 @@ export default function StudioPage() {
       )}
 
       <div className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-900/50 p-3">
-        <p className="text-xs text-slate-400">Página {assetsPage} de {assetsPages} · {assetsTotal} registros</p>
+        <p className="text-xs text-slate-400">
+          Página {assetsPage} de {assetsFilterType === "eventos" ? eventsPages : assetsPages} · {assetsFilterType === "eventos" ? eventsTotal : assetsTotal} {assetsFilterType === "eventos" ? "eventos" : "registros"}
+        </p>
         <div className="flex gap-2">
           <Button variant="ghost" size="icon-sm" disabled={assetsPage <= 1} onClick={() => setAssetsPage((v) => Math.max(1, v - 1))}><CaretLeft size={16} /></Button>
-          <Button variant="ghost" size="icon-sm" disabled={assetsPage >= assetsPages} onClick={() => setAssetsPage((v) => Math.min(assetsPages, v + 1))}><CaretRight size={16} /></Button>
+          <Button variant="ghost" size="icon-sm" disabled={assetsPage >= (assetsFilterType === "eventos" ? eventsPages : assetsPages)} onClick={() => setAssetsPage((v) => Math.min(assetsFilterType === "eventos" ? eventsPages : assetsPages, v + 1))}><CaretRight size={16} /></Button>
         </div>
       </div>
+
+      {/* Event Detail Modal */}
+      {showEventDetailModal && selectedEvent && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+          onClick={() => setShowEventDetailModal(false)}
+        >
+          <div
+            className="w-full max-w-4xl max-h-[90vh] overflow-auto rounded-2xl border border-slate-700 bg-slate-900"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-800 bg-slate-900 px-5 py-3">
+              <div>
+                <h3 className="text-lg font-semibold text-slate-100">{selectedEvent.event_name}</h3>
+                <p className="text-xs text-slate-400">
+                  {selectedEvent.photo_count} foto(s) · {selectedEvent.event_date ? new Date(selectedEvent.event_date).toLocaleDateString("pt-BR") : "Sem data"}
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setTargetEventForPhotos(selectedEvent);
+                    setShowAddPhotosModal(true);
+                  }}
+                >
+                  <Plus size={14} /> Adicionar fotos
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-red-400 hover:text-red-300 hover:border-red-400"
+                  onClick={() => setEventToDelete(selectedEvent)}
+                >
+                  <Trash size={14} /> Excluir
+                </Button>
+                <button
+                  onClick={() => setShowEventDetailModal(false)}
+                  className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-slate-200"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
+
+            {/* Photo Grid */}
+            <div className="p-5">
+              {loadingEventPhotos ? (
+                <div className="flex items-center justify-center py-12">
+                  <SpinnerGap size={32} className="animate-spin text-slate-400" />
+                </div>
+              ) : (
+                <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
+                  {eventDetailPhotos.map((photo) => (
+                    <div key={photo.id} className="aspect-square overflow-hidden rounded-lg bg-slate-800">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={photo.file_url}
+                        alt=""
+                        className="h-full w-full object-cover hover:scale-105 transition-transform"
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add Photos Modal */}
+      {showAddPhotosModal && targetEventForPhotos && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+          onClick={() => {
+            setShowAddPhotosModal(false);
+            setAdditionalPhotos([]);
+            setTargetEventForPhotos(null);
+          }}
+        >
+          <div
+            className="w-full max-w-lg rounded-2xl border border-slate-700 bg-slate-900"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-slate-800 px-5 py-3">
+              <h3 className="text-base font-semibold text-slate-100">
+                Adicionar fotos a &quot;{targetEventForPhotos.event_name}&quot;
+              </h3>
+              <button
+                onClick={() => {
+                  setShowAddPhotosModal(false);
+                  setAdditionalPhotos([]);
+                  setTargetEventForPhotos(null);
+                }}
+                className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-slate-200"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              {/* File Input */}
+              <label className="flex flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed border-slate-700 bg-slate-800/50 py-8 cursor-pointer hover:border-slate-600 transition-colors">
+                <Upload size={32} className="text-slate-400" />
+                <span className="text-sm text-slate-300">Clique para selecionar fotos</span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={(e) => {
+                    if (e.target.files) {
+                      const files = Array.from(e.target.files).filter((f) => f.type.startsWith("image/"));
+                      setAdditionalPhotos((prev) => [...prev, ...files]);
+                    }
+                    e.target.value = "";
+                  }}
+                  className="hidden"
+                />
+              </label>
+
+              {/* Selected Files Preview */}
+              {additionalPhotos.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-sm text-slate-300">{additionalPhotos.length} foto(s) selecionada(s)</p>
+                  <div className="grid grid-cols-6 gap-2 max-h-32 overflow-y-auto">
+                    {additionalPhotos.slice(0, 12).map((file, idx) => (
+                      <div key={idx} className="aspect-square rounded-md bg-slate-800 overflow-hidden relative group">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={URL.createObjectURL(file)}
+                          alt=""
+                          className="h-full w-full object-cover"
+                        />
+                        <button
+                          onClick={() => setAdditionalPhotos((prev) => prev.filter((_, i) => i !== idx))}
+                          className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity"
+                        >
+                          <X size={16} className="text-white" />
+                        </button>
+                      </div>
+                    ))}
+                    {additionalPhotos.length > 12 && (
+                      <div className="aspect-square rounded-md bg-slate-700 flex items-center justify-center">
+                        <span className="text-xs text-slate-300">+{additionalPhotos.length - 12}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Progress */}
+              {isAddingPhotos && (
+                <div className="space-y-2">
+                  <div className="h-2 rounded-full bg-slate-700 overflow-hidden">
+                    <div
+                      className="h-full bg-cyan-500 transition-all"
+                      style={{ width: `${addPhotosProgress}%` }}
+                    />
+                  </div>
+                  <p className="text-xs text-slate-400 text-center">{addPhotosProgress}% concluído</p>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-between border-t border-slate-800 px-5 py-3">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setShowAddPhotosModal(false);
+                  setAdditionalPhotos([]);
+                  setTargetEventForPhotos(null);
+                }}
+                disabled={isAddingPhotos}
+              >
+                Cancelar
+              </Button>
+              <Button
+                variant="accent"
+                size="sm"
+                disabled={isAddingPhotos || additionalPhotos.length === 0}
+                onClick={handleAddPhotosToEvent}
+              >
+                {isAddingPhotos ? (
+                  <>
+                    <SpinnerGap size={14} className="animate-spin" />
+                    Enviando...
+                  </>
+                ) : (
+                  `Adicionar ${additionalPhotos.length} foto(s)`
+                )}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={!!eventToDelete} onOpenChange={(open) => !open && setEventToDelete(null)}>
+        <AlertDialogContent className="border-slate-700 bg-slate-900">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-slate-100">Excluir evento?</AlertDialogTitle>
+            <AlertDialogDescription className="text-slate-400">
+              Isso vai excluir permanentemente <strong className="text-slate-200">{eventToDelete?.event_name}</strong> e suas{" "}
+              <strong className="text-slate-200">{eventToDelete?.photo_count}</strong> foto(s). Esta ação não pode ser desfeita.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeleting} className="border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700">
+              Cancelar
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={isDeleting}
+              className="bg-red-600 hover:bg-red-700 text-white"
+              onClick={handleDeleteEvent}
+            >
+              {isDeleting ? "Excluindo..." : "Excluir"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Modal Publicar Vídeo Direto */}
+      <AlertDialog open={showPublishVideoModal} onOpenChange={(open) => !open && setShowPublishVideoModal(false)}>
+        <AlertDialogContent className="border-slate-700 bg-slate-900">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-slate-100">Publicar vídeo direto</AlertDialogTitle>
+            <AlertDialogDescription className="text-slate-400">
+              {selectedVideoForPublish?.title || "Vídeo"}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-4 py-2">
+            <div>
+              <label className="mb-1 block text-xs text-slate-400">Legenda</label>
+              <textarea
+                className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-200 focus:border-cyan-500 focus:outline-none"
+                rows={3}
+                placeholder="Escreva a legenda do post..."
+                value={publishVideoCaption}
+                onChange={(e) => setPublishVideoCaption(e.target.value)}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="mb-1 block text-xs text-slate-400">Marca</label>
+                <Select value={publishVideoBrand} onValueChange={(v) => setPublishVideoBrand(v as StudioBrand)}>
+                  <SelectTrigger className="border-slate-700 bg-slate-800 text-slate-200">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="border-slate-700 bg-slate-800">
+                    <SelectItem value="la_music_school">LA Music School</SelectItem>
+                    <SelectItem value="la_music_kids">LA Music Kids</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs text-slate-400">Formato</label>
+                <Select value={publishVideoFormat} onValueChange={(v) => setPublishVideoFormat(v as "reels" | "story")}>
+                  <SelectTrigger className="border-slate-700 bg-slate-800 text-slate-200">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="border-slate-700 bg-slate-800">
+                    <SelectItem value="reels">Reels</SelectItem>
+                    <SelectItem value="story">Story</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isPublishingVideo} className="border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700">
+              Cancelar
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={isPublishingVideo}
+              className="bg-teal-600 hover:bg-teal-700 text-white"
+              onClick={() => void handlePublishVideoDirect()}
+            >
+              {isPublishingVideo ? "Publicando..." : "Publicar agora"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
     </div>
   );
 
@@ -1227,15 +3930,15 @@ export default function StudioPage() {
         <p className="text-sm text-slate-500">Sem acesso às integrações para este perfil.</p>
       ) : (
         integrations.map((item) => {
-          const color = getStatusBadgeColor(item.is_active, item.last_validated_at);
+          const status = getIntegrationStatus(item);
           return (
             <div key={item.id} className="flex items-center justify-between rounded-lg border border-slate-800 bg-slate-900/50 p-3">
               <div>
                 <p className="text-sm text-slate-100">{item.integration_name}</p>
-                <p className="text-xs text-slate-500">{item.last_validated_at ? `Validado em ${new Date(item.last_validated_at).toLocaleDateString("pt-BR")}` : "Sem validação recente"}</p>
+                <p className="text-xs text-slate-500">{status.detail}</p>
               </div>
               <div className="flex items-center gap-2">
-                <Badge variant="status" color={color}>{item.is_active ? "Ativo" : "Inativo"}</Badge>
+                <Badge variant="status" color={status.color}>{status.label}</Badge>
                 <Button variant="outline" size="sm">Reconectar</Button>
               </div>
             </div>
@@ -1274,7 +3977,7 @@ export default function StudioPage() {
 
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-[1600px] space-y-4 px-4 py-5">
-          <div className="grid grid-cols-2 gap-2 rounded-xl border border-slate-800 bg-slate-900/60 p-1 md:grid-cols-6">
+          <div className="grid grid-cols-2 gap-2 rounded-xl border border-slate-800 bg-slate-900/60 p-1 md:grid-cols-7">
             {TABS.map((tab) => {
               const Icon = tab.icon;
               const active = activeTab === tab.id;
@@ -1284,7 +3987,7 @@ export default function StudioPage() {
                   onClick={() => setActiveTab(tab.id)}
                   className={cn(
                     "flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors",
-                    active ? "bg-gradient-to-r from-cyan-500/20 to-orange-500/20 text-cyan-300" : "text-slate-400 hover:bg-slate-800/60 hover:text-slate-200"
+                    active ? "bg-cyan-500/15 text-cyan-300" : "text-slate-400 hover:bg-slate-800/60 hover:text-slate-200"
                   )}
                 >
                   <Icon size={15} /> {tab.label}
@@ -1308,6 +4011,7 @@ export default function StudioPage() {
           {activeTab === "calendario" && renderCalendarTab()}
           {activeTab === "criar" && renderCreateTab()}
           {activeTab === "banco" && renderPhotosTab()}
+          {activeTab === "video" && renderVideoTab()}
           {activeTab === "automacoes" && renderAutomationsTab()}
           {activeTab === "performance" && renderPerformanceTab()}
           {activeTab === "conexoes" && renderConnectionsTab()}
@@ -1428,32 +4132,55 @@ export default function StudioPage() {
 
               <div className="space-y-1">
                 <label className="text-xs text-slate-400">Fotos do evento</label>
-                <div
-                  onDragOver={(e) => { e.preventDefault(); setEventDragOver(true); }}
-                  onDragLeave={() => setEventDragOver(false)}
-                  onDrop={(e) => void handleEventDrop(e)}
-                  className={cn(
-                    "flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed py-8 transition-colors",
-                    eventDragOver
-                      ? "border-cyan-400 bg-cyan-500/10"
-                      : "border-slate-700 bg-slate-900/40 hover:border-cyan-500/50 hover:bg-slate-900/60"
-                  )}
-                >
-                  <Upload size={32} className={eventDragOver ? "text-cyan-400" : "text-slate-500"} />
-                  <span className="text-sm text-slate-400">
-                    {eventDragOver ? "Solte aqui!" : "Arraste uma pasta ou clique para selecionar"}
-                  </span>
-                  <span className="text-xs text-slate-600">O nome da pasta vira o nome do evento</span>
-                  <label className="mt-2 cursor-pointer rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-700">
-                    Selecionar arquivos
-                    <input
-                      type="file"
-                      accept="image/*"
-                      multiple
-                      onChange={(e) => e.target.files && setEventFiles(Array.from(e.target.files))}
-                      className="hidden"
-                    />
-                  </label>
+                <div className="flex flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed border-slate-700 bg-slate-900/40 py-6">
+                  <Folder size={32} className="text-slate-500" />
+                  <span className="text-sm text-slate-400">Selecione uma pasta ou arquivos</span>
+                  <div className="flex gap-2">
+                    <label className="cursor-pointer rounded-lg border border-cyan-500 bg-cyan-500/10 px-4 py-2 text-xs font-medium text-cyan-400 hover:bg-cyan-500/20">
+                      Selecionar pasta
+                      <input
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        // @ts-expect-error webkitdirectory is not in types
+                        webkitdirectory=""
+                        onChange={(e) => {
+                          const files = e.target.files;
+                          if (!files || files.length === 0) return;
+                          const imageFiles = Array.from(files).filter(f => f.type.startsWith("image/"));
+                          if (imageFiles.length === 0) {
+                            toast.error("Nenhuma imagem encontrada na pasta");
+                            return;
+                          }
+                          setEventFiles(imageFiles);
+                          // Extrair nome da pasta do path
+                          const firstPath = imageFiles[0].webkitRelativePath;
+                          if (firstPath && !eventName.trim()) {
+                            const folderName = firstPath.split("/")[0];
+                            setEventName(folderName);
+                          }
+                          toast.success(`${imageFiles.length} foto(s) carregada(s)`);
+                        }}
+                        className="hidden"
+                      />
+                    </label>
+                    <label className="cursor-pointer rounded-lg border border-slate-700 bg-slate-800 px-4 py-2 text-xs text-slate-300 hover:bg-slate-700">
+                      Selecionar arquivos
+                      <input
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        onChange={(e) => {
+                          const files = e.target.files;
+                          if (!files || files.length === 0) return;
+                          const imageFiles = Array.from(files).filter(f => f.type.startsWith("image/"));
+                          setEventFiles(imageFiles);
+                          toast.success(`${imageFiles.length} foto(s) carregada(s)`);
+                        }}
+                        className="hidden"
+                      />
+                    </label>
+                  </div>
                 </div>
                 {eventFiles.length > 0 && (
                   <p className="mt-2 text-xs text-cyan-400">{eventFiles.length} foto(s) selecionada(s)</p>
@@ -1461,11 +4188,30 @@ export default function StudioPage() {
               </div>
             </div>
 
+            {isEventUploading && (
+              <div className="px-5 pb-3 space-y-2">
+                <div className="h-2 rounded-full bg-slate-700 overflow-hidden">
+                  <div
+                    className="h-full bg-cyan-500 transition-all duration-300"
+                    style={{ width: `${eventUploadProgress}%` }}
+                  />
+                </div>
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-slate-300">
+                    {eventUploadedCount + eventFailedCount} de {eventFiles.length} fotos
+                  </span>
+                  <span className="text-slate-400">
+                    {eventUploadedCount} enviadas{eventFailedCount > 0 && <span className="text-red-400"> · {eventFailedCount} falhas</span>}
+                  </span>
+                </div>
+              </div>
+            )}
+
             <div className="flex items-center justify-between border-t border-slate-800 px-5 py-3">
               {isEventUploading ? (
                 <div className="flex items-center gap-2">
                   <SpinnerGap size={16} className="animate-spin text-cyan-400" />
-                  <span className="text-sm text-slate-300">{eventUploadProgress}%</span>
+                  <span className="text-sm text-slate-300">Enviando em paralelo...</span>
                 </div>
               ) : (
                 <span />
@@ -1482,6 +4228,85 @@ export default function StudioPage() {
           </div>
         </div>
       )}
+
+      {/* Modal Publicar Clipe (Reels / Stories) */}
+      <Dialog open={clipPublishModal.open} onOpenChange={(open) => !open && setClipPublishModal(prev => ({ ...prev, open: false }))}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Publicar Clipe no Instagram</DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4 py-4">
+            <p className="text-sm text-muted-foreground truncate">
+              {clipPublishModal.clip?.title || 'Sem título'}
+            </p>
+
+            {/* Seletor Reels / Stories */}
+            <div>
+              <label className="text-sm font-medium mb-2 block">Formato</label>
+              <div className="flex gap-2">
+                <Button
+                  variant={clipPublishModal.format === 'REELS' ? 'accent' : 'outline'}
+                  onClick={() => setClipPublishModal(prev => ({ ...prev, format: 'REELS' }))}
+                  className="flex-1"
+                >
+                  🎬 Reels
+                </Button>
+                <Button
+                  variant={clipPublishModal.format === 'STORIES' ? 'accent' : 'outline'}
+                  onClick={() => setClipPublishModal(prev => ({ ...prev, format: 'STORIES' }))}
+                  className="flex-1"
+                >
+                  📱 Stories
+                </Button>
+              </div>
+            </div>
+
+            {clipPublishModal.format === 'STORIES' && (
+              <p className="text-xs text-muted-foreground">
+                ⚠️ Stories não exibem legenda
+              </p>
+            )}
+
+            {clipPublishModal.error && (
+              <p className="text-sm text-destructive">{clipPublishModal.error}</p>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setClipPublishModal(prev => ({ ...prev, open: false }))}
+              disabled={clipPublishModal.isPublishing}
+            >
+              Cancelar
+            </Button>
+            <Button
+              onClick={() => void publishClipWithFormat()}
+              disabled={clipPublishModal.isPublishing}
+            >
+              {clipPublishModal.isPublishing ? 'Publicando...' : `Publicar como ${clipPublishModal.format === 'REELS' ? 'Reels' : 'Stories'}`}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Modal Preview de Clipe - no nível principal para funcionar em qualquer tab */}
+      <Dialog open={!!previewClip} onOpenChange={() => setPreviewClip(null)}>
+        <DialogContent className="max-w-sm p-0 overflow-hidden bg-black border-slate-700">
+          <DialogHeader className="p-3 bg-slate-900">
+            <DialogTitle className="text-white text-sm truncate">{previewClip?.title}</DialogTitle>
+          </DialogHeader>
+          <video
+            src={previewClip?.url}
+            controls
+            autoPlay
+            playsInline
+            className="w-full"
+            style={{ aspectRatio: "9/16", maxHeight: "70vh" }}
+          />
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

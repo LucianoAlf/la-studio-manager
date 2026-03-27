@@ -42,6 +42,16 @@ export interface PhotoAsset {
 
 export type AssetFilterType = "alunos" | "eventos" | "todos";
 
+export interface GroupedEvent {
+  event_name: string;
+  event_date: string | null;
+  brand: string | null;
+  photo_count: number;
+  preview_photos: Array<{ id: string; file_url: string }>;
+  storage_paths: string[];
+  asset_ids: string[];
+}
+
 export interface BirthdayLogItem {
   id: string;
   student_id: string;
@@ -74,6 +84,49 @@ export interface StudioMetricsSummary {
   engajamento: number;
   taxaEngajamento: number;
   publicados: number;
+}
+
+export type StudioVideoStatus = "uploaded" | "transcribing" | "transcribed" | "analyzing" | "ready" | "failed";
+export type StudioClipStatus = "pending" | "rendering" | "ready" | "approved" | "published" | "failed";
+
+export interface StudioVideoItem {
+  id: string;
+  title: string | null;
+  brand: StudioBrand | null;
+  event_name: string | null;
+  status: StudioVideoStatus;
+  file_size: number | null;
+  file_url: string | null;
+  error_message: string | null;
+  duration_seconds: number | null;
+  created_at: string;
+}
+
+export interface StudioClipItem {
+  id: string;
+  video_id: string;
+  brand: StudioBrand | null;
+  title: string | null;
+  phrase: string | null;
+  start_seconds: number | null;
+  end_seconds: number | null;
+  duration_seconds: number | null;
+  status: StudioClipStatus;
+  file_url: string | null;
+  post_id: string | null;
+  published_at: string | null;
+}
+
+export interface StudioVideoPollingItem {
+  id: string;
+  status: StudioVideoStatus;
+  key_moments: unknown;
+}
+
+export interface StudioClipPollingItem {
+  id: string;
+  status: StudioClipStatus;
+  file_url: string | null;
 }
 
 export async function getNinaConfig(): Promise<NinaConfig | null> {
@@ -309,4 +362,181 @@ export async function getPerformanceSummaryByBrand(brand: StudioBrand): Promise<
     taxaEngajamento: alcance > 0 ? (engajamento / alcance) * 100 : 0,
     publicados: rows.length,
   };
+}
+
+export async function getStudioVideosByBrand(brand: StudioBrand): Promise<StudioVideoItem[]> {
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from("studio_videos" as never)
+    .select("id, title, brand, event_name, status, file_size, file_url, error_message, duration_seconds, created_at")
+    .eq("brand", brand)
+    .is("deleted_at", null)
+    .order("created_at", { ascending: false })
+    .limit(200);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return (data ?? []) as unknown as StudioVideoItem[];
+}
+
+export async function getStudioClipsByVideoId(videoId: string): Promise<StudioClipItem[]> {
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from("studio_clips" as never)
+    .select("id, video_id, brand, title, phrase, start_seconds, end_seconds, duration_seconds, status, file_url, post_id, published_at")
+    .eq("video_id", videoId)
+    .order("start_seconds", { ascending: true })
+    .limit(200);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return (data ?? []) as unknown as StudioClipItem[];
+}
+
+export async function getStudioVideoPollingById(videoId: string): Promise<StudioVideoPollingItem | null> {
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from("studio_videos" as never)
+    .select("id, status, key_moments")
+    .eq("id", videoId)
+    .is("deleted_at", null)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  if (!data) return null;
+
+  return data as unknown as StudioVideoPollingItem;
+}
+
+export async function getStudioClipPollingById(clipId: string): Promise<StudioClipPollingItem | null> {
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from("studio_clips" as never)
+    .select("id, status, file_url")
+    .eq("id", clipId)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  if (!data) return null;
+
+  return data as unknown as StudioClipPollingItem;
+}
+
+export async function getGroupedEvents(
+  brand: StudioBrand,
+  page: number,
+  pageSize: number,
+  search: string
+): Promise<{ events: GroupedEvent[]; total: number }> {
+  const supabase = getSupabase();
+
+  let query = supabase
+    .from("assets" as never)
+    .select("id, file_url, event_name, event_date, brand, storage_path")
+    .not("event_name", "is", null)
+    .or(`brand.eq.${brand},brand.eq.both`)
+    .is("deleted_at", null)
+    .order("event_date", { ascending: false, nullsFirst: false })
+    .limit(2000);
+
+  if (search.trim()) {
+    query = query.ilike("event_name", `%${search.trim()}%`);
+  }
+
+  const { data, error } = await query;
+  if (error) throw new Error(error.message);
+
+  // Group by event_name
+  const eventMap = new Map<string, GroupedEvent>();
+  for (const asset of (data ?? []) as Array<{
+    id: string;
+    file_url: string;
+    event_name: string;
+    event_date: string | null;
+    brand: string | null;
+    storage_path: string | null;
+  }>) {
+    const key = asset.event_name;
+    if (!eventMap.has(key)) {
+      eventMap.set(key, {
+        event_name: key,
+        event_date: asset.event_date,
+        brand: asset.brand,
+        photo_count: 0,
+        preview_photos: [],
+        storage_paths: [],
+        asset_ids: [],
+      });
+    }
+    const group = eventMap.get(key)!;
+    group.photo_count += 1;
+    group.asset_ids.push(asset.id);
+    if (asset.storage_path) group.storage_paths.push(asset.storage_path);
+    if (group.preview_photos.length < 4) {
+      group.preview_photos.push({ id: asset.id, file_url: asset.file_url });
+    }
+  }
+
+  // Convert to array and sort by date
+  const allEvents = Array.from(eventMap.values()).sort((a, b) => {
+    if (!a.event_date) return 1;
+    if (!b.event_date) return -1;
+    return b.event_date.localeCompare(a.event_date);
+  });
+
+  // Paginate
+  const from = (page - 1) * pageSize;
+  const events = allEvents.slice(from, from + pageSize);
+
+  return { events, total: allEvents.length };
+}
+
+export async function getEventPhotos(
+  eventName: string,
+  brand: StudioBrand
+): Promise<PhotoAsset[]> {
+  const supabase = getSupabase();
+
+  const { data, error } = await supabase
+    .from("assets" as never)
+    .select("id, person_name, brand, file_url, birth_date, source, metadata, event_name, event_date")
+    .eq("event_name", eventName)
+    .or(`brand.eq.${brand},brand.eq.both`)
+    .is("deleted_at", null)
+    .order("created_at", { ascending: true })
+    .limit(500);
+
+  if (error) throw new Error(error.message);
+
+  return (data ?? []) as unknown as PhotoAsset[];
+}
+
+export async function deleteEvent(
+  assetIds: string[],
+  storagePaths: string[]
+): Promise<void> {
+  const supabase = getSupabase();
+
+  // Soft-delete all assets for this event
+  const { error: dbError } = await supabase
+    .from("assets" as never)
+    .update({ deleted_at: new Date().toISOString() } as never)
+    .in("id", assetIds);
+
+  if (dbError) throw new Error(dbError.message);
+
+  // Delete from storage (fire-and-forget)
+  if (storagePaths.length > 0) {
+    await supabase.storage.from("posts").remove(storagePaths).catch(console.error);
+  }
 }

@@ -3,6 +3,13 @@
 import { useState, useMemo, useCallback } from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/shadcn/popover";
 import { CalendarBlank, CaretLeft, CaretRight, Clock } from "@phosphor-icons/react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/shadcn/select";
 import { cn } from "@/lib/utils";
 
 // ============================================================
@@ -183,6 +190,75 @@ function MiniCalendar({
       >
         Hoje
       </button>
+    </div>
+  );
+}
+
+// ============================================================
+// TIME PICKER (só hora, formato 24h)
+// ============================================================
+
+interface TimePickerProps {
+  value: string;
+  onChange: (time: string) => void;
+  className?: string;
+  minuteStep?: 1 | 5 | 10 | 15;
+}
+
+function parseTime(value: string) {
+  const [rawHour = "00", rawMinute = "00"] = value.split(":");
+  const hour = Math.min(23, Math.max(0, Number(rawHour) || 0));
+  const minute = Math.min(59, Math.max(0, Number(rawMinute) || 0));
+  return { hour: pad2(hour), minute: pad2(minute) };
+}
+
+export function TimePicker({
+  value,
+  onChange,
+  className,
+  minuteStep = 5,
+}: TimePickerProps) {
+  const { hour, minute } = useMemo(() => parseTime(value), [value]);
+
+  const hourOptions = useMemo(
+    () => Array.from({ length: 24 }, (_, i) => pad2(i)),
+    []
+  );
+
+  const minuteOptions = useMemo(
+    () => Array.from({ length: Math.floor(60 / minuteStep) }, (_, i) => pad2(i * minuteStep)),
+    [minuteStep]
+  );
+
+  return (
+    <div className={cn("grid grid-cols-[1fr_auto_1fr] items-center gap-2", className)}>
+      <Select value={hour} onValueChange={(nextHour) => onChange(`${nextHour}:${minute}`)}>
+        <SelectTrigger className="h-10 border-slate-700 bg-slate-900/70 text-slate-200">
+          <SelectValue placeholder="Hora" />
+        </SelectTrigger>
+        <SelectContent className="max-h-64">
+          {hourOptions.map((item) => (
+            <SelectItem key={item} value={item}>
+              {item}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+
+      <span className="text-sm font-semibold text-slate-500">:</span>
+
+      <Select value={minute} onValueChange={(nextMinute) => onChange(`${hour}:${nextMinute}`)}>
+        <SelectTrigger className="h-10 border-slate-700 bg-slate-900/70 text-slate-200">
+          <SelectValue placeholder="Min" />
+        </SelectTrigger>
+        <SelectContent className="max-h-64">
+          {minuteOptions.map((item) => (
+            <SelectItem key={item} value={item}>
+              {item}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </div>
   );
 }
