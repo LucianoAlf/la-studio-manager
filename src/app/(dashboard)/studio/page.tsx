@@ -722,6 +722,10 @@ export default function StudioPage() {
   const [commemorativeDates, setCommemorativeDates] = useState<CommemorativeDateItem[]>([]);
   const [commDateEditing, setCommDateEditing] = useState<CommemorativeDateItem | null>(null);
   const [commDateModalOpen, setCommDateModalOpen] = useState(false);
+  const [selectedPost, setSelectedPost] = useState<StudioPost | null>(null);
+  const [postModalOpen, setPostModalOpen] = useState(false);
+  const [postUpdating, setPostUpdating] = useState(false);
+  const [postDeleteConfirmOpen, setPostDeleteConfirmOpen] = useState(false);
   const [commDateFilter, setCommDateFilter] = useState({ category: "all", assigned: "all", status: "all" });
   const [commDateExpandedMonths, setCommDateExpandedMonths] = useState<Set<number>>(new Set());
   const [commDateSaving, setCommDateSaving] = useState(false);
@@ -3000,6 +3004,14 @@ export default function StudioPage() {
       return;
     }
 
+    // Validação: não permitir agendamento no passado
+    const scheduledDate = new Date(`${postDate}T${postTime}:00`);
+    const now = new Date();
+    if (scheduledDate <= now) {
+      toast.error("Não é possível agendar no passado. Escolha um horário futuro.");
+      return;
+    }
+
     setIsScheduling(true);
     try {
       // Obtém o usuário atual (fallback para admin)
@@ -3202,8 +3214,8 @@ export default function StudioPage() {
               <div className={cn("mb-2 text-xs", inCurrentMonth ? "text-slate-300" : "text-slate-600")}>{day.getDate()}</div>
               <div className="space-y-1">
                 {dayPosts.slice(0, 3).map((post) => (
-                  <Badge key={post.id} variant="status" color={STATUS_COLORS[post.status]} className="w-full justify-start rounded-md px-2 py-1 text-[10px]">
-                    {STATUS_LABELS[post.status]}
+                  <Badge key={post.id} variant="status" color={STATUS_COLORS[post.status]} className="w-full cursor-pointer justify-start rounded-md px-2 py-1 text-[10px] hover:opacity-80" onClick={() => { setSelectedPost(post); setPostModalOpen(true); }}>
+                    {post.title?.substring(0, 15) || STATUS_LABELS[post.status]}
                   </Badge>
                 ))}
                 {dayPosts.length > 3 && <p className="text-[10px] text-slate-500">+{dayPosts.length - 3} posts</p>}
@@ -4966,6 +4978,178 @@ export default function StudioPage() {
               </Button>
             </DialogFooter>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Post Detail/Edit Modal — CRUD completo */}
+      <Dialog open={postModalOpen} onOpenChange={(open) => { setPostModalOpen(open); if (!open) { setSelectedPost(null); } }}>
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="text-base">{selectedPost?.title || "Detalhes do Post"}</DialogTitle>
+          </DialogHeader>
+          {selectedPost && (() => {
+            const imgUrl = selectedPost.metadata?.image_url;
+            const [editBrand, setEditBrand] = [selectedPost.brand, (v: string) => setSelectedPost(prev => prev ? { ...prev, brand: v as StudioBrand } : prev)];
+            const [editPostType, setEditPostType] = [selectedPost.post_type, (v: string) => setSelectedPost(prev => prev ? { ...prev, post_type: v } : prev)];
+            const [editDate, setEditDate] = [selectedPost.scheduled_for?.substring(0, 10) || "", (v: string) => setSelectedPost(prev => prev ? { ...prev, scheduled_for: `${v}T${prev.scheduled_for?.substring(11, 16) || "10:00"}:00` } : prev)];
+            const [editTime, setEditTime] = [selectedPost.scheduled_for?.substring(11, 16) || "10:00", (v: string) => setSelectedPost(prev => prev ? { ...prev, scheduled_for: `${prev.scheduled_for?.substring(0, 10) || ""}T${v}:00` } : prev)];
+            return (
+            <div className="space-y-4">
+
+              {/* Image preview */}
+              {imgUrl && (
+                <img src={imgUrl} alt="Preview" className="w-full rounded-lg" style={{ maxHeight: "400px", objectFit: "contain" }} />
+              )}
+              <Button type="button" size="sm" variant="accent" className="w-full" disabled={postUpdating} onClick={async () => {
+                setPostUpdating(true);
+                toast.info("Regenerando imagem com IA...");
+                try {
+                  const { data: genData } = await supabase.functions.invoke("nina-create-post", {
+                    body: { mode: "brief", brand: selectedPost.brand, brief: selectedPost.title, post_type: (selectedPost.post_type === "story" || selectedPost.post_type === "reels") ? "story" : "feed" },
+                  });
+                  if (genData?.image_url) {
+                    await supabase.from("posts").update({ metadata: { ...selectedPost.metadata, image_url: genData.image_url }, caption: genData.caption || selectedPost.caption } as never).eq("id", selectedPost.id);
+                    setSelectedPost(prev => prev ? { ...prev, metadata: { ...prev.metadata, image_url: genData.image_url }, caption: genData.caption || prev.caption } : prev);
+                    setPosts(prev => prev.map(p => p.id === selectedPost.id ? { ...p, metadata: { ...p.metadata, image_url: genData.image_url } } : p));
+                    toast.success("Imagem e texto regenerados!");
+                  } else { toast.error(genData?.error || "Falha ao regenerar."); }
+                } catch { toast.error("Erro ao regenerar."); }
+                finally { setPostUpdating(false); }
+              }}>
+                Regenerar com IA
+              </Button>
+
+              {/* Status */}
+              <div className="flex items-center gap-2">
+                <Badge variant="status" color={STATUS_COLORS[selectedPost.status]}>{STATUS_LABELS[selectedPost.status]}</Badge>
+                {selectedPost.created_by_ai && <span className="text-xs text-cyan-400">Gerado por IA</span>}
+                {selectedPost.published_at && <span className="text-xs text-slate-500">Publicado: {new Date(selectedPost.published_at).toLocaleString("pt-BR")}</span>}
+              </div>
+
+              {/* Title */}
+              <div>
+                <label className="text-xs text-slate-400 mb-1 block">Título</label>
+                <input defaultValue={selectedPost.title} onChange={(e) => setSelectedPost(prev => prev ? { ...prev, title: e.target.value } : prev)} className="w-full rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2 text-sm text-slate-200" />
+              </div>
+
+              {/* Caption */}
+              <div>
+                <label className="text-xs text-slate-400 mb-1 block">Legenda</label>
+                <textarea defaultValue={selectedPost.caption || ""} onChange={(e) => setSelectedPost(prev => prev ? { ...prev, caption: e.target.value } : prev)} rows={5} className="w-full rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2 text-sm text-slate-200 resize-y" />
+              </div>
+
+              {/* Brand + Type — shadcn Select */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-slate-400 mb-1 block">Marca</label>
+                  <Select value={editBrand} onValueChange={setEditBrand}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="la_music_school">LA Music School</SelectItem>
+                      <SelectItem value="la_music_kids">LA Music Kids</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <label className="text-xs text-slate-400 mb-1 block">Tipo</label>
+                  <Select value={editPostType} onValueChange={(v) => {
+                    setEditPostType(v);
+                    if (v !== selectedPost.post_type) {
+                      toast.info("Tipo alterado. Clique em 'Regenerar com IA' para gerar a imagem no novo formato.");
+                    }
+                  }}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="story">Story (9:16)</SelectItem>
+                      <SelectItem value="image">Feed (4:5)</SelectItem>
+                      <SelectItem value="reels">Reels (9:16)</SelectItem>
+                      <SelectItem value="carousel">Carrossel (4:5)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              {/* Date + Time — Design system */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-slate-400 mb-1 block">Data</label>
+                  <DatePicker value={editDate} onChange={setEditDate} placeholder="Data" className="h-10 border-slate-700 bg-slate-900/70" />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-400 mb-1 block">Horário</label>
+                  <TimePicker value={editTime} onChange={setEditTime} minuteStep={15} className="h-10" />
+                </div>
+              </div>
+
+              {/* Action buttons — clear UX */}
+              <div className="flex items-center justify-between pt-3 border-t border-slate-800">
+                <AlertDialog open={postDeleteConfirmOpen} onOpenChange={setPostDeleteConfirmOpen}>
+                  <Button type="button" variant="ghost" size="sm" className="text-red-400 hover:text-red-300 hover:bg-red-900/20" onClick={() => setPostDeleteConfirmOpen(true)}>
+                    Excluir
+                  </Button>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Excluir post?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        Tem certeza que deseja excluir &quot;{selectedPost.title}&quot;? Esta ação não pode ser desfeita.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                      <AlertDialogAction className="bg-red-600 hover:bg-red-500" disabled={postUpdating} onClick={async () => {
+                        setPostUpdating(true);
+                        try {
+                          await supabase.from("posts").delete().eq("id", selectedPost.id);
+                          await supabase.from("studio_publish_queue").delete().eq("post_id", selectedPost.id);
+                          setPosts(prev => prev.filter(p => p.id !== selectedPost.id));
+                          toast.success("Post excluído.");
+                          setPostModalOpen(false);
+                          setPostDeleteConfirmOpen(false);
+                        } catch { toast.error("Erro ao excluir."); }
+                        finally { setPostUpdating(false); }
+                      }}>
+                        Excluir
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+
+                <div className="flex gap-2">
+                  <Button type="button" variant="primary" size="sm" disabled={postUpdating} onClick={async () => {
+                    setPostUpdating(true);
+                    toast.info("Publicando agora...");
+                    try {
+                      await supabase.from("posts").update({ status: "scheduled", scheduled_for: new Date().toISOString() } as never).eq("id", selectedPost.id);
+                      const { data: pubData, error: fnErr } = await supabase.functions.invoke("publish-scheduled-posts", { body: { post_id: selectedPost.id } });
+                      if (fnErr || !(pubData as { success?: boolean })?.success) { toast.error("Falha ao publicar."); }
+                      else { toast.success("Publicado!"); await loadBaseData(); setPostModalOpen(false); }
+                    } catch { toast.error("Erro."); }
+                    finally { setPostUpdating(false); }
+                  }}>
+                    Publicar agora
+                  </Button>
+                  <Button type="button" size="sm" className="bg-cyan-600 hover:bg-cyan-500 text-white" disabled={postUpdating} onClick={async () => {
+                    if (!selectedPost.scheduled_for || selectedPost.scheduled_for.length < 10) { toast.error("Escolha uma data e horário para agendar."); return; }
+                    const schedDate = new Date(selectedPost.scheduled_for);
+                    if (schedDate <= new Date()) { toast.error("Escolha um horário futuro."); return; }
+                    setPostUpdating(true);
+                    try {
+                      await supabase.from("posts").update({ title: selectedPost.title, caption: selectedPost.caption, brand: selectedPost.brand, post_type: selectedPost.post_type, scheduled_for: selectedPost.scheduled_for, status: "scheduled" } as never).eq("id", selectedPost.id);
+                      await supabase.from("studio_publish_queue").upsert({ post_id: selectedPost.id, brand: selectedPost.brand, scheduled_for: selectedPost.scheduled_for, status: "pending" } as never, { onConflict: "post_id" });
+                      setPosts(prev => prev.map(p => p.id === selectedPost.id ? { ...p, ...selectedPost, status: "scheduled" as const } : p));
+                      toast.success(`Agendado para ${schedDate.toLocaleString("pt-BR")}!`);
+                      setPostModalOpen(false);
+                    } catch { toast.error("Erro ao agendar."); }
+                    finally { setPostUpdating(false); }
+                  }}>
+                    Agendar
+                  </Button>
+                </div>
+              </div>
+
+            </div>
+            );
+          })()}
         </DialogContent>
       </Dialog>
     </>

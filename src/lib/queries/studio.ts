@@ -26,6 +26,7 @@ export interface StudioPost {
   created_by_ai: boolean;
   platform_ids: Record<string, unknown> | null;
   created_at: string;
+  metadata?: { image_url?: string; [key: string]: unknown } | null;
 }
 
 export interface PhotoAsset {
@@ -179,7 +180,7 @@ export async function getStudioPostsByBrand(brand: StudioBrand): Promise<StudioP
   const supabase = getSupabase();
   const { data, error } = await supabase
     .from("posts" as never)
-    .select("id, title, caption, post_type, status, brand, scheduled_for, published_at, created_by_ai, platform_ids, created_at")
+    .select("id, title, caption, post_type, status, brand, scheduled_for, published_at, created_by_ai, platform_ids, created_at, metadata")
     .eq("brand", brand)
     .is("deleted_at", null)
     .order("scheduled_for", { ascending: true, nullsFirst: false })
