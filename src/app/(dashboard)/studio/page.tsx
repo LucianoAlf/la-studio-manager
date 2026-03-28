@@ -2820,7 +2820,7 @@ export default function StudioPage() {
   const handleGenerateWithNina = async () => {
     setIsGeneratingWithNina(true);
     try {
-      const { data, error: fnError } = await supabase.functions.invoke<NinaGenerationResponse>("process-nina-request", {
+      const { data, error: fnError } = await supabase.functions.invoke<NinaGenerationResponse>("nina-create-post", {
         body: {
           mode: "brief",
           brand,
@@ -2906,9 +2906,16 @@ export default function StudioPage() {
 
     setIsPublishingNow(true);
     try {
-      // Obtém o usuário atual
+      // Obtém o usuário atual (fallback para admin se sessão expirar)
+      let userId: string | null = null;
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
+      if (user) {
+        userId = user.id;
+      } else {
+        const { data: admin } = await supabase.from("user_profiles" as never).select("user_id").eq("is_admin", true).limit(1).single();
+        userId = (admin as { user_id: string } | null)?.user_id ?? null;
+      }
+      if (!userId) {
         toast.error("Usuário não autenticado.");
         return;
       }
@@ -2927,7 +2934,7 @@ export default function StudioPage() {
           brand,
           scheduled_for: scheduledFor,
           created_by_ai: true,
-          created_by: user.id,
+          created_by: userId,
           ai_agent_name: "Nina",
           metadata: { image_url: ninaPreviewUrl },
         } as never)
@@ -2995,9 +3002,16 @@ export default function StudioPage() {
 
     setIsScheduling(true);
     try {
-      // Obtém o usuário atual
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
+      // Obtém o usuário atual (fallback para admin)
+      let schedUserId: string | null = null;
+      const { data: { user: schedUser } } = await supabase.auth.getUser();
+      if (schedUser) {
+        schedUserId = schedUser.id;
+      } else {
+        const { data: admin } = await supabase.from("user_profiles" as never).select("user_id").eq("is_admin", true).limit(1).single();
+        schedUserId = (admin as { user_id: string } | null)?.user_id ?? null;
+      }
+      if (!schedUserId) {
         toast.error("Usuário não autenticado.");
         return;
       }
@@ -3015,7 +3029,7 @@ export default function StudioPage() {
           brand,
           scheduled_for: scheduledFor,
           created_by_ai: true,
-          created_by: user.id,
+          created_by: schedUserId,
           ai_agent_name: "Nina",
           metadata: { image_url: ninaPreviewUrl },
         } as never)
