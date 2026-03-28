@@ -23,6 +23,7 @@ import {
   SpinnerGap,
   Folder,
   Trash,
+  Camera,
 } from "@phosphor-icons/react";
 import type { Icon } from "@phosphor-icons/react";
 import {
@@ -706,6 +707,8 @@ export default function StudioPage() {
   const [birthdayGenerating, setBirthdayGenerating] = useState<Record<string, boolean>>({});
   const [birthdayPreview, setBirthdayPreview] = useState<{ assetId: string; imageUrl: string; studentName: string } | null>(null);
   const [birthdayPublishing, setBirthdayPublishing] = useState(false);
+  const [birthdayUploadingPhoto, setBirthdayUploadingPhoto] = useState(false);
+  const birthdayPhotoInputRef = useRef<HTMLInputElement>(null);
   const [commemorativeDates, setCommemorativeDates] = useState<CommemorativeDateItem[]>([]);
   const [integrations, setIntegrations] = useState<IntegrationCredentialItem[]>([]);
   const [metrics, setMetrics] = useState({ alcance: 0, engajamento: 0, taxaEngajamento: 0, publicados: 0 });
@@ -4434,13 +4437,86 @@ export default function StudioPage() {
           {birthdayPreview && (
             <div className="flex-1 overflow-hidden space-y-3">
               {/* Preview da imagem */}
-              <div className="relative rounded-lg overflow-hidden border border-slate-700">
+              <div className="relative rounded-lg overflow-hidden border border-slate-700 group">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={birthdayPreview.imageUrl}
                   alt={`Post de aniversário de ${birthdayPreview.studentName}`}
                   className="w-full object-contain"
                   style={{ maxHeight: "55vh" }}
+                />
+                {/* Botão trocar foto (overlay) */}
+                <button
+                  type="button"
+                  disabled={birthdayUploadingPhoto || birthdayPublishing}
+                  onClick={() => birthdayPhotoInputRef.current?.click()}
+                  className="absolute bottom-2 right-2 flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-black/70 text-white hover:bg-black/90 transition-colors backdrop-blur-sm"
+                >
+                  {birthdayUploadingPhoto ? (
+                    <SpinnerGap size={14} className="animate-spin" />
+                  ) : (
+                    <Camera size={14} weight="bold" />
+                  )}
+                  {birthdayUploadingPhoto ? "Trocando..." : "Trocar foto"}
+                </button>
+                <input
+                  ref={birthdayPhotoInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  className="hidden"
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    if (!file || !birthdayPreview) return;
+
+                    // Validar
+                    if (file.size > 5 * 1024 * 1024) {
+                      toast.error("Arquivo muito grande. Máximo 5MB.");
+                      return;
+                    }
+
+                    setBirthdayUploadingPhoto(true);
+                    try {
+                      const ext = file.name.split(".").pop() || "jpg";
+                      const storagePath = `alunos/${brand}/${birthdayPreview.assetId}.${ext}`;
+
+                      // Upload para storage
+                      const { error: uploadErr } = await supabase.storage
+                        .from("assets")
+                        .upload(storagePath, file, { upsert: true, contentType: file.type });
+
+                      if (uploadErr) throw uploadErr;
+
+                      const { data: urlData } = supabase.storage.from("assets").getPublicUrl(storagePath);
+                      const newPhotoUrl = urlData.publicUrl;
+
+                      // Atualizar asset no banco
+                      await supabase
+                        .from("assets" as never)
+                        .update({ file_url: newPhotoUrl, metadata: { active: true, has_real_photo: true, source: "la_music_report", synced_at: new Date().toISOString() } } as never)
+                        .eq("id", birthdayPreview.assetId);
+
+                      toast.success("Foto atualizada! Regenerando post...");
+
+                      // Regenerar post com nova foto
+                      const result = await generateBirthdayPost(birthdayPreview.assetId, brand);
+                      if (result.success && result.image_url) {
+                        setBirthdayPreview({
+                          ...birthdayPreview,
+                          imageUrl: result.image_url,
+                        });
+                        toast.success("Post regenerado com a nova foto!");
+                      } else {
+                        toast.error(result.error || "Erro ao regenerar post");
+                      }
+                    } catch (err) {
+                      console.error("[BIRTHDAY_PHOTO]", err);
+                      toast.error("Erro ao trocar foto");
+                    } finally {
+                      setBirthdayUploadingPhoto(false);
+                      // Reset input
+                      if (birthdayPhotoInputRef.current) birthdayPhotoInputRef.current.value = "";
+                    }
+                  }}
                 />
               </div>
 

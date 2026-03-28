@@ -123,16 +123,18 @@ serve(async (req: Request) => {
     const firstName = nameParts[0] || 'Aluno'
     const lastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : ''
 
-    // 4. Upload student photo to Canva (if they have one)
+    // 4. Upload student photo to Canva (always — use placeholder if no real photo)
     let photoAssetId: string | null = null
-    if (student.file_url && student.metadata?.has_real_photo) {
-      console.log('[BIRTHDAY] Uploading student photo to Canva...')
-      photoAssetId = await uploadAssetToCanva(accessToken, student.file_url, `birthday-${student.id}`)
-      if (photoAssetId) {
-        console.log(`[BIRTHDAY] Photo uploaded: ${photoAssetId}`)
-      } else {
-        console.warn('[BIRTHDAY] Photo upload failed, continuing without photo')
-      }
+    const photoUrl = student.file_url && student.metadata?.has_real_photo
+      ? student.file_url
+      : `https://ui-avatars.com/api/?name=${encodeURIComponent(firstName)}&size=400&background=6C3FA0&color=fff&bold=true&format=png`
+
+    console.log(`[BIRTHDAY] Uploading photo to Canva (real: ${!!student.metadata?.has_real_photo})...`)
+    photoAssetId = await uploadAssetToCanva(accessToken, photoUrl, `birthday-${student.id}-${Date.now()}`)
+    if (photoAssetId) {
+      console.log(`[BIRTHDAY] Photo uploaded: ${photoAssetId}`)
+    } else {
+      console.warn('[BIRTHDAY] Photo upload failed, continuing without photo')
     }
 
     // 5. Create autofill job
