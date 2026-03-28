@@ -8,7 +8,8 @@
       "Bash(npm run:*)",
       "Bash(npx tsc:*)",
       "mcp__claude_ai_Supabase__get_logs",
-      "Bash(ls -la src/app/\\\\\\(dashboard\\\\\\)/)"
+      "Bash(ls -la src/app/\\\\\\(dashboard\\\\\\)/)",
+      "Bash(npx next:*)"
     ]
   }
 }

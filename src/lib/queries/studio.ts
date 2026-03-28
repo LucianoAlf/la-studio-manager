@@ -68,8 +68,19 @@ export interface CommemorativeDateItem {
   name: string;
   date_month: number;
   date_day: number;
+  category: string;
   brand: string;
   caption_hint: string | null;
+  post_idea: string | null;
+  description: string | null;
+  hashtags: string[];
+  assigned_to: string;
+  auto_generate: boolean;
+  post_type: string;
+  days_advance: number;
+  content_status: string;
+  is_active: boolean;
+  last_published_at: string | null;
 }
 
 export interface IntegrationCredentialItem {
@@ -373,7 +384,7 @@ export async function getCommemorativeDates(brand: StudioBrand): Promise<Commemo
   const supabase = getSupabase();
   const { data, error } = await supabase
     .from("commemorative_dates" as never)
-    .select("id, name, date_month, date_day, brand, caption_hint")
+    .select("id, name, date_month, date_day, category, brand, caption_hint, post_idea, description, hashtags, assigned_to, auto_generate, post_type, days_advance, content_status, is_active, last_published_at")
     .eq("is_active", true)
     .or(`brand.eq.${brand},brand.eq.both`)
     .order("date_month", { ascending: true })
@@ -385,6 +396,54 @@ export async function getCommemorativeDates(brand: StudioBrand): Promise<Commemo
   }
 
   return (data ?? []) as unknown as CommemorativeDateItem[];
+}
+
+export async function addCommemorativeDate(data: Omit<CommemorativeDateItem, "id" | "last_published_at">): Promise<CommemorativeDateItem> {
+  const supabase = getSupabase();
+  const { data: result, error } = await supabase
+    .from("commemorative_dates" as never)
+    .insert({
+      name: data.name,
+      date_month: data.date_month,
+      date_day: data.date_day,
+      category: data.category || "music",
+      brand: data.brand || "both",
+      caption_hint: data.caption_hint,
+      post_idea: data.post_idea,
+      description: data.description,
+      hashtags: data.hashtags || [],
+      assigned_to: data.assigned_to || "nina",
+      auto_generate: data.auto_generate || false,
+      post_type: data.post_type || "story",
+      days_advance: data.days_advance || 7,
+      content_status: data.content_status || "pending",
+      is_active: data.is_active !== false,
+    } as never)
+    .select()
+    .single();
+
+  if (error) throw new Error(error.message);
+  return result as unknown as CommemorativeDateItem;
+}
+
+export async function updateCommemorativeDate(id: string, data: Partial<CommemorativeDateItem>): Promise<void> {
+  const supabase = getSupabase();
+  const { error } = await supabase
+    .from("commemorative_dates" as never)
+    .update({ ...data, updated_at: new Date().toISOString() } as never)
+    .eq("id", id);
+
+  if (error) throw new Error(error.message);
+}
+
+export async function deleteCommemorativeDate(id: string): Promise<void> {
+  const supabase = getSupabase();
+  const { error } = await supabase
+    .from("commemorative_dates" as never)
+    .delete()
+    .eq("id", id);
+
+  if (error) throw new Error(error.message);
 }
 
 export async function getIntegrations(): Promise<IntegrationCredentialItem[]> {

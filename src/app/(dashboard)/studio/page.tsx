@@ -14,6 +14,7 @@ import {
   Bell,
   CaretLeft,
   CaretRight,
+  CaretDown,
   Clock,
   Upload,
   Warning,
@@ -24,6 +25,12 @@ import {
   Folder,
   Trash,
   Camera,
+  MusicNote,
+  Confetti,
+  Baby,
+  Robot,
+  User,
+  Pencil,
 } from "@phosphor-icons/react";
 import type { Icon } from "@phosphor-icons/react";
 import {
@@ -44,6 +51,9 @@ import {
   getStudioPostsByBrand,
   generateBirthdayPost,
   publishBirthdayStory,
+  addCommemorativeDate,
+  updateCommemorativeDate,
+  deleteCommemorativeDate,
   type AssetFilterType,
   type CommemorativeDateItem,
   type GroupedEvent,
@@ -710,6 +720,17 @@ export default function StudioPage() {
   const [birthdayUploadingPhoto, setBirthdayUploadingPhoto] = useState(false);
   const birthdayPhotoInputRef = useRef<HTMLInputElement>(null);
   const [commemorativeDates, setCommemorativeDates] = useState<CommemorativeDateItem[]>([]);
+  const [commDateEditing, setCommDateEditing] = useState<CommemorativeDateItem | null>(null);
+  const [commDateModalOpen, setCommDateModalOpen] = useState(false);
+  const [commDateFilter, setCommDateFilter] = useState({ category: "all", assigned: "all", status: "all" });
+  const [commDateExpandedMonths, setCommDateExpandedMonths] = useState<Set<number>>(new Set());
+  const [commDateSaving, setCommDateSaving] = useState(false);
+  // Controlled form state for commemorative date modal
+  const [commForm, setCommForm] = useState({
+    name: "", date_day: 1, date_month: 1, category: "music", brand: "both",
+    post_type: "story", assigned_to: "nina", auto_generate: false, days_advance: 7,
+    caption_hint: "", post_idea: "", hashtags: "",
+  });
   const [integrations, setIntegrations] = useState<IntegrationCredentialItem[]>([]);
   const [metrics, setMetrics] = useState({ alcance: 0, engajamento: 0, taxaEngajamento: 0, publicados: 0 });
 
@@ -3991,24 +4012,207 @@ export default function StudioPage() {
             )}
           </Card>
         </div>
-      ) : (
-        <Card variant="default" className="space-y-3">
-          <h3 className="text-sm font-semibold text-slate-100">Datas comemorativas</h3>
-          {commemorativeDates.length === 0 ? (
-            <p className="text-sm text-slate-500">Nenhuma data configurada.</p>
-          ) : (
-            commemorativeDates.map((row) => (
-              <div key={row.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-800 bg-slate-900/50 p-3">
-                <div>
-                  <p className="text-sm text-slate-100">{row.name}</p>
-                  <p className="text-xs text-slate-500">{String(row.date_day).padStart(2, "0")}/{String(row.date_month).padStart(2, "0")} • {row.brand}</p>
+      ) : (() => {
+        // Helper: days until next occurrence
+        const getDaysUntil = (month: number, day: number) => {
+          const now = new Date();
+          const thisYear = now.getFullYear();
+          let next = new Date(thisYear, month - 1, day);
+          if (next < now) next = new Date(thisYear + 1, month - 1, day);
+          return Math.ceil((next.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+        };
+
+        // Helper: proximity badge
+        const getProximityBadge = (days: number) => {
+          if (days === 0) return { text: "HOJE", color: "bg-red-500/20 text-red-400 border-red-500/30" };
+          if (days === 1) return { text: "AMANHÃ", color: "bg-orange-500/20 text-orange-400 border-orange-500/30" };
+          if (days <= 7) return { text: `EM ${days}D`, color: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30" };
+          if (days <= 30) return { text: `EM ${days}D`, color: "bg-slate-700 text-slate-300 border-slate-600" };
+          return { text: `${Math.ceil(days / 7)}SEM`, color: "bg-slate-800 text-slate-500 border-slate-700" };
+        };
+
+        // Helper: category icon
+        const getCategoryIcon = (cat: string) => {
+          if (cat === "music") return <MusicNote size={16} weight="duotone" className="text-cyan-400" />;
+          if (cat === "kids") return <Baby size={16} weight="duotone" className="text-pink-400" />;
+          return <Confetti size={16} weight="duotone" className="text-yellow-400" />;
+        };
+
+        // Helper: status badge
+        const getStatusBadge = (status: string) => {
+          const map: Record<string, { label: string; cls: string }> = {
+            pending: { label: "Pendente", cls: "bg-slate-700 text-slate-300" },
+            in_progress: { label: "Em progresso", cls: "bg-cyan-500/20 text-cyan-400" },
+            ready: { label: "Pronto", cls: "bg-green-500/20 text-green-400" },
+            published: { label: "Publicado", cls: "bg-emerald-500/20 text-emerald-400" },
+            skipped: { label: "Pulado", cls: "bg-slate-800 text-slate-500" },
+          };
+          const s = map[status] || map.pending;
+          return <span className={cn("px-1.5 py-0.5 text-[10px] font-semibold uppercase rounded", s.cls)}>{s.label}</span>;
+        };
+
+        // Helper: assigned badge
+        const getAssignedBadge = (assigned: string) => {
+          if (assigned === "nina") return <span className="flex items-center gap-1 text-xs text-cyan-400"><Robot size={12} /> Nina</span>;
+          return <span className="flex items-center gap-1 text-xs text-slate-400"><User size={12} /> {assigned.charAt(0).toUpperCase() + assigned.slice(1)}</span>;
+        };
+
+        const MONTHS_PT = ["JAN","FEV","MAR","ABR","MAI","JUN","JUL","AGO","SET","OUT","NOV","DEZ"];
+
+        // Filter & sort
+        const filteredCommDates = commemorativeDates.filter(d => {
+          if (commDateFilter.category !== "all" && d.category !== commDateFilter.category) return false;
+          if (commDateFilter.assigned !== "all" && d.assigned_to !== commDateFilter.assigned) return false;
+          if (commDateFilter.status !== "all" && d.content_status !== commDateFilter.status) return false;
+          return true;
+        });
+
+        const sortedCommDates = [...filteredCommDates].map(d => ({
+          ...d,
+          _daysUntil: getDaysUntil(d.date_month, d.date_day),
+        })).sort((a, b) => a._daysUntil - b._daysUntil);
+
+        const thisWeekDates = sortedCommDates.filter(d => d._daysUntil <= 7);
+        const next30Dates = sortedCommDates.filter(d => d._daysUntil > 7 && d._daysUntil <= 30);
+
+        // Group all by month for calendar view
+        const byMonth = new Map<number, typeof sortedCommDates>();
+        for (const d of sortedCommDates) {
+          const arr = byMonth.get(d.date_month) || [];
+          arr.push(d);
+          byMonth.set(d.date_month, arr);
+        }
+
+        // Render a single date card
+        const renderCommDateCard = (d: CommemorativeDateItem & { _daysUntil: number }, compact = false) => {
+          const badge = getProximityBadge(d._daysUntil);
+          return (
+            <div key={d.id} className={cn(
+              "flex flex-wrap items-center gap-2 rounded-lg border p-2.5",
+              d._daysUntil === 0 ? "border-red-500/40 bg-red-500/5" :
+              d._daysUntil <= 7 ? "border-orange-500/30 bg-orange-500/5" : "border-slate-800 bg-slate-900/50"
+            )}>
+              <div className="flex items-center gap-2 flex-1 min-w-0">
+                {getCategoryIcon(d.category)}
+                <div className="min-w-0">
+                  <p className={cn("font-medium truncate", compact ? "text-xs text-slate-200" : "text-sm text-slate-100")}>{d.name}</p>
+                  <p className="text-[11px] text-slate-500">
+                    {String(d.date_day).padStart(2, "0")}/{String(d.date_month).padStart(2, "0")}
+                    {d.brand !== "both" && ` • ${d.brand === "la_music_kids" ? "Kids" : "School"}`}
+                  </p>
                 </div>
-                <Button size="sm" variant="primary" onClick={() => setActiveTab("criar")}>Criar post</Button>
               </div>
-            ))
-          )}
-        </Card>
-      )}
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <span className={cn("px-1.5 py-0.5 text-[10px] font-semibold uppercase rounded border", badge.color)}>{badge.text}</span>
+                {!compact && getStatusBadge(d.content_status)}
+                {!compact && getAssignedBadge(d.assigned_to)}
+                <button onClick={() => {
+                  const brief = d.caption_hint || d.post_idea || d.name;
+                  setPostBrief(`${d.name}: ${brief}`);
+                  setActiveTab("criar");
+                }} className="px-2 py-1 text-[11px] font-medium rounded bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30">
+                  Criar post
+                </button>
+                <button onClick={() => { setCommDateEditing(d); setCommDateModalOpen(true); }}
+                  className="p-1 text-slate-500 hover:text-slate-200"><Pencil size={14} /></button>
+                <button onClick={async () => {
+                  if (!confirm("Remover esta data comemorativa?")) return;
+                  try {
+                    await deleteCommemorativeDate(d.id);
+                    setCommemorativeDates(prev => prev.filter(x => x.id !== d.id));
+                    toast.success("Data removida");
+                  } catch { toast.error("Erro ao remover"); }
+                }} className="p-1 text-slate-500 hover:text-red-400"><Trash size={14} /></button>
+              </div>
+            </div>
+          );
+        };
+
+        return (
+          <div className="space-y-4">
+            {/* Header + Add button */}
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-sm font-semibold text-slate-100 mr-auto">Datas Comemorativas ({filteredCommDates.length})</h3>
+              <button
+                onClick={() => { setCommDateEditing(null); setCommDateModalOpen(true); }}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30 transition-colors"
+              >
+                <Plus size={14} /> Nova Data
+              </button>
+            </div>
+
+            {/* Filters */}
+            <div className="flex flex-wrap gap-2">
+              {[{label:"Todos",val:"all"},{label:"Música",val:"music"},{label:"Geral",val:"general"},{label:"Kids",val:"kids"}].map(f => (
+                <button key={f.val} onClick={() => setCommDateFilter(p => ({...p, category: f.val}))}
+                  className={cn("px-2.5 py-1 text-xs rounded-lg", commDateFilter.category === f.val ? "bg-cyan-500/20 text-cyan-400 border border-cyan-500/30" : "bg-slate-800 text-slate-400 hover:text-slate-200")}>
+                  {f.label}
+                </button>
+              ))}
+              <div className="w-px h-5 bg-slate-700 self-center" />
+              {[{label:"Todos",val:"all"},{label:"Nina",val:"nina"},{label:"John",val:"john"},{label:"Yuri",val:"yuri"}].map(f => (
+                <button key={f.val} onClick={() => setCommDateFilter(p => ({...p, assigned: f.val}))}
+                  className={cn("px-2.5 py-1 text-xs rounded-lg", commDateFilter.assigned === f.val ? "bg-cyan-500/20 text-cyan-400 border border-cyan-500/30" : "bg-slate-800 text-slate-400 hover:text-slate-200")}>
+                  {f.label}
+                </button>
+              ))}
+            </div>
+
+            {/* This Week section */}
+            {thisWeekDates.length > 0 && (
+              <Card variant="default" className="space-y-2 border-orange-500/30">
+                <h4 className="text-xs font-semibold text-orange-400 uppercase tracking-wider">Esta Semana ({thisWeekDates.length})</h4>
+                {thisWeekDates.map(d => renderCommDateCard(d))}
+              </Card>
+            )}
+
+            {/* Next 30 days */}
+            {next30Dates.length > 0 && (
+              <Card variant="default" className="space-y-2">
+                <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">Próximos 30 Dias ({next30Dates.length})</h4>
+                {next30Dates.map(d => renderCommDateCard(d))}
+              </Card>
+            )}
+
+            {/* Annual Calendar grouped by month */}
+            <Card variant="default" className="space-y-1">
+              <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Calendário Anual</h4>
+              {Array.from({ length: 12 }, (_, i) => i + 1).map(month => {
+                const dates = byMonth.get(month) || [];
+                if (dates.length === 0) return null;
+                const expanded = commDateExpandedMonths.has(month);
+                return (
+                  <div key={month}>
+                    <button
+                      onClick={() => setCommDateExpandedMonths(prev => {
+                        const next = new Set(prev);
+                        if (next.has(month)) next.delete(month); else next.add(month);
+                        return next;
+                      })}
+                      className="flex items-center gap-2 w-full px-2 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-800/50 rounded-lg transition-colors"
+                    >
+                      {expanded ? <CaretDown size={12} /> : <CaretRight size={12} />}
+                      <span className="font-bold text-slate-200">{MONTHS_PT[month - 1]}</span>
+                      <span className="text-slate-500">({dates.length})</span>
+                    </button>
+                    {expanded && (
+                      <div className="pl-6 space-y-1 pb-2">
+                        {dates.map(d => renderCommDateCard(d, true))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </Card>
+
+            {filteredCommDates.length === 0 && (
+              <div className="text-center py-8 text-slate-500">
+                Nenhuma data encontrada com os filtros selecionados.
+              </div>
+            )}
+          </div>
+        );
+      })()}
     </div>
     );
   };
@@ -4593,6 +4797,161 @@ export default function StudioPage() {
               )}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Modal de Data Comemorativa */}
+      <Dialog open={commDateModalOpen} onOpenChange={(open) => {
+        if (!commDateSaving) {
+          setCommDateModalOpen(open);
+          if (open && !commDateEditing) {
+            setCommForm({ name: "", date_day: 1, date_month: 1, category: "music", brand: "both", post_type: "story", assigned_to: "nina", auto_generate: false, days_advance: 7, caption_hint: "", post_idea: "", hashtags: "" });
+          } else if (open && commDateEditing) {
+            setCommForm({ name: commDateEditing.name, date_day: commDateEditing.date_day, date_month: commDateEditing.date_month, category: commDateEditing.category || "music", brand: commDateEditing.brand || "both", post_type: commDateEditing.post_type || "story", assigned_to: commDateEditing.assigned_to || "nina", auto_generate: commDateEditing.auto_generate || false, days_advance: commDateEditing.days_advance || 7, caption_hint: commDateEditing.caption_hint || "", post_idea: commDateEditing.post_idea || "", hashtags: (commDateEditing.hashtags || []).join(" ") });
+          }
+        }
+      }}>
+        <DialogContent className="max-w-md border-slate-700 bg-slate-900 max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="text-slate-100">
+              {commDateEditing ? "Editar Data" : "Nova Data Comemorativa"}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-slate-300">Nome</label>
+              <input value={commForm.name} onChange={e => setCommForm(p => ({ ...p, name: e.target.value }))} placeholder="Dia do Guitarrista" className="w-full px-3 py-2 text-sm rounded-lg bg-slate-900/50 border border-slate-700 text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/50" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-slate-300">Dia</label>
+                <Select value={String(commForm.date_day)} onValueChange={v => setCommForm(p => ({ ...p, date_day: Number(v) }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>{Array.from({length:31},(_,i)=>i+1).map(d => <SelectItem key={d} value={String(d)}>{d}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-slate-300">Mês</label>
+                <Select value={String(commForm.date_month)} onValueChange={v => setCommForm(p => ({ ...p, date_month: Number(v) }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>{["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"].map((m,i) => <SelectItem key={i+1} value={String(i+1)}>{m}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-slate-300">Categoria</label>
+                <Select value={commForm.category} onValueChange={v => setCommForm(p => ({ ...p, category: v }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="music">Música</SelectItem>
+                    <SelectItem value="general">Geral</SelectItem>
+                    <SelectItem value="kids">Kids</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-slate-300">Marca</label>
+                <Select value={commForm.brand} onValueChange={v => setCommForm(p => ({ ...p, brand: v }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="both">Ambas</SelectItem>
+                    <SelectItem value="la_music_school">LA Music School</SelectItem>
+                    <SelectItem value="la_music_kids">LA Music Kids</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-slate-300">Tipo de Post</label>
+                <Select value={commForm.post_type} onValueChange={v => setCommForm(p => ({ ...p, post_type: v }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="story">Story</SelectItem>
+                    <SelectItem value="feed">Feed</SelectItem>
+                    <SelectItem value="carousel">Carrossel</SelectItem>
+                    <SelectItem value="reels">Reels</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-slate-300">Responsável</label>
+                <Select value={commForm.assigned_to} onValueChange={v => setCommForm(p => ({ ...p, assigned_to: v }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="nina">Nina (IA)</SelectItem>
+                    <SelectItem value="john">John</SelectItem>
+                    <SelectItem value="yuri">Yuri</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-medium text-slate-300">Auto-gerar com Nina</label>
+              <Switch checked={commForm.auto_generate} onCheckedChange={v => setCommForm(p => ({ ...p, auto_generate: v }))} />
+            </div>
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-slate-300">Alertar com antecedência (dias)</label>
+              <input type="number" min={1} max={90} value={commForm.days_advance} onChange={e => setCommForm(p => ({ ...p, days_advance: Number(e.target.value) || 7 }))} className="w-full px-3 py-2 text-sm rounded-lg bg-slate-900/50 border border-slate-700 text-slate-200" />
+            </div>
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-slate-300">Dica de legenda</label>
+              <textarea rows={2} value={commForm.caption_hint} onChange={e => setCommForm(p => ({ ...p, caption_hint: e.target.value }))} placeholder="Ex: Celebre os guitarristas..." className="w-full px-3 py-2 text-sm rounded-lg bg-slate-900/50 border border-slate-700 text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/50" />
+            </div>
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-slate-300">Ideia de post</label>
+              <textarea rows={2} value={commForm.post_idea} onChange={e => setCommForm(p => ({ ...p, post_idea: e.target.value }))} placeholder="Ex: Foto de aluno tocando guitarra..." className="w-full px-3 py-2 text-sm rounded-lg bg-slate-900/50 border border-slate-700 text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/50" />
+            </div>
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-slate-300">Hashtags</label>
+              <input value={commForm.hashtags} onChange={e => setCommForm(p => ({ ...p, hashtags: e.target.value }))} placeholder="#diadoguitarrista #musica" className="w-full px-3 py-2 text-sm rounded-lg bg-slate-900/50 border border-slate-700 text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/50" />
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="ghost" size="sm" onClick={() => { setCommDateModalOpen(false); setCommDateEditing(null); }} disabled={commDateSaving}>Cancelar</Button>
+              <Button type="button" variant="primary" size="sm" disabled={commDateSaving || !commForm.name} onClick={async () => {
+                const payload = {
+                  name: commForm.name,
+                  date_day: commForm.date_day,
+                  date_month: commForm.date_month,
+                  category: commForm.category,
+                  brand: commForm.brand,
+                  post_type: commForm.post_type,
+                  assigned_to: commForm.assigned_to,
+                  auto_generate: commForm.auto_generate,
+                  days_advance: commForm.days_advance,
+                  caption_hint: commForm.caption_hint || null,
+                  post_idea: commForm.post_idea || null,
+                  description: null,
+                  hashtags: commForm.hashtags.split(/[,\s]+/).filter(Boolean),
+                  content_status: commDateEditing?.content_status || "pending",
+                  is_active: true,
+                };
+                setCommDateSaving(true);
+                try {
+                  if (commDateEditing) {
+                    await updateCommemorativeDate(commDateEditing.id, payload);
+                    setCommemorativeDates(prev => prev.map(d => d.id === commDateEditing.id ? { ...d, ...payload } : d));
+                    toast.success("Data atualizada!");
+                  } else {
+                    const created = await addCommemorativeDate(payload);
+                    setCommemorativeDates(prev => [...prev, created]);
+                    toast.success("Data adicionada!");
+                  }
+                  setCommDateModalOpen(false);
+                  setCommDateEditing(null);
+                } catch (err) {
+                  toast.error("Erro ao salvar");
+                  console.error(err);
+                } finally {
+                  setCommDateSaving(false);
+                }
+              }}>
+                {commDateSaving ? <SpinnerGap size={14} className="animate-spin mr-1" /> : null}
+                {commDateSaving ? "Salvando..." : commDateEditing ? "Salvar" : "Criar"}
+              </Button>
+            </DialogFooter>
+          </div>
         </DialogContent>
       </Dialog>
     </>
