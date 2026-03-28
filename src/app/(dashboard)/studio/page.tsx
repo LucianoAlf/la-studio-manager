@@ -41,6 +41,8 @@ import {
   getStudioClipPollingById,
   getStudioClipsByVideoId,
   getStudioPostsByBrand,
+  generateBirthdayPost,
+  publishBirthdayStory,
   type AssetFilterType,
   type CommemorativeDateItem,
   type GroupedEvent,
@@ -701,6 +703,9 @@ export default function StudioPage() {
 
   const [birthdays, setBirthdays] = useState<PhotoAsset[]>([]);
   const [birthdayHistory, setBirthdayHistory] = useState<Array<{ id: string; student_name: string; approval_status: string; created_at: string }>>([]);
+  const [birthdayGenerating, setBirthdayGenerating] = useState<Record<string, boolean>>({});
+  const [birthdayPreview, setBirthdayPreview] = useState<{ assetId: string; imageUrl: string; studentName: string } | null>(null);
+  const [birthdayPublishing, setBirthdayPublishing] = useState(false);
   const [commemorativeDates, setCommemorativeDates] = useState<CommemorativeDateItem[]>([]);
   const [integrations, setIntegrations] = useState<IntegrationCredentialItem[]>([]);
   const [metrics, setMetrics] = useState({ alcance: 0, engajamento: 0, taxaEngajamento: 0, publicados: 0 });
@@ -3038,6 +3043,40 @@ export default function StudioPage() {
     setSelectedEventPhotoForNina(eventPhotosForNina[randomIndex]);
   }, [eventPhotosForNina]);
 
+  // Generate birthday post with Canva
+  const handleGenerateBirthdayPost = useCallback(async (asset: PhotoAsset) => {
+    if (!asset.id) return;
+
+    setBirthdayGenerating((prev) => ({ ...prev, [asset.id]: true }));
+
+    try {
+      toast.info(`Gerando post de aniversário para ${asset.person_name}...`);
+
+      const result = await generateBirthdayPost(asset.id, brand);
+
+      if (result.success && result.image_url) {
+        setBirthdayPreview({
+          assetId: asset.id,
+          imageUrl: result.image_url,
+          studentName: result.student_name || asset.person_name || "Aluno",
+        });
+        toast.success("Post gerado com sucesso!");
+
+        // Refresh birthday history
+        const birthdaysRes = await getBirthdaysOverview(brand);
+        setBirthdays(birthdaysRes.upcoming);
+        setBirthdayHistory(birthdaysRes.history);
+      } else {
+        toast.error(result.error || "Erro ao gerar post");
+      }
+    } catch (err) {
+      toast.error("Erro ao gerar post de aniversário");
+      console.error("[BIRTHDAY]", err);
+    } finally {
+      setBirthdayGenerating((prev) => ({ ...prev, [asset.id]: false }));
+    }
+  }, [brand]);
+
   const renderCalendarTab = () => (
     <div className="space-y-4">
       <Card variant="compact" className="space-y-3">
@@ -3820,7 +3859,75 @@ export default function StudioPage() {
     </div>
   );
 
-  const renderAutomationsTab = () => (
+  const renderAutomationsTab = () => {
+    // Separar aniversariantes por período
+    const today = new Date();
+    const todayStr = `${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+
+    const birthdaysToday: PhotoAsset[] = [];
+    const birthdaysNext7Days: PhotoAsset[] = [];
+
+    birthdays.forEach((item) => {
+      if (!item.birth_date) return;
+      const [, month, day] = item.birth_date.split("-");
+      const itemStr = `${month}-${day}`;
+
+      if (itemStr === todayStr) {
+        birthdaysToday.push(item);
+      } else {
+        birthdaysNext7Days.push(item);
+      }
+    });
+
+    const renderBirthdayCard = (item: PhotoAsset, isToday: boolean) => (
+      <div key={item.id} className={cn(
+        "rounded-lg border p-3",
+        isToday ? "border-orange-500/50 bg-orange-500/10" : "border-slate-800 bg-slate-900/50"
+      )}>
+        <div className="flex items-start gap-3">
+          {item.file_url && (
+            <img
+              src={item.file_url}
+              alt={item.person_name || "Foto"}
+              className={cn(
+                "h-12 w-12 rounded-full object-cover border",
+                isToday ? "border-orange-500" : "border-slate-700"
+              )}
+            />
+          )}
+          <div className="flex-1">
+            <p className="text-sm text-slate-100">{item.person_name ?? "Aluno"}</p>
+            <p className="text-xs text-slate-400">
+              {item.brand === "la_music_kids" ? "LA Music Kids" : "LA Music School"}
+              {item.birth_date && ` • ${new Date(item.birth_date + "T12:00:00").toLocaleDateString("pt-BR", { day: "2-digit", month: "short" })}`}
+            </p>
+          </div>
+          {isToday && (
+            <span className="text-xs font-semibold text-orange-400 bg-orange-500/20 px-2 py-0.5 rounded">HOJE</span>
+          )}
+        </div>
+        <div className="mt-2 flex gap-2">
+          <Button
+            variant="accent"
+            size="sm"
+            onClick={() => handleGenerateBirthdayPost(item)}
+            disabled={birthdayGenerating[item.id]}
+          >
+            {birthdayGenerating[item.id] ? (
+              <>
+                <SpinnerGap size={14} className="animate-spin mr-1" />
+                Gerando...
+              </>
+            ) : (
+              "Gerar post"
+            )}
+          </Button>
+          <Button variant="outline" size="sm">Pular</Button>
+        </div>
+      </div>
+    );
+
+    return (
     <div className="space-y-4">
       <div className="flex rounded-xl border border-slate-800 bg-slate-900/60 p-1">
         <button className={cn("flex-1 rounded-lg px-3 py-2 text-sm", automationTab === "aniversarios" ? "bg-slate-800 text-slate-100" : "text-slate-400")} onClick={() => setAutomationTab("aniversarios")}>🎂 Aniversários</button>
@@ -3829,23 +3936,29 @@ export default function StudioPage() {
 
       {automationTab === "aniversarios" ? (
         <div className="grid gap-4 lg:grid-cols-2">
-          <Card variant="default" className="space-y-3">
-            <h3 className="text-sm font-semibold text-slate-100">Próximos 7 dias</h3>
-            {birthdays.length === 0 ? (
-              <p className="text-sm text-slate-500">Nenhum aniversariante para este período.</p>
-            ) : (
-              birthdays.map((item) => (
-                <div key={item.id} className="rounded-lg border border-slate-800 bg-slate-900/50 p-3">
-                  <p className="text-sm text-slate-100">{item.person_name ?? "Aluno"}</p>
-                  <p className="text-xs text-slate-400">{item.brand === "la_music_kids" ? "LA Music Kids" : "LA Music School"}</p>
-                  <div className="mt-2 flex gap-2">
-                    <Button variant="accent" size="sm">Publicar agora</Button>
-                    <Button variant="outline" size="sm">Pular</Button>
-                  </div>
-                </div>
-              ))
+          <div className="space-y-4">
+            {/* Aniversariantes de HOJE */}
+            {birthdaysToday.length > 0 && (
+              <Card variant="default" className="space-y-3 border-orange-500/30">
+                <h3 className="text-sm font-semibold text-orange-400 flex items-center gap-2">
+                  🎉 Hoje ({birthdaysToday.length})
+                </h3>
+                {birthdaysToday.map((item) => renderBirthdayCard(item, true))}
+              </Card>
             )}
-          </Card>
+
+            {/* Próximos 7 dias */}
+            <Card variant="default" className="space-y-3">
+              <h3 className="text-sm font-semibold text-slate-100">Próximos 7 dias</h3>
+              {birthdaysNext7Days.length === 0 && birthdaysToday.length === 0 ? (
+                <p className="text-sm text-slate-500">Nenhum aniversariante para este período.</p>
+              ) : birthdaysNext7Days.length === 0 ? (
+                <p className="text-sm text-slate-500">Sem aniversariantes nos próximos dias.</p>
+              ) : (
+                birthdaysNext7Days.map((item) => renderBirthdayCard(item, false))
+              )}
+            </Card>
+          </div>
 
           <Card variant="default" className="space-y-3">
             <h3 className="text-sm font-semibold text-slate-100">Histórico</h3>
@@ -3883,7 +3996,8 @@ export default function StudioPage() {
         </Card>
       )}
     </div>
-  );
+    );
+  };
 
   const renderPerformanceTab = () => (
     <div className="space-y-4">
@@ -4305,6 +4419,93 @@ export default function StudioPage() {
             className="w-full"
             style={{ aspectRatio: "9/16", maxHeight: "70vh" }}
           />
+        </DialogContent>
+      </Dialog>
+
+      {/* Modal Preview de Post de Aniversário */}
+      <Dialog open={!!birthdayPreview} onOpenChange={(open) => !open && !birthdayPublishing && setBirthdayPreview(null)}>
+        <DialogContent className="max-w-xs border-slate-700 bg-slate-900 max-h-[90vh] overflow-hidden flex flex-col">
+          <DialogHeader className="flex-shrink-0">
+            <DialogTitle className="text-slate-100 text-sm">
+              Aniversário - {birthdayPreview?.studentName}
+            </DialogTitle>
+          </DialogHeader>
+
+          {birthdayPreview && (
+            <div className="flex-1 overflow-hidden space-y-3">
+              {/* Preview da imagem */}
+              <div className="relative rounded-lg overflow-hidden border border-slate-700">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={birthdayPreview.imageUrl}
+                  alt={`Post de aniversário de ${birthdayPreview.studentName}`}
+                  className="w-full object-contain"
+                  style={{ maxHeight: "55vh" }}
+                />
+              </div>
+
+              {/* Info */}
+              <p className="text-xs text-slate-400">
+                Stories: @{brand === "la_music_kids" ? "lamusickids" : "lamusicschool"}
+              </p>
+            </div>
+          )}
+
+          <DialogFooter className="flex-shrink-0 gap-2 pt-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setBirthdayPreview(null)}
+              disabled={birthdayPublishing}
+            >
+              Descartar
+            </Button>
+            <Button
+              variant="accent"
+              size="sm"
+              disabled={birthdayPublishing}
+              onClick={async () => {
+                if (!birthdayPreview) return;
+
+                setBirthdayPublishing(true);
+                toast.info("Publicando no Stories...");
+
+                try {
+                  const result = await publishBirthdayStory(
+                    birthdayPreview.imageUrl,
+                    brand,
+                    birthdayPreview.studentName
+                  );
+
+                  if (result.success) {
+                    toast.success(`Story publicado! @${brand === "la_music_kids" ? "lamusickids" : "lamusicschool"}`);
+                    setBirthdayPreview(null);
+
+                    // Refresh birthday history
+                    const birthdaysRes = await getBirthdaysOverview(brand);
+                    setBirthdays(birthdaysRes.upcoming);
+                    setBirthdayHistory(birthdaysRes.history);
+                  } else {
+                    toast.error(result.error || "Erro ao publicar");
+                  }
+                } catch (err) {
+                  toast.error("Erro ao publicar story");
+                  console.error("[PUBLISH_STORY]", err);
+                } finally {
+                  setBirthdayPublishing(false);
+                }
+              }}
+            >
+              {birthdayPublishing ? (
+                <>
+                  <SpinnerGap size={14} className="animate-spin mr-1" />
+                  Publicando...
+                </>
+              ) : (
+                "Publicar Story"
+              )}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </>

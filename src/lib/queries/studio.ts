@@ -269,8 +269,11 @@ export async function getBirthdaysOverview(brand: StudioBrand): Promise<{ upcomi
 
   const now = new Date();
   const todayY = now.getFullYear();
-  const upcomingLimit = new Date(now);
-  upcomingLimit.setDate(now.getDate() + 7);
+
+  // Normaliza para início do dia para comparação correta de aniversários de hoje
+  const todayStart = new Date(todayY, now.getMonth(), now.getDate(), 0, 0, 0, 0);
+  const upcomingLimit = new Date(todayStart);
+  upcomingLimit.setDate(todayStart.getDate() + 7);
 
   const upcoming = ((assetsResp.data ?? []) as unknown as PhotoAsset[])
     .filter((item) => {
@@ -278,7 +281,8 @@ export async function getBirthdaysOverview(brand: StudioBrand): Promise<{ upcomi
       const [year, month, day] = item.birth_date.split("-").map(Number);
       if (!month || !day) return false;
       const nextBirthday = new Date(todayY, month - 1, day);
-      if (nextBirthday < now) {
+      // Compara com início do dia, não com hora atual
+      if (nextBirthday < todayStart) {
         nextBirthday.setFullYear(todayY + 1);
       }
       return nextBirthday <= upcomingLimit;
@@ -294,6 +298,69 @@ export async function getBirthdaysOverview(brand: StudioBrand): Promise<{ upcomi
     upcoming,
     history: (historyResp.data ?? []) as unknown as BirthdayLogItem[],
   };
+}
+
+export interface GenerateBirthdayResult {
+  success: boolean;
+  image_url?: string;
+  student_name?: string;
+  brand?: string;
+  error?: string;
+}
+
+export async function generateBirthdayPost(
+  assetId: string,
+  brand: StudioBrand
+): Promise<GenerateBirthdayResult> {
+  const supabase = getSupabase();
+
+  // Usa a função generate-birthday-post que aceita asset_id diretamente
+  const { data, error } = await supabase.functions.invoke("generate-birthday-post", {
+    body: {
+      asset_id: assetId,
+      brand: brand,
+    },
+  });
+
+  if (error) {
+    return { success: false, error: error.message };
+  }
+
+  // Extrair resultado
+  const result = data as {
+    success?: boolean;
+    image_url?: string;
+    student_name?: string;
+    brand?: string;
+    error?: string;
+  };
+
+  if (result.success && result.image_url) {
+    return {
+      success: true,
+      image_url: result.image_url,
+      student_name: result.student_name,
+      brand: result.brand,
+    };
+  }
+
+  return { success: false, error: result.error || "Erro ao gerar post de aniversário" };
+}
+
+export async function publishBirthdayStory(
+  imageUrl: string,
+  brand: StudioBrand,
+  studentName: string
+): Promise<{ success: boolean; error?: string; post_id?: string }> {
+  // Calls server-side API route to avoid CORS issues with Meta Graph API
+  const res = await fetch("/api/publish-story", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ imageUrl, brand, studentName }),
+  });
+
+  const data = await res.json();
+  return data;
 }
 
 export async function getCommemorativeDates(brand: StudioBrand): Promise<CommemorativeDateItem[]> {
