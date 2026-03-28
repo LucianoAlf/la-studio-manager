@@ -1,43 +1,29 @@
 /**
- * generate-birthday-post v2
- * Generates birthday posts using Canva Connect API
- *
- * Flow:
- * 1. Fetch student data from assets
- * 2. Upload student photo to Canva (if has_real_photo)
- * 3. Create autofill job with student name + photo
- * 4. Export the generated design
- * 5. Upload to Supabase Storage
- * 6. Log to birthday_automation_log
+ * generate-birthday-post v7
+ * Uses Gemini 2.0 Flash to generate birthday artwork
+ * Sends student photo (if available) + prompt → Gemini generates beautiful birthday image
  */
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
+// Helper: Uint8Array to base64
+function toBase64(bytes: Uint8Array): string {
+  let binary = ''
+  const len = bytes.length
+  for (let i = 0; i < len; i++) {
+    binary += String.fromCharCode(bytes[i])
+  }
+  return btoa(binary)
+}
+
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
 const SUPABASE_SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-
-// Birthday template ID from Canva (original template)
-const BIRTHDAY_TEMPLATE_ID = 'DAHFO425zfc'
-
-// Autofill data keys (configured in Canva template)
-const AUTOFILL_KEYS = {
-  firstName: 'first_name',
-  lastName: 'last_name',
-  photo: 'student_photo',
-}
+const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY')!
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-}
-
-const CANVA_API_BASE = 'https://api.canva.com/rest/v1'
-
-interface CanvaCredentials {
-  access_token: string
-  refresh_token: string
-  expires_at?: number
 }
 
 serve(async (req: Request) => {
@@ -60,7 +46,7 @@ serve(async (req: Request) => {
 
     console.log(`[BIRTHDAY] Starting for asset_id=${asset_id} brand=${brand}`)
 
-    // 1. Fetch student data from assets
+    // 1. Fetch student data
     const { data: student, error: studentError } = await supabase
       .from('assets')
       .select('id, person_name, file_url, birth_date, brand, metadata')
@@ -75,123 +61,146 @@ serve(async (req: Request) => {
       })
     }
 
-    console.log(`[BIRTHDAY] Student: ${student.person_name}`)
-
-    // 2. Fetch Canva credentials
-    const { data: canvaCred, error: credError } = await supabase
-      .from('integration_credentials')
-      .select('credentials')
-      .eq('integration_name', 'canva')
-      .single()
-
-    if (credError || !canvaCred?.credentials) {
-      console.error('[BIRTHDAY] Canva credentials error:', credError)
-      return new Response(JSON.stringify({ success: false, error: 'Canva credentials not found' }), {
-        status: 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      })
-    }
-
-    const canvaCredentials = canvaCred.credentials as CanvaCredentials
-    let accessToken = canvaCredentials.access_token
-
-    // Check if token needs refresh (5 min buffer)
-    if (canvaCredentials.expires_at && Date.now() > canvaCredentials.expires_at - 300000) {
-      console.log('[BIRTHDAY] Token expired, refreshing...')
-      const refreshed = await refreshCanvaToken(canvaCredentials.refresh_token)
-      if (refreshed) {
-        accessToken = refreshed.access_token
-        await supabase
-          .from('integration_credentials')
-          .update({
-            credentials: {
-              ...canvaCredentials,
-              access_token: refreshed.access_token,
-              expires_at: Date.now() + (refreshed.expires_in * 1000),
-            },
-            last_validated_at: new Date().toISOString(),
-          })
-          .eq('integration_name', 'canva')
-        console.log('[BIRTHDAY] Token refreshed successfully')
-      } else {
-        console.error('[BIRTHDAY] Token refresh failed')
-      }
-    }
-
-    // 3. Parse student name
     const nameParts = (student.person_name || 'Aluno').split(' ')
     const firstName = nameParts[0] || 'Aluno'
-    const lastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : ''
+    const hasRealPhoto = !!student.metadata?.has_real_photo
 
-    // 4. Upload student photo to Canva (always — use placeholder if no real photo)
-    let photoAssetId: string | null = null
-    const photoUrl = student.file_url && student.metadata?.has_real_photo
-      ? student.file_url
-      : `https://ui-avatars.com/api/?name=${encodeURIComponent(firstName)}&size=400&background=6C3FA0&color=fff&bold=true&format=png`
+    console.log(`[BIRTHDAY] Student: ${student.person_name} | Photo: ${hasRealPhoto}`)
 
-    console.log(`[BIRTHDAY] Uploading photo to Canva (real: ${!!student.metadata?.has_real_photo})...`)
-    photoAssetId = await uploadAssetToCanva(accessToken, photoUrl, `birthday-${student.id}-${Date.now()}`)
-    if (photoAssetId) {
-      console.log(`[BIRTHDAY] Photo uploaded: ${photoAssetId}`)
-    } else {
-      console.warn('[BIRTHDAY] Photo upload failed, continuing without photo')
-    }
+    // 2. Download student photo as base64 (if available)
+    let photoBase64: string | null = null
+    let photoMime = 'image/jpeg'
 
-    // 5. Create autofill job
-    console.log('[BIRTHDAY] Creating autofill job...')
-    const autofillData: Record<string, any> = {
-      [AUTOFILL_KEYS.firstName]: { type: 'text', text: firstName.toUpperCase() },
-      [AUTOFILL_KEYS.lastName]: { type: 'text', text: lastName.toUpperCase() },
-    }
-
-    if (photoAssetId) {
-      autofillData[AUTOFILL_KEYS.photo] = { type: 'image', asset_id: photoAssetId }
-    }
-
-    const autofillResult = await createAutofillJob(accessToken, BIRTHDAY_TEMPLATE_ID, autofillData)
-
-    if (!autofillResult?.design_id) {
-      // Autofill not available - try direct export of template
-      console.log('[BIRTHDAY] Autofill not available, exporting template directly...')
-      const exportResult = await exportDesign(accessToken, BIRTHDAY_TEMPLATE_ID)
-
-      if (!exportResult?.url) {
-        throw new Error('Failed to export design')
+    if (hasRealPhoto && student.file_url) {
+      try {
+        console.log('[BIRTHDAY] Downloading student photo...')
+        const photoRes = await fetch(student.file_url)
+        if (photoRes.ok) {
+          const photoBuffer = await photoRes.arrayBuffer()
+          photoBase64 = toBase64(new Uint8Array(photoBuffer))
+          photoMime = photoRes.headers.get('content-type') || 'image/jpeg'
+          console.log(`[BIRTHDAY] Photo downloaded: ${photoBuffer.byteLength} bytes`)
+        }
+      } catch (e) {
+        console.warn('[BIRTHDAY] Photo download failed:', e)
       }
+    }
 
-      // Download and upload to storage
-      const finalImageUrl = await downloadAndUploadImage(supabase, exportResult.url, brand, student.id)
+    // 3. Build Gemini prompt
+    const brandName = brand === 'la_music_kids' ? 'LA Music Kids' : 'LA Music School'
 
-      // Log to birthday_automation_log
-      await logBirthdayPost(supabase, student, brand, finalImageUrl, false)
+    const prompt = photoBase64
+      ? `Create a vibrant, professional birthday celebration Story image (portrait format, 1080x1920 pixels).
 
-      return new Response(JSON.stringify({
-        success: true,
-        image_url: finalImageUrl,
-        student_name: student.person_name,
-        brand: brand,
-        method: 'template_export',
-      }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+Design requirements:
+- Colorful festive background with balloons, confetti, sparkles and celebration elements
+- Text "Feliz Aniversário" in elegant decorative script at the top
+- The person from the attached photo should be prominently featured in the CENTER, inside a stylish polaroid-style frame with a slight tilt
+- The name "${firstName.toUpperCase()}" in large, bold white text below the photo
+- "${brandName}" small text or logo area at the bottom
+- Use vibrant colors: purples, pinks, magentas, with golden accents
+- Professional quality, suitable for Instagram Stories
+- Make it celebratory and joyful!`
+      : `Create a vibrant, professional birthday celebration Story image (portrait format, 1080x1920 pixels).
+
+Design requirements:
+- Colorful festive background with balloons, confetti, sparkles and celebration elements
+- Text "Feliz Aniversário" in elegant decorative script at the top
+- A large decorative circle or frame in the CENTER with the initials "${firstName[0]}" in bold white text on a purple background
+- The name "${firstName.toUpperCase()}" in large, bold white text below the circle
+- "${brandName}" small text at the bottom
+- Use vibrant colors: purples, pinks, magentas, with golden accents
+- Professional quality, suitable for Instagram Stories
+- Make it celebratory and joyful!`
+
+    // 4. Call Gemini API
+    console.log('[BIRTHDAY] Calling Gemini for image generation...')
+
+    const geminiParts: Array<Record<string, unknown>> = [{ text: prompt }]
+
+    if (photoBase64) {
+      geminiParts.push({
+        inlineData: {
+          mimeType: photoMime,
+          data: photoBase64,
+        },
       })
     }
 
-    console.log(`[BIRTHDAY] Autofill design created: ${autofillResult.design_id}`)
+    const geminiRes = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${GEMINI_API_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: geminiParts }],
+          generationConfig: {
+            responseModalities: ['IMAGE', 'TEXT'],
+          },
+        }),
+      }
+    )
 
-    // 6. Export the generated design
-    console.log('[BIRTHDAY] Exporting design...')
-    const exportResult = await exportDesign(accessToken, autofillResult.design_id)
-
-    if (!exportResult?.url) {
-      throw new Error('Failed to export design')
+    if (!geminiRes.ok) {
+      const errText = await geminiRes.text()
+      console.error('[BIRTHDAY] Gemini error:', geminiRes.status, errText)
+      throw new Error(`Gemini API error: ${geminiRes.status}`)
     }
 
-    // 7. Download and upload to Supabase Storage
-    console.log('[BIRTHDAY] Uploading to storage...')
-    const finalImageUrl = await downloadAndUploadImage(supabase, exportResult.url, brand, student.id)
+    const geminiData = await geminiRes.json()
 
-    // 8. Log to birthday_automation_log
-    await logBirthdayPost(supabase, student, brand, finalImageUrl, !!photoAssetId)
+    // 5. Extract generated image from response
+    let imageBase64: string | null = null
+    let imageMime = 'image/png'
+
+    const parts = geminiData.candidates?.[0]?.content?.parts || []
+    for (const part of parts) {
+      if (part.inlineData?.data) {
+        imageBase64 = part.inlineData.data
+        imageMime = part.inlineData.mimeType || 'image/png'
+        break
+      }
+    }
+
+    if (!imageBase64) {
+      console.error('[BIRTHDAY] No image in Gemini response:', JSON.stringify(geminiData).substring(0, 500))
+      throw new Error('Gemini did not generate an image')
+    }
+
+    console.log(`[BIRTHDAY] Image generated! MIME: ${imageMime}`)
+
+    // 6. Convert base64 to blob and upload to Supabase Storage
+    const imageBytes = Uint8Array.from(atob(imageBase64), c => c.charCodeAt(0))
+    const ext = imageMime.includes('png') ? 'png' : 'jpg'
+    const storagePath = `birthday-posts/${brand}/${student.id}-${Date.now()}.${ext}`
+
+    const { error: uploadError } = await supabase.storage
+      .from('posts')
+      .upload(storagePath, imageBytes, {
+        contentType: imageMime,
+        upsert: true,
+      })
+
+    if (uploadError) {
+      throw new Error(`Storage upload failed: ${uploadError.message}`)
+    }
+
+    const { data: urlData } = supabase.storage.from('posts').getPublicUrl(storagePath)
+    const finalImageUrl = urlData.publicUrl
+
+    // 7. Log to birthday_automation_log
+    await supabase.from('birthday_automation_log').insert({
+      student_id: student.id,
+      student_name: student.person_name,
+      brand: brand,
+      image_url: finalImageUrl,
+      approval_status: 'pending',
+      metadata: {
+        method: 'gemini_image_gen',
+        photo_used: !!photoBase64,
+        generated_at: new Date().toISOString(),
+      },
+    })
 
     console.log(`[BIRTHDAY] Success! Image URL: ${finalImageUrl}`)
 
@@ -200,279 +209,20 @@ serve(async (req: Request) => {
       image_url: finalImageUrl,
       student_name: student.person_name,
       brand: brand,
-      method: 'autofill',
+      method: 'gemini',
     }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     })
 
   } catch (error) {
     console.error('[BIRTHDAY] Error:', error)
+    // Return 200 with error in body so supabase.functions.invoke passes it through
     return new Response(JSON.stringify({
       success: false,
       error: error instanceof Error ? error.message : String(error),
     }), {
-      status: 500,
+      status: 200,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     })
   }
 })
-
-// ============================================================================
-// Helper Functions
-// ============================================================================
-
-async function downloadAndUploadImage(
-  supabase: any,
-  url: string,
-  brand: string,
-  studentId: string
-): Promise<string> {
-  const imageResponse = await fetch(url)
-  if (!imageResponse.ok) {
-    throw new Error(`Failed to download image: ${imageResponse.status}`)
-  }
-
-  const imageBlob = await imageResponse.blob()
-  const storagePath = `birthday-posts/${brand}/${studentId}-${Date.now()}.png`
-
-  const { error: uploadError } = await supabase.storage
-    .from('posts')
-    .upload(storagePath, imageBlob, {
-      contentType: 'image/png',
-      upsert: true,
-    })
-
-  if (uploadError) {
-    throw new Error(`Storage upload failed: ${uploadError.message}`)
-  }
-
-  const { data: urlData } = supabase.storage.from('posts').getPublicUrl(storagePath)
-  return urlData.publicUrl
-}
-
-async function logBirthdayPost(
-  supabase: any,
-  student: any,
-  brand: string,
-  imageUrl: string,
-  photoUsed: boolean
-): Promise<void> {
-  await supabase.from('birthday_automation_log').insert({
-    student_id: student.id,
-    student_name: student.person_name,
-    brand: brand,
-    image_url: imageUrl,
-    approval_status: 'pending',
-    metadata: {
-      canva_template_id: BIRTHDAY_TEMPLATE_ID,
-      photo_used: photoUsed,
-      generated_at: new Date().toISOString(),
-    },
-  })
-}
-
-// ============================================================================
-// Canva API Functions
-// ============================================================================
-
-async function refreshCanvaToken(refreshToken: string): Promise<{ access_token: string; expires_in: number } | null> {
-  try {
-    const clientId = Deno.env.get('CANVA_CLIENT_ID')
-    const clientSecret = Deno.env.get('CANVA_CLIENT_SECRET')
-
-    if (!clientId || !clientSecret) {
-      console.error('[CANVA] Missing client credentials for refresh')
-      return null
-    }
-
-    const res = await fetch(`${CANVA_API_BASE}/oauth/token`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Authorization': `Basic ${btoa(`${clientId}:${clientSecret}`)}`,
-      },
-      body: new URLSearchParams({
-        grant_type: 'refresh_token',
-        refresh_token: refreshToken,
-      }),
-    })
-
-    if (!res.ok) {
-      const text = await res.text()
-      console.error('[CANVA] Token refresh failed:', res.status, text)
-      return null
-    }
-
-    return await res.json()
-  } catch (e) {
-    console.error('[CANVA] Token refresh error:', e)
-    return null
-  }
-}
-
-async function uploadAssetToCanva(accessToken: string, imageUrl: string, name: string): Promise<string | null> {
-  try {
-    const res = await fetch(`${CANVA_API_BASE}/asset-uploads`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ url: imageUrl, name }),
-    })
-
-    if (!res.ok) {
-      const text = await res.text()
-      console.error('[CANVA] Asset upload failed:', res.status, text)
-      return null
-    }
-
-    const data = await res.json()
-
-    // Poll for upload completion (max 20 seconds)
-    if (data.job?.id) {
-      for (let i = 0; i < 10; i++) {
-        await new Promise(r => setTimeout(r, 2000))
-
-        const statusRes = await fetch(`${CANVA_API_BASE}/asset-uploads/${data.job.id}`, {
-          headers: { 'Authorization': `Bearer ${accessToken}` },
-        })
-
-        if (!statusRes.ok) continue
-
-        const statusData = await statusRes.json()
-        if (statusData.job?.status === 'success') {
-          return statusData.job.asset?.id
-        }
-        if (statusData.job?.status === 'failed') {
-          console.error('[CANVA] Asset upload job failed:', statusData.job.error)
-          return null
-        }
-      }
-      console.warn('[CANVA] Asset upload polling timeout')
-    }
-
-    return data.asset?.id || null
-  } catch (e) {
-    console.error('[CANVA] Asset upload error:', e)
-    return null
-  }
-}
-
-async function createAutofillJob(
-  accessToken: string,
-  brandTemplateId: string,
-  data: Record<string, any>
-): Promise<{ design_id: string } | null> {
-  try {
-    const res = await fetch(`${CANVA_API_BASE}/autofills`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        brand_template_id: brandTemplateId,
-        data: data,
-        title: `Birthday Post - ${new Date().toISOString()}`,
-      }),
-    })
-
-    if (!res.ok) {
-      const text = await res.text()
-      console.error('[CANVA] Autofill create failed:', res.status, text)
-      return null
-    }
-
-    const result = await res.json()
-
-    // Poll for completion (max 30 seconds)
-    if (result.job?.id) {
-      for (let i = 0; i < 15; i++) {
-        await new Promise(r => setTimeout(r, 2000))
-
-        const statusRes = await fetch(`${CANVA_API_BASE}/autofills/${result.job.id}`, {
-          headers: { 'Authorization': `Bearer ${accessToken}` },
-        })
-
-        if (!statusRes.ok) continue
-
-        const statusData = await statusRes.json()
-        if (statusData.job?.status === 'success') {
-          return { design_id: statusData.job.result?.design?.id }
-        }
-        if (statusData.job?.status === 'failed') {
-          console.error('[CANVA] Autofill job failed:', statusData.job.error)
-          return null
-        }
-      }
-      console.warn('[CANVA] Autofill polling timeout')
-    }
-
-    return result.design?.id ? { design_id: result.design.id } : null
-  } catch (e) {
-    console.error('[CANVA] Autofill error:', e)
-    return null
-  }
-}
-
-async function exportDesign(accessToken: string, designId: string): Promise<{ url: string } | null> {
-  try {
-    const res = await fetch(`${CANVA_API_BASE}/exports`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        design_id: designId,
-        format: { type: 'png' },
-      }),
-    })
-
-    if (!res.ok) {
-      const text = await res.text()
-      console.error('[CANVA] Export create failed:', res.status, text)
-      return null
-    }
-
-    const data = await res.json()
-    const jobId = data.job?.id
-
-    if (!jobId) {
-      console.error('[CANVA] No export job ID returned')
-      return null
-    }
-
-    // Poll for export completion (max 60 seconds)
-    for (let i = 0; i < 20; i++) {
-      await new Promise(r => setTimeout(r, 3000))
-
-      const statusRes = await fetch(`${CANVA_API_BASE}/exports/${jobId}`, {
-        headers: { 'Authorization': `Bearer ${accessToken}` },
-      })
-
-      if (!statusRes.ok) continue
-
-      const statusData = await statusRes.json()
-
-      if (statusData.job?.status === 'success') {
-        const urls = statusData.job?.urls || statusData.job?.result?.urls
-        if (urls?.length > 0) {
-          return { url: urls[0] }
-        }
-      }
-
-      if (statusData.job?.status === 'failed') {
-        console.error('[CANVA] Export job failed:', statusData.job.error)
-        return null
-      }
-    }
-
-    console.error('[CANVA] Export polling timeout')
-    return null
-  } catch (e) {
-    console.error('[CANVA] Export error:', e)
-    return null
-  }
-}

@@ -3046,7 +3046,7 @@ export default function StudioPage() {
     setSelectedEventPhotoForNina(eventPhotosForNina[randomIndex]);
   }, [eventPhotosForNina]);
 
-  // Generate birthday post with Canva
+  // Generate birthday post client-side with Canvas API
   const handleGenerateBirthdayPost = useCallback(async (asset: PhotoAsset) => {
     if (!asset.id) return;
 
@@ -3055,23 +3055,33 @@ export default function StudioPage() {
     try {
       toast.info(`Gerando post de aniversário para ${asset.person_name}...`);
 
+      const studentName = asset.person_name || "Aluno";
+      const nameParts = studentName.split(" ");
+      const firstName = nameParts[0];
+      const lastName = nameParts.length > 1 ? nameParts[nameParts.length - 1] : "";
+      const hasRealPhoto = !!(asset.metadata as Record<string, unknown>)?.has_real_photo;
+      const photoUrl = hasRealPhoto ? asset.file_url : null;
+
+      // Call Edge Function that uses Gemini to generate birthday image
       const result = await generateBirthdayPost(asset.id, brand);
 
-      if (result.success && result.image_url) {
-        setBirthdayPreview({
-          assetId: asset.id,
-          imageUrl: result.image_url,
-          studentName: result.student_name || asset.person_name || "Aluno",
-        });
-        toast.success("Post gerado com sucesso!");
-
-        // Refresh birthday history
-        const birthdaysRes = await getBirthdaysOverview(brand);
-        setBirthdays(birthdaysRes.upcoming);
-        setBirthdayHistory(birthdaysRes.history);
-      } else {
-        toast.error(result.error || "Erro ao gerar post");
+      if (!result.success || !result.image_url) {
+        throw new Error(result.error || "Falha ao gerar post");
       }
+
+      const imageUrl = result.image_url;
+
+      setBirthdayPreview({
+        assetId: asset.id,
+        imageUrl,
+        studentName,
+      });
+      toast.success("Post gerado com sucesso!");
+
+      // Refresh birthday history
+      const birthdaysRes = await getBirthdaysOverview(brand);
+      setBirthdays(birthdaysRes.upcoming);
+      setBirthdayHistory(birthdaysRes.history);
     } catch (err) {
       toast.error("Erro ao gerar post de aniversário");
       console.error("[BIRTHDAY]", err);
@@ -3902,6 +3912,7 @@ export default function StudioPage() {
             <p className="text-sm text-slate-100">{item.person_name ?? "Aluno"}</p>
             <p className="text-xs text-slate-400">
               {item.brand === "la_music_kids" ? "LA Music Kids" : "LA Music School"}
+              {item.unit && ` • ${item.unit.replace("_", " ").replace(/\b\w/g, c => c.toUpperCase())}`}
               {item.birth_date && ` • ${new Date(item.birth_date + "T12:00:00").toLocaleDateString("pt-BR", { day: "2-digit", month: "short" })}`}
             </p>
           </div>

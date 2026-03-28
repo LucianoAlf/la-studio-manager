@@ -38,6 +38,7 @@ export interface PhotoAsset {
   metadata: Record<string, unknown> | null;
   event_name?: string | null;
   event_date?: string | null;
+  unit?: string | null;
 }
 
 export type AssetFilterType = "alunos" | "eventos" | "todos";
@@ -245,7 +246,7 @@ export async function getBirthdaysOverview(brand: StudioBrand): Promise<{ upcomi
   const [assetsResp, historyResp] = await Promise.all([
     supabase
       .from("assets" as never)
-      .select("id, person_name, brand, file_url, birth_date, source, metadata")
+      .select("id, person_name, brand, file_url, birth_date, source, metadata, unit")
       .eq("source", "emusys")
       .or(`brand.eq.${brand},brand.eq.both`)
       .not("birth_date", "is", null)
@@ -275,24 +276,29 @@ export async function getBirthdaysOverview(brand: StudioBrand): Promise<{ upcomi
   const upcomingLimit = new Date(todayStart);
   upcomingLimit.setDate(todayStart.getDate() + 7);
 
-  const upcoming = ((assetsResp.data ?? []) as unknown as PhotoAsset[])
+  const allAssets = (assetsResp.data ?? []) as unknown as PhotoAsset[];
+  console.log(`[BIRTHDAYS] Total assets fetched: ${allAssets.length}`);
+
+  const upcoming = allAssets
     .filter((item) => {
       if (!item.birth_date) return false;
-      const [year, month, day] = item.birth_date.split("-").map(Number);
+      const [, month, day] = item.birth_date.split("-").map(Number);
       if (!month || !day) return false;
-      const nextBirthday = new Date(todayY, month - 1, day);
-      // Compara com início do dia, não com hora atual
+      const nextBirthday = new Date(todayY, month - 1, day, 0, 0, 0, 0);
       if (nextBirthday < todayStart) {
         nextBirthday.setFullYear(todayY + 1);
       }
       return nextBirthday <= upcomingLimit;
     })
     .sort((a, b) => {
-      const da = a.birth_date ?? "9999-12-31";
-      const db = b.birth_date ?? "9999-12-31";
-      return da.localeCompare(db);
+      // Sort by month-day (birthday), not by year
+      const [, am, ad] = (a.birth_date ?? "").split("-");
+      const [, bm, bd] = (b.birth_date ?? "").split("-");
+      return `${am}-${ad}`.localeCompare(`${bm}-${bd}`);
     })
-    .slice(0, 12);
+    .slice(0, 20);
+
+  console.log(`[BIRTHDAYS] Upcoming: ${upcoming.length}`, upcoming.map(u => `${u.person_name} (${u.birth_date})`));
 
   return {
     upcoming,
