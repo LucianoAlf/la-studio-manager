@@ -3963,9 +3963,16 @@ export default function StudioPage() {
               {item.birth_date && ` • ${new Date(item.birth_date + "T12:00:00").toLocaleDateString("pt-BR", { day: "2-digit", month: "short" })}`}
             </p>
           </div>
-          {isToday && (
-            <span className="text-xs font-semibold text-orange-400 bg-orange-500/20 px-2 py-0.5 rounded">HOJE</span>
-          )}
+          <div className="flex items-center gap-2">
+            {isToday && (
+              <span className="text-xs font-semibold text-orange-400 bg-orange-500/20 px-2 py-0.5 rounded">HOJE</span>
+            )}
+            {birthdayHistory.some(h => h.student_name === item.person_name && (h.approval_status === "published" || h.approval_status === "auto_published" || h.approval_status === "pending")) && (
+              <span className="text-xs font-semibold text-green-400 bg-green-500/20 px-2 py-0.5 rounded">
+                {birthdayHistory.find(h => h.student_name === item.person_name)?.approval_status?.includes("publish") ? "PUBLICADO" : "GERADO"}
+              </span>
+            )}
+          </div>
         </div>
         <div className="mt-2 flex gap-2">
           <Button
@@ -3980,11 +3987,12 @@ export default function StudioPage() {
                 Gerando...
               </>
             ) : (
-              "Gerar post"
+              birthdayHistory.some(h => h.student_name === item.person_name) ? "Regenerar" : "Gerar post"
             )}
           </Button>
-          <Button variant="outline" size="sm">Pular</Button>
-        </div>
+          {!birthdayHistory.some(h => h.student_name === item.person_name) && (
+            <Button variant="outline" size="sm">Pular</Button>
+          )}
       </div>
     );
 

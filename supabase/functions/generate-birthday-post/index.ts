@@ -49,7 +49,7 @@ serve(async (req: Request) => {
     // 1. Fetch student data
     const { data: student, error: studentError } = await supabase
       .from('assets')
-      .select('id, person_name, file_url, birth_date, brand, metadata')
+      .select('id, person_id, person_name, file_url, birth_date, brand, metadata')
       .eq('id', asset_id)
       .single()
 
@@ -190,7 +190,8 @@ Design requirements:
 
     // 7. Log to birthday_automation_log
     await supabase.from('birthday_automation_log').insert({
-      student_id: student.id,
+      student_id: student.person_id || student.id,
+      asset_id: student.id,
       student_name: student.person_name,
       brand: brand,
       image_url: finalImageUrl,
