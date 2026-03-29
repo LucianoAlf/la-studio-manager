@@ -107,9 +107,12 @@ type PostStatus = StudioPost["status"];
 type VideoUploadStage = "idle" | "validating" | "uploading" | "processing";
 type NinaGenerationResponse = {
   image_url?: string | null;
+  photo_url?: string | null;
+  logo_url?: string | null;
   caption?: string | null;
   hashtags?: string[] | string | null;
   generation_method?: string | null;
+  generation_mode?: string | null;
   main_phrase?: string | null;
   needs_text_overlay?: boolean;
   text_config?: {
@@ -798,6 +801,7 @@ export default function StudioPage() {
   const [ninaPreviewUrl, setNinaPreviewUrl] = useState<string | null>(null);
   const [ninaHashtags, setNinaHashtags] = useState<string[]>([]);
   const [ninaGenerationMethod, setNinaGenerationMethod] = useState<string | null>(null);
+  const [layerComposition, setLayerComposition] = useState<import("@/lib/types/layer-composition").LayerComposition | null>(null);
   const [isGeneratingWithNina, setIsGeneratingWithNina] = useState(false);
   const [isPublishingNow, setIsPublishingNow] = useState(false);
   const [isScheduling, setIsScheduling] = useState(false);
@@ -2824,13 +2828,14 @@ export default function StudioPage() {
   const handleGenerateWithNina = async () => {
     setIsGeneratingWithNina(true);
     try {
+      // Chama Gemini em modo photo_only (só a foto, sem texto/logo)
       const { data, error: fnError } = await supabase.functions.invoke<NinaGenerationResponse>("nina-create-post", {
         body: {
           mode: "brief",
           brand,
           brief: postBrief,
           post_type: postPlatform,
-          // Passa foto do evento se selecionada
+          generation_mode: "photo_only",
           event_asset_id: selectedEventPhotoForNina?.id ?? null,
           reference_image_url: selectedEventPhotoForNina?.file_url ?? null,
           event_name: selectedEventPhotoForNina?.event_name ?? null,
@@ -2850,44 +2855,29 @@ export default function StudioPage() {
               .filter((item) => item.startsWith("#") && item.trim().length > 1)
           : [];
 
-      let finalImageUrl = data?.image_url ?? null;
+      const photoUrl = data?.photo_url || data?.image_url || null;
+      const logoUrl = (data as Record<string, unknown>)?.logo_url as string | undefined;
+      const mainPhrase = data?.main_phrase || data?.text_config?.phrase || postBrief || "";
 
-      // Se a Nina retornou configuração para criar arte, faz via Canvas no frontend
-      if (data?.needs_text_overlay && data?.image_url && data?.text_config?.phrase) {
-        try {
-          // Determina formato baseado no tipo de post
-          const artFormat = postPlatform === "story" ? "story" : "feed";
-          console.log("[STUDIO] Creating art via Canvas...", { format: artFormat });
-          const imageBlob = await createArtWithCanvas(
-            data.image_url,
-            data.text_config.phrase,
-            data.text_config.brand_name,
-            data.text_config.is_kids,
-            artFormat
-          );
-
-          // Upload da arte final para o Storage
-          const fileName = `nina/art-${brand}-${Date.now()}.jpg`;
-          const { error: uploadErr } = await supabase.storage
-            .from("posts")
-            .upload(fileName, imageBlob, { contentType: "image/jpeg", upsert: true });
-
-          if (!uploadErr) {
-            const { data: urlData } = supabase.storage.from("posts").getPublicUrl(fileName);
-            finalImageUrl = urlData.publicUrl;
-            console.log("[STUDIO] Art created successfully:", finalImageUrl);
-          } else {
-            console.error("[STUDIO] Upload error:", uploadErr);
-          }
-        } catch (overlayErr) {
-          console.error("[STUDIO] Canvas art error:", overlayErr);
-          // Continua com a imagem original sem overlay
-        }
+      // Criar composição por camadas
+      if (photoUrl) {
+        const { createDefaultComposition } = await import("@/lib/types/layer-composition");
+        const aspectKey = (postPlatform === "story" || postPlatform === "reels") ? "story" as const : "feed" as const;
+        const comp = createDefaultComposition(
+          photoUrl,
+          mainPhrase,
+          logoUrl || null,
+          aspectKey,
+        );
+        setLayerComposition(comp);
+        setNinaPreviewUrl(photoUrl); // fallback
+        console.log("[STUDIO] Layer composition created");
+      } else {
+        setNinaPreviewUrl(data?.image_url ?? null);
       }
 
-      setNinaPreviewUrl(finalImageUrl);
       setNinaHashtags(hashtags);
-      setNinaGenerationMethod(data?.generation_method ?? null);
+      setNinaGenerationMethod("layer_composition");
 
       const generatedCaption = [data?.caption?.trim(), hashtags.join(" ")].filter(Boolean).join("\n\n");
       if (generatedCaption) {
@@ -2924,8 +2914,27 @@ export default function StudioPage() {
         return;
       }
 
+      // Exportar composição do Canvas se disponível
+      let publishImageUrl = ninaPreviewUrl;
+      if (layerComposition) {
+        try {
+          const { exportCompositionToBlob, loadImage } = await import("@/lib/canvas/render-composition");
+          const photo = await loadImage(layerComposition.background.photoUrl);
+          let logo: HTMLImageElement | null = null;
+          if (layerComposition.logoLayer?.logoUrl) {
+            logo = await loadImage(layerComposition.logoLayer.logoUrl).catch(() => null);
+          }
+          const blob = await exportCompositionToBlob(layerComposition, { photo, logo });
+          const path = `nina/composed-${brand}-${Date.now()}.jpg`;
+          const { error: upErr } = await supabase.storage.from("posts").upload(path, blob, { contentType: "image/jpeg", upsert: true });
+          if (!upErr) {
+            const { data: urlData } = supabase.storage.from("posts").getPublicUrl(path);
+            publishImageUrl = urlData.publicUrl;
+          }
+        } catch (e) { console.error("[STUDIO] Export error:", e); }
+      }
+
       // Cria o post com status draft
-      // Converte "feed" para "image" (valor aceito pelo enum do banco)
       const dbPostType = postPlatform === "feed" ? "image" : postPlatform;
       const scheduledFor = `${postDate}T${postTime}:00`;
       const { data: postData, error: insertError } = await supabase
@@ -2940,7 +2949,7 @@ export default function StudioPage() {
           created_by_ai: true,
           created_by: userId,
           ai_agent_name: "Nina",
-          metadata: { image_url: ninaPreviewUrl },
+          metadata: { image_url: publishImageUrl, layers: layerComposition },
         } as never)
         .select("id")
         .single();
@@ -3028,7 +3037,26 @@ export default function StudioPage() {
         return;
       }
 
-      // Converte "feed" para "image" (valor aceito pelo enum do banco)
+      // Exportar composição do Canvas se disponível
+      let schedImageUrl = ninaPreviewUrl;
+      if (layerComposition) {
+        try {
+          const { exportCompositionToBlob, loadImage } = await import("@/lib/canvas/render-composition");
+          const photo = await loadImage(layerComposition.background.photoUrl);
+          let logo: HTMLImageElement | null = null;
+          if (layerComposition.logoLayer?.logoUrl) {
+            logo = await loadImage(layerComposition.logoLayer.logoUrl).catch(() => null);
+          }
+          const blob = await exportCompositionToBlob(layerComposition, { photo, logo });
+          const path = `nina/composed-${brand}-${Date.now()}.jpg`;
+          const { error: upErr } = await supabase.storage.from("posts").upload(path, blob, { contentType: "image/jpeg", upsert: true });
+          if (!upErr) {
+            const { data: urlData } = supabase.storage.from("posts").getPublicUrl(path);
+            schedImageUrl = urlData.publicUrl;
+          }
+        } catch (e) { console.error("[STUDIO] Export error:", e); }
+      }
+
       const dbPostType = postPlatform === "feed" ? "image" : postPlatform;
       const scheduledFor = `${postDate}T${postTime}:00`;
       const { data: postData, error: insertError } = await supabase
@@ -3043,7 +3071,7 @@ export default function StudioPage() {
           created_by_ai: true,
           created_by: schedUserId,
           ai_agent_name: "Nina",
-          metadata: { image_url: ninaPreviewUrl },
+          metadata: { image_url: schedImageUrl, layers: layerComposition },
         } as never)
         .select("id")
         .single();
@@ -3390,17 +3418,34 @@ export default function StudioPage() {
 
       <Card variant="default" className="space-y-4">
         <h3 className="text-sm font-semibold text-slate-100">Preview</h3>
-        <div
-          className={cn(
-            "mx-auto overflow-hidden rounded-xl border border-slate-700 bg-gradient-to-b from-cyan-500/10 to-orange-500/10",
-            postPlatform === "story" || postPlatform === "reels" ? "aspect-[9/16] w-[180px]" : "aspect-square w-[180px]"
-          )}
-        >
-          {ninaPreviewUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={ninaPreviewUrl} alt="Preview final do post" className="h-full w-full object-cover" />
-          ) : null}
-        </div>
+
+        {/* Layer Composer — editor interativo por camadas */}
+        {layerComposition ? (
+          (() => {
+            const { LayerComposer } = require("@/components/studio/LayerComposer");
+            return (
+              <LayerComposer
+                composition={layerComposition}
+                onChange={setLayerComposition}
+              />
+            );
+          })()
+        ) : (
+          <div
+            className={cn(
+              "mx-auto overflow-hidden rounded-xl border border-slate-700 bg-gradient-to-b from-cyan-500/10 to-orange-500/10",
+              postPlatform === "story" || postPlatform === "reels" ? "aspect-[9/16] w-[180px]" : "aspect-square w-[180px]"
+            )}
+          >
+            {ninaPreviewUrl ? (
+              <img src={ninaPreviewUrl} alt="Preview" className="h-full w-full object-cover" />
+            ) : (
+              <div className="flex h-full items-center justify-center text-xs text-slate-500 p-4 text-center">
+                Gere uma arte com a Nina primeiro.
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="space-y-2">
           <Button className="w-full" variant="outline" size="sm" disabled>Enviar para aprovação</Button>
