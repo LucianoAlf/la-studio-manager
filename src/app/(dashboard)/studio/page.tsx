@@ -3267,8 +3267,25 @@ export default function StudioPage() {
     </div>
   );
 
+  // Sidebar accordion section for create tab
+  const SidebarAccordion = ({ title, defaultOpen, action, children }: { title: string; defaultOpen?: boolean; action?: React.ReactNode; children: React.ReactNode }) => {
+    const [open, setOpen] = useState(!!defaultOpen);
+    return (
+      <div className="rounded-lg border border-slate-800 bg-slate-900/40 overflow-hidden">
+        <button type="button" onClick={() => setOpen(!open)} className="flex items-center justify-between w-full px-3 py-2 hover:bg-slate-800/50">
+          <span className="text-[11px] font-semibold text-slate-300 uppercase tracking-wider">{title}</span>
+          <div className="flex items-center gap-2">
+            {action && <span onClick={(e) => e.stopPropagation()}>{action}</span>}
+            <span className="text-slate-500 text-[10px]">{open ? "▾" : "▸"}</span>
+          </div>
+        </button>
+        {open && <div className="px-3 pb-3 pt-1">{children}</div>}
+      </div>
+    );
+  };
+
   const renderCreateTab = () => (
-    <div className="grid gap-4 xl:grid-cols-[1.1fr_1.5fr_1fr]">
+    <div className="grid gap-3 xl:grid-cols-[220px_1fr_1fr_280px]">
       <Card variant="default" className="space-y-4">
         <h3 className="text-sm font-semibold text-slate-100">Configuração</h3>
         <div className="space-y-3">
@@ -3428,10 +3445,8 @@ export default function StudioPage() {
         {ninaHashtags.length > 0 ? <p className="text-xs text-slate-500">Hashtags: {ninaHashtags.join(" ")}</p> : null}
       </Card>
 
-      <Card variant="default" className="space-y-4">
-        <h3 className="text-sm font-semibold text-slate-100">Preview</h3>
-
-        {/* Layer Composer — editor interativo por camadas */}
+      {/* COLUNA 3: Canvas LIMPO — só a imagem */}
+      <div className="flex items-start justify-center pt-2">
         {layerComposition ? (
           (() => {
             const { LayerComposer } = require("@/components/studio/LayerComposer");
@@ -3439,26 +3454,74 @@ export default function StudioPage() {
               <LayerComposer
                 composition={layerComposition}
                 onChange={setLayerComposition}
-                brandColors={brandColorsList}
-                brandFonts={brandFontsList}
               />
             );
           })()
         ) : (
           <div
             className={cn(
-              "mx-auto overflow-hidden rounded-xl border border-slate-700 bg-gradient-to-b from-cyan-500/10 to-orange-500/10",
-              postPlatform === "story" || postPlatform === "reels" ? "aspect-[9/16] w-[180px]" : "aspect-square w-[180px]"
+              "mx-auto overflow-hidden rounded-xl border border-dashed border-slate-700 bg-slate-900/30",
+              postPlatform === "story" || postPlatform === "reels" ? "aspect-[9/16] w-[220px]" : "aspect-[4/5] w-[280px]"
             )}
           >
             {ninaPreviewUrl ? (
               <img src={ninaPreviewUrl} alt="Preview" className="h-full w-full object-cover" />
             ) : (
               <div className="flex h-full items-center justify-center text-xs text-slate-500 p-4 text-center">
-                Gere uma arte com a Nina primeiro.
+                Gere uma arte com a Nina
               </div>
             )}
           </div>
+        )}
+      </div>
+
+      {/* COLUNA 4: Sidebar de edição — todos os controles */}
+      <Card variant="default" className="space-y-2 max-h-[80vh] overflow-y-auto">
+        {layerComposition ? (<>
+          {/* Proporção */}
+          {(() => { const { AspectRatioSwitcher } = require("@/components/studio/AspectRatioSwitcher"); return <AspectRatioSwitcher value={layerComposition.aspectRatio} onChange={(ar: string) => { const fn = (window as unknown as Record<string, unknown>).__layerComposerAspectChange as ((ar: string) => void) | undefined; if (fn) fn(ar); else setLayerComposition(prev => prev ? { ...prev, aspectRatio: ar as import("@/lib/types/layer-composition").AspectRatioKey } : prev); }} />; })()}
+
+          {/* Templates */}
+          {(() => { const { TemplatePresetPicker } = require("@/components/studio/criar/TemplatePresetPicker"); return <TemplatePresetPicker composition={layerComposition} onChange={setLayerComposition} />; })()}
+
+          {/* Texto */}
+          <SidebarAccordion title={`Texto (${layerComposition.textLayers.length})`} defaultOpen action={<button type="button" onClick={() => { const nl = { id: `text-${Date.now()}`, content: "Novo texto", fontFamily: brandFontsList[0] || "Inter", fontSize: 0.04, fontWeight: 600, fontStyle: "normal" as const, color: "#FFFFFF", position: { x: 0.5, y: 0.5 }, anchor: "center" as const, maxWidthRatio: 0.85, shadow: { color: "rgba(0,0,0,0.5)", blur: 4, offsetX: 0, offsetY: 1 } }; setLayerComposition(prev => prev ? { ...prev, textLayers: [...prev.textLayers, nl] } : prev); }} className="text-[10px] text-cyan-400">+ Adicionar</button>}>
+            {(() => { const { TextLayerEditor } = require("@/components/studio/TextLayerEditor"); return layerComposition.textLayers.map((layer: import("@/lib/types/layer-composition").TextLayer, i: number) => (
+              <div key={layer.id}>
+                {i > 0 && <div className="my-2 border-t border-slate-800" />}
+                <div className="flex items-start gap-1">
+                  <div className="flex-1">
+                    <TextLayerEditor layer={layer} brandColors={brandColorsList} brandFonts={brandFontsList} onChange={(updated: import("@/lib/types/layer-composition").TextLayer) => { const nl = [...layerComposition.textLayers]; nl[i] = updated; setLayerComposition(prev => prev ? { ...prev, textLayers: nl } : prev); }} />
+                  </div>
+                  {layerComposition.textLayers.length > 1 && (
+                    <button type="button" onClick={() => setLayerComposition(prev => prev ? { ...prev, textLayers: prev.textLayers.filter((_: unknown, idx: number) => idx !== i) } : prev)} className="mt-6 p-1 rounded text-slate-500 hover:text-red-400" title="Remover">✕</button>
+                  )}
+                </div>
+              </div>
+            )); })()}
+          </SidebarAccordion>
+
+          {/* Logo */}
+          {layerComposition.logoLayer && (
+            <SidebarAccordion title="Logo">
+              {(() => { const { LogoPositioner } = require("@/components/studio/LogoPositioner"); return <LogoPositioner layer={layerComposition.logoLayer!} onChange={(updated: import("@/lib/types/layer-composition").LogoLayer) => setLayerComposition(prev => prev ? { ...prev, logoLayer: updated } : prev)} />; })()}
+            </SidebarAccordion>
+          )}
+
+          {/* Gradiente */}
+          <SidebarAccordion title="Gradiente">
+            <div className="flex items-center gap-2">
+              <input type="range" min="0" max="1" step="0.1" value={layerComposition.gradient.opacity} onChange={(e) => setLayerComposition(prev => prev ? { ...prev, gradient: { ...prev.gradient, opacity: parseFloat(e.target.value), enabled: parseFloat(e.target.value) > 0 } } : prev)} className="flex-1 accent-cyan-500" />
+              <span className="text-xs text-slate-500 w-8">{Math.round(layerComposition.gradient.opacity * 100)}%</span>
+            </div>
+          </SidebarAccordion>
+
+          {/* Filtros */}
+          <SidebarAccordion title="Ajustes de imagem">
+            {(() => { const { ImageFilterControls } = require("@/components/studio/criar/ImageFilterControls"); return <ImageFilterControls filters={layerComposition.filters || { brightness: 0, contrast: 0, saturation: 0, warmth: 0 }} onChange={(f: import("@/lib/types/layer-composition").ImageFilters) => setLayerComposition(prev => prev ? { ...prev, filters: f } : prev)} />; })()}
+          </SidebarAccordion>
+        </>) : (
+          <p className="text-xs text-slate-500 p-3">Gere uma arte para editar.</p>
         )}
 
         <div className="space-y-2">
