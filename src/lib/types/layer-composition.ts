@@ -72,6 +72,14 @@ export interface GradientLayer {
   color: string;      // rgb sem alpha, ex: "0,0,0"
 }
 
+// Filtros de imagem
+export interface ImageFilters {
+  brightness: number; // -50 a 50
+  contrast: number;
+  saturation: number;
+  warmth: number;
+}
+
 // Composição completa
 export interface LayerComposition {
   version: 1;
@@ -80,6 +88,7 @@ export interface LayerComposition {
   textLayers: TextLayer[];
   logoLayer: LogoLayer | null;
   gradient: GradientLayer;
+  filters?: ImageFilters;
 }
 
 // Defaults para criar uma composição inicial

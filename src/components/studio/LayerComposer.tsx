@@ -207,6 +207,19 @@ export function LayerComposer({ composition, onChange, onExport, brandColors, br
           </div>
         </div>
       </Card>
+
+      {/* Image Filters */}
+      {(() => {
+        const { ImageFilterControls } = require("./criar/ImageFilterControls");
+        return (
+          <Card variant="default" className="p-3">
+            <ImageFilterControls
+              filters={composition.filters || { brightness: 0, contrast: 0, saturation: 0, warmth: 0 }}
+              onChange={(filters: import("@/lib/types/layer-composition").ImageFilters) => onChange({ ...composition, filters })}
+            />
+          </Card>
+        );
+      })()}
     </div>
   );
 }

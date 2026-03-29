@@ -201,7 +201,22 @@ export async function renderComposition(
   const srcW = crop.width * images.photo.naturalWidth;
   const srcH = crop.height * images.photo.naturalHeight;
 
+  // Aplicar filtros de imagem antes de desenhar
+  if (composition.filters) {
+    const f = composition.filters;
+    ctx.filter = `brightness(${1 + f.brightness / 100}) contrast(${1 + f.contrast / 100}) saturate(${1 + f.saturation / 100})`;
+  }
   ctx.drawImage(images.photo, srcX, srcY, srcW, srcH, 0, 0, W, H);
+  // Warmth: overlay laranja sutil
+  if (composition.filters?.warmth && composition.filters.warmth !== 0) {
+    ctx.globalCompositeOperation = "overlay";
+    ctx.globalAlpha = Math.abs(composition.filters.warmth) / 150;
+    ctx.fillStyle = composition.filters.warmth > 0 ? "#FF8C00" : "#0066FF";
+    ctx.fillRect(0, 0, W, H);
+    ctx.globalCompositeOperation = "source-over";
+    ctx.globalAlpha = 1;
+  }
+  ctx.filter = "none"; // Reset para texto/logo
 
   // 2. GRADIENTE (para legibilidade do texto)
   if (composition.gradient.enabled) {
