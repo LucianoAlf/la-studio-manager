@@ -1,8 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import type { BrandIdentity } from "@/types/brand";
 import type { LayerComposition, CarouselComposition } from "@/lib/types/layer-composition";
-import { createDefaultComposition } from "@/lib/types/layer-composition";
+import { createDefaultComposition, createOverlayPreset, getBrandFontFamily, getBrandTextColor } from "@/lib/types/layer-composition";
+import { applyPresetToComposition } from "@/lib/canvas/template-presets";
 import { SlideStrip } from "./SlideStrip";
 import { Button } from "@/components/ui";
 
@@ -120,9 +122,19 @@ export function createDefaultCarousel(
   photoUrl: string,
   slideTexts: string[],
   logoUrl: string | null,
+  brandIdentity?: BrandIdentity | null,
+  presetId?: string,
 ): CarouselComposition {
   const slides = slideTexts.map((text, i) => {
-    const comp = createDefaultComposition(photoUrl, text, logoUrl, "carousel");
+    const baseComp = createDefaultComposition({
+      photoUrl,
+      mainText: text,
+      logoUrl,
+      aspectRatio: "carousel",
+      brandIdentity,
+      platform: "carousel",
+    });
+    const comp = presetId ? applyPresetToComposition(presetId, baseComp, brandIdentity) : baseComp;
     // Variar posição dos textos pra ficar dinâmico
     if (comp.textLayers[0]) {
       comp.textLayers[0].id = `text-carousel-${i}`;
@@ -133,13 +145,13 @@ export function createDefaultCarousel(
   });
 
   return {
-    version: 1,
+    version: 2,
     slides,
     sharedBranding: {
       logoLayer: slides[0]?.logoLayer ?? null,
-      gradient: slides[0]?.gradient ?? { enabled: true, direction: "bottom", startRatio: 0.5, opacity: 0.6, color: "0,0,0" },
-      fontFamily: "Inter",
-      accentColor: "#FFFFFF",
+      gradient: slides[0]?.gradient ?? createOverlayPreset("base", "0,0,0"),
+      fontFamily: getBrandFontFamily(brandIdentity),
+      accentColor: getBrandTextColor(brandIdentity),
     },
   };
 }

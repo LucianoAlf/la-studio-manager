@@ -1,7 +1,6 @@
 /**
- * Canvas Rendering Engine
- * Renderiza uma LayerComposition em um canvas HTML.
- * Stateless: recebe dados, desenha, exporta.
+ * Canvas Rendering Engine v2
+ * Renderiza uma LayerComposition em canvas HTML com overlays, textos e logo.
  */
 
 import {
@@ -9,13 +8,11 @@ import {
   type TextLayer,
   type LogoPresetPosition,
   type CropArea,
+  type GradientLayer,
   ASPECT_RATIOS,
+  deserializeComposition,
 } from "@/lib/types/layer-composition";
 
-// =============================================
-// Smart Crop: calcula a área de crop ideal
-// para encaixar a foto em qualquer proporção
-// =============================================
 export function computeSmartCrop(
   photoWidth: number,
   photoHeight: number,
@@ -26,32 +23,26 @@ export function computeSmartCrop(
   const targetAR = targetWidth / targetHeight;
   const photoAR = photoWidth / photoHeight;
 
-  let cropW: number, cropH: number;
+  let cropW: number;
+  let cropH: number;
 
   if (photoAR > targetAR) {
-    // Foto mais larga que o target → cortar laterais
     cropH = 1;
     cropW = (photoHeight * targetAR) / photoWidth;
   } else {
-    // Foto mais alta que o target → cortar topo/base
     cropW = 1;
     cropH = (photoWidth / targetAR) / photoHeight;
   }
 
-  // Centralizar no ponto focal
   let cropX = focalPoint.x - cropW / 2;
   let cropY = focalPoint.y - cropH / 2;
 
-  // Clampar nos limites
   cropX = Math.max(0, Math.min(cropX, 1 - cropW));
   cropY = Math.max(0, Math.min(cropY, 1 - cropH));
 
   return { x: cropX, y: cropY, width: cropW, height: cropH };
 }
 
-// =============================================
-// Resolver posição predefinida da logo
-// =============================================
 function resolveLogoPosition(
   preset: LogoPresetPosition | { x: number; y: number },
   logoScale: number,
@@ -62,20 +53,17 @@ function resolveLogoPosition(
   const halfLogo = logoScale / 2;
 
   const positions: Record<LogoPresetPosition, { x: number; y: number }> = {
-    "top-left":      { x: margin + halfLogo, y: margin + halfLogo },
-    "top-center":    { x: 0.5, y: margin + halfLogo },
-    "top-right":     { x: 1 - margin - halfLogo, y: margin + halfLogo },
-    "bottom-left":   { x: margin + halfLogo, y: 1 - margin - halfLogo },
+    "top-left": { x: margin + halfLogo, y: margin + halfLogo },
+    "top-center": { x: 0.5, y: margin + halfLogo },
+    "top-right": { x: 1 - margin - halfLogo, y: margin + halfLogo },
+    "bottom-left": { x: margin + halfLogo, y: 1 - margin - halfLogo },
     "bottom-center": { x: 0.5, y: 1 - margin - halfLogo },
-    "bottom-right":  { x: 1 - margin - halfLogo, y: 1 - margin - halfLogo },
+    "bottom-right": { x: 1 - margin - halfLogo, y: 1 - margin - halfLogo },
   };
 
   return positions[preset];
 }
 
-// =============================================
-// Carregar imagem com CORS
-// =============================================
 export function loadImage(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -86,13 +74,9 @@ export function loadImage(url: string): Promise<HTMLImageElement> {
   });
 }
 
-// =============================================
-// Carregar Google Font
-// =============================================
 const injectedLinks = new Set<string>();
 
 export async function ensureFontLoaded(fontFamily: string, weight: number = 700): Promise<void> {
-  // Injetar stylesheet se ainda não foi
   const linkId = `gfont-${fontFamily.replace(/\s/g, "-")}`;
   if (!injectedLinks.has(linkId)) {
     injectedLinks.add(linkId);
@@ -105,15 +89,106 @@ export async function ensureFontLoaded(fontFamily: string, weight: number = 700)
     }
   }
 
-  // Esperar a fonte carregar via FontFace API
   try {
     await document.fonts.load(`${weight} 48px "${fontFamily}"`);
-  } catch { /* fallback */ }
+  } catch {
+    // noop
+  }
 }
 
-// =============================================
-// Desenhar texto com word wrap
-// =============================================
+function rgba(color: string, opacity: number): string {
+  if (color.startsWith("rgba(")) return color;
+  if (color.startsWith("rgb(")) {
+    return color.replace("rgb(", "rgba(").replace(")", `, ${opacity})`);
+  }
+  if (color.startsWith("#")) {
+    const hex = color.replace("#", "");
+    const normalized = hex.length === 3 ? hex.split("").map((char) => `${char}${char}`).join("") : hex;
+    if (/^[0-9a-fA-F]{6}$/.test(normalized)) {
+      return `rgba(${parseInt(normalized.slice(0, 2), 16)}, ${parseInt(normalized.slice(2, 4), 16)}, ${parseInt(normalized.slice(4, 6), 16)}, ${opacity})`;
+    }
+    return color;
+  }
+  return `rgba(${color}, ${opacity})`;
+}
+
+function measureTextWidth(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  letterSpacing: number,
+): number {
+  if (!text) return 0;
+  if (!letterSpacing) return ctx.measureText(text).width;
+
+  const chars = Array.from(text);
+  return chars.reduce((width, char, index) => {
+    const charWidth = ctx.measureText(char).width;
+    return width + charWidth + (index < chars.length - 1 ? letterSpacing : 0);
+  }, 0);
+}
+
+function computeAlignedX(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  anchor: TextLayer["anchor"],
+  x: number,
+  letterSpacing: number,
+): number {
+  const width = measureTextWidth(ctx, text, letterSpacing);
+
+  if (anchor === "left") return x;
+  if (anchor === "right") return x - width;
+  return x - width / 2;
+}
+
+function drawSpacedText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+  mode: "fill" | "stroke",
+  letterSpacing: number,
+): void {
+  if (!letterSpacing) {
+    if (mode === "stroke") ctx.strokeText(text, x, y);
+    else ctx.fillText(text, x, y);
+    return;
+  }
+
+  let cursorX = x;
+  for (const char of Array.from(text)) {
+    if (mode === "stroke") ctx.strokeText(char, cursorX, y);
+    else ctx.fillText(char, cursorX, y);
+    cursorX += ctx.measureText(char).width + letterSpacing;
+  }
+}
+
+function wrapText(
+  ctx: CanvasRenderingContext2D,
+  content: string,
+  maxWidth: number,
+  letterSpacing: number,
+): string[] {
+  const words = content.split(/\s+/).filter(Boolean);
+  if (words.length === 0) return [""];
+
+  const lines: string[] = [];
+  let currentLine = "";
+
+  for (const word of words) {
+    const candidate = currentLine ? `${currentLine} ${word}` : word;
+    if (measureTextWidth(ctx, candidate, letterSpacing) > maxWidth && currentLine) {
+      lines.push(currentLine);
+      currentLine = word;
+    } else {
+      currentLine = candidate;
+    }
+  }
+
+  if (currentLine) lines.push(currentLine);
+  return lines;
+}
+
 function drawTextLayer(
   ctx: CanvasRenderingContext2D,
   layer: TextLayer,
@@ -124,21 +199,19 @@ function drawTextLayer(
   const maxWidth = layer.maxWidthRatio * canvasW;
   const x = layer.position.x * canvasW;
   const y = layer.position.y * canvasH;
+  const letterSpacing = layer.letterSpacing ?? 0;
+  const lineHeightMultiplier = layer.lineHeight ?? 1.15;
+  const lineHeight = fontSize * lineHeightMultiplier;
+  const fontStyle = layer.fontStyle === "italic" ? "italic " : "";
+  const transformedText = layer.textTransform === "uppercase"
+    ? layer.content.toUpperCase()
+    : layer.content;
 
   ctx.save();
-
-  // Fonte (com suporte a itálico)
-  const fontStyle = layer.fontStyle === "italic" ? "italic " : "";
   ctx.font = `${fontStyle}${layer.fontWeight} ${fontSize}px "${layer.fontFamily}", sans-serif`;
-  ctx.textAlign = layer.anchor;
+  ctx.textAlign = "left";
   ctx.textBaseline = "middle";
 
-  // Letter spacing (se definido)
-  if (layer.letterSpacing) {
-    (ctx as unknown as { letterSpacing: string }).letterSpacing = `${layer.letterSpacing}px`;
-  }
-
-  // Sombra
   if (layer.shadow) {
     ctx.shadowColor = layer.shadow.color;
     ctx.shadowBlur = layer.shadow.blur;
@@ -146,45 +219,120 @@ function drawTextLayer(
     ctx.shadowOffsetY = layer.shadow.offsetY;
   }
 
-  // Word wrap
-  const words = layer.content.split(" ");
-  const lines: string[] = [];
-  let currentLine = "";
-
-  for (const word of words) {
-    const testLine = currentLine ? `${currentLine} ${word}` : word;
-    const metrics = ctx.measureText(testLine);
-    if (metrics.width > maxWidth && currentLine) {
-      lines.push(currentLine);
-      currentLine = word;
-    } else {
-      currentLine = testLine;
-    }
-  }
-  if (currentLine) lines.push(currentLine);
-
-  // Desenhar cada linha
-  const lineHeight = fontSize * 1.2;
+  const lines = wrapText(ctx, transformedText, maxWidth, letterSpacing);
   const totalHeight = lines.length * lineHeight;
   const startY = y - totalHeight / 2 + lineHeight / 2;
 
   ctx.fillStyle = layer.color;
-  for (let i = 0; i < lines.length; i++) {
-    ctx.fillText(lines[i], x, startY + i * lineHeight);
+  ctx.globalAlpha = typeof layer.opacity === "number" ? layer.opacity : 1;
+
+  if (layer.stroke && layer.stroke.width > 0) {
+    ctx.strokeStyle = rgba(layer.stroke.color, layer.stroke.opacity);
+    ctx.lineWidth = layer.stroke.width;
+    ctx.lineJoin = "round";
+    ctx.miterLimit = 2;
   }
+
+  lines.forEach((line, index) => {
+    const lineX = computeAlignedX(ctx, line, layer.anchor, x, letterSpacing);
+    const lineY = startY + index * lineHeight;
+
+    if (layer.stroke && layer.stroke.width > 0) {
+      drawSpacedText(ctx, line, lineX, lineY, "stroke", letterSpacing);
+    }
+
+    drawSpacedText(ctx, line, lineX, lineY, "fill", letterSpacing);
+  });
 
   ctx.restore();
 }
 
-// =============================================
-// RENDER: desenha todas as camadas no canvas
-// =============================================
+function drawLinearGradient(
+  ctx: CanvasRenderingContext2D,
+  W: number,
+  H: number,
+  gradientLayer: Extract<GradientLayer, { kind: "linear" }>,
+): void {
+  if (!gradientLayer.enabled || gradientLayer.opacity <= 0) return;
+
+  const gradient = gradientLayer.direction === "bottom"
+    ? ctx.createLinearGradient(0, H * gradientLayer.startRatio, 0, H * gradientLayer.endRatio)
+    : ctx.createLinearGradient(0, H * (1 - gradientLayer.startRatio), 0, H * (1 - gradientLayer.endRatio));
+
+  gradient.addColorStop(0, rgba(gradientLayer.color, 0));
+  gradient.addColorStop(1, rgba(gradientLayer.color, gradientLayer.opacity));
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, W, H);
+}
+
+function drawDualGradient(
+  ctx: CanvasRenderingContext2D,
+  W: number,
+  H: number,
+  gradientLayer: Extract<GradientLayer, { kind: "dual" }>,
+): void {
+  if (!gradientLayer.enabled || gradientLayer.opacity <= 0) return;
+
+  const top = ctx.createLinearGradient(0, H * gradientLayer.topStartRatio, 0, 0);
+  top.addColorStop(0, rgba(gradientLayer.color, 0));
+  top.addColorStop(1, rgba(gradientLayer.color, gradientLayer.opacity));
+  ctx.fillStyle = top;
+  ctx.fillRect(0, 0, W, H);
+
+  const bottom = ctx.createLinearGradient(0, H * gradientLayer.bottomStartRatio, 0, H);
+  bottom.addColorStop(0, rgba(gradientLayer.color, 0));
+  bottom.addColorStop(1, rgba(gradientLayer.color, gradientLayer.opacity));
+  ctx.fillStyle = bottom;
+  ctx.fillRect(0, 0, W, H);
+}
+
+function drawVignetteGradient(
+  ctx: CanvasRenderingContext2D,
+  W: number,
+  H: number,
+  gradientLayer: Extract<GradientLayer, { kind: "vignette" }>,
+): void {
+  if (!gradientLayer.enabled || gradientLayer.opacity <= 0) return;
+
+  const centerX = W / 2;
+  const centerY = H / 2;
+  const maxRadius = Math.hypot(centerX, centerY);
+  const innerRadius = Math.min(W, H) * gradientLayer.innerRadiusRatio;
+  const outerRadius = Math.min(maxRadius, innerRadius + Math.min(W, H) * gradientLayer.feather);
+
+  const vignette = ctx.createRadialGradient(centerX, centerY, innerRadius, centerX, centerY, outerRadius);
+  vignette.addColorStop(0, rgba(gradientLayer.color, 0));
+  vignette.addColorStop(1, rgba(gradientLayer.color, gradientLayer.opacity));
+  ctx.fillStyle = vignette;
+  ctx.fillRect(0, 0, W, H);
+}
+
+function drawGradient(
+  ctx: CanvasRenderingContext2D,
+  W: number,
+  H: number,
+  gradientLayer: GradientLayer,
+): void {
+  if (gradientLayer.kind === "linear") {
+    drawLinearGradient(ctx, W, H, gradientLayer);
+    return;
+  }
+
+  if (gradientLayer.kind === "dual") {
+    drawDualGradient(ctx, W, H, gradientLayer);
+    return;
+  }
+
+  drawVignetteGradient(ctx, W, H, gradientLayer);
+}
+
 export async function renderComposition(
   canvas: HTMLCanvasElement,
   composition: LayerComposition,
   images: { photo: HTMLImageElement; logo?: HTMLImageElement | null },
 ): Promise<void> {
-  const dims = ASPECT_RATIOS[composition.aspectRatio];
+  const normalized = deserializeComposition(composition);
+  const dims = ASPECT_RATIOS[normalized.aspectRatio];
   canvas.width = dims.width;
   canvas.height = dims.height;
 
@@ -193,62 +341,44 @@ export async function renderComposition(
 
   const W = dims.width;
   const H = dims.height;
-
-  // 1. BACKGROUND: foto com smart crop
-  const crop = composition.background.cropArea;
+  const crop = normalized.background.cropArea;
   const srcX = crop.x * images.photo.naturalWidth;
   const srcY = crop.y * images.photo.naturalHeight;
   const srcW = crop.width * images.photo.naturalWidth;
   const srcH = crop.height * images.photo.naturalHeight;
 
-  // Aplicar filtros de imagem antes de desenhar
-  if (composition.filters) {
-    const f = composition.filters;
+  if (normalized.filters) {
+    const f = normalized.filters;
     ctx.filter = `brightness(${1 + f.brightness / 100}) contrast(${1 + f.contrast / 100}) saturate(${1 + f.saturation / 100})`;
   }
+
   ctx.drawImage(images.photo, srcX, srcY, srcW, srcH, 0, 0, W, H);
-  // Warmth: overlay laranja sutil
-  if (composition.filters?.warmth && composition.filters.warmth !== 0) {
+
+  if (normalized.filters?.warmth && normalized.filters.warmth !== 0) {
     ctx.globalCompositeOperation = "overlay";
-    ctx.globalAlpha = Math.abs(composition.filters.warmth) / 150;
-    ctx.fillStyle = composition.filters.warmth > 0 ? "#FF8C00" : "#0066FF";
+    ctx.globalAlpha = Math.abs(normalized.filters.warmth) / 150;
+    ctx.fillStyle = normalized.filters.warmth > 0 ? "#FF8C00" : "#0066FF";
     ctx.fillRect(0, 0, W, H);
     ctx.globalCompositeOperation = "source-over";
     ctx.globalAlpha = 1;
   }
-  ctx.filter = "none"; // Reset para texto/logo
 
-  // 2. GRADIENTE (para legibilidade do texto)
-  if (composition.gradient.enabled) {
-    const g = composition.gradient;
-    let gradient: CanvasGradient;
+  ctx.filter = "none";
 
-    if (g.direction === "bottom") {
-      gradient = ctx.createLinearGradient(0, H * g.startRatio, 0, H);
-    } else {
-      gradient = ctx.createLinearGradient(0, H * (1 - g.startRatio), 0, 0);
-    }
+  drawGradient(ctx, W, H, normalized.gradient);
 
-    gradient.addColorStop(0, `rgba(${g.color}, 0)`);
-    gradient.addColorStop(1, `rgba(${g.color}, ${g.opacity})`);
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, W, H);
-  }
-
-  // 3. TEXTOS
-  for (const textLayer of composition.textLayers) {
+  for (const textLayer of normalized.textLayers) {
     await ensureFontLoaded(textLayer.fontFamily, textLayer.fontWeight);
     drawTextLayer(ctx, textLayer, W, H);
   }
 
-  // 4. LOGO
-  if (composition.logoLayer && images.logo) {
-    const logo = composition.logoLayer;
-    const pos = resolveLogoPosition(logo.position, logo.scale);
+  if (normalized.logoLayer && images.logo) {
+    const logo = normalized.logoLayer;
+    const basePosition = resolveLogoPosition(logo.position, logo.scale);
     const logoW = logo.scale * W;
     const logoH = (images.logo.naturalHeight / images.logo.naturalWidth) * logoW;
-    const logoX = pos.x * W - logoW / 2;
-    const logoY = pos.y * H - logoH / 2;
+    const logoX = (basePosition.x + (logo.offset?.x || 0)) * W - logoW / 2;
+    const logoY = (basePosition.y + (logo.offset?.y || 0)) * H - logoH / 2;
 
     ctx.save();
     ctx.globalAlpha = logo.opacity;
@@ -257,9 +387,6 @@ export async function renderComposition(
   }
 }
 
-// =============================================
-// EXPORT: renderiza e retorna Blob
-// =============================================
 export async function exportCompositionToBlob(
   composition: LayerComposition,
   images: { photo: HTMLImageElement; logo?: HTMLImageElement | null },
@@ -280,31 +407,28 @@ export async function exportCompositionToBlob(
   });
 }
 
-// =============================================
-// RECOMPOSE: muda a proporção sem regenerar
-// =============================================
 export function recomposeForAspectRatio(
   composition: LayerComposition,
   newAspectRatio: LayerComposition["aspectRatio"],
   photoWidth: number,
   photoHeight: number,
 ): LayerComposition {
+  const normalized = deserializeComposition(composition);
   const dims = ASPECT_RATIOS[newAspectRatio];
   const newCrop = computeSmartCrop(
     photoWidth,
     photoHeight,
     dims.width,
     dims.height,
-    composition.background.focalPoint,
+    normalized.background.focalPoint,
   );
 
   return {
-    ...composition,
+    ...normalized,
     aspectRatio: newAspectRatio,
     background: {
-      ...composition.background,
+      ...normalized.background,
       cropArea: newCrop,
     },
-    // Textos e logo mantêm posições relativas — funcionam em qualquer proporção
   };
 }

@@ -22,6 +22,8 @@ export interface BrandIdentity {
   color_text_primary?: string | null
   color_text_secondary?: string | null
   color_text_light?: string | null
+  color_gradient_start?: string | null
+  color_gradient_end?: string | null
   font_display?: string | null
   font_body?: string | null
   font_accent?: string | null

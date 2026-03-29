@@ -16,16 +16,8 @@ export function TemplatePresetPicker({ composition, onChange }: Props) {
           key={preset.id}
           type="button"
           onClick={() => {
-            const existingTexts = composition.textLayers.map((l) => l.content);
-            const applied = applyPresetToComposition(preset, existingTexts);
-            onChange({
-              ...composition,
-              textLayers: applied.textLayers,
-              gradient: applied.gradient,
-              logoLayer: composition.logoLayer
-                ? { ...composition.logoLayer, position: applied.logoPosition }
-                : null,
-            });
+            const applied = applyPresetToComposition(preset.id, composition);
+            onChange(applied);
           }}
           className="flex-shrink-0 rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2 text-center hover:border-cyan-500/50 hover:bg-slate-800 transition-colors"
         >

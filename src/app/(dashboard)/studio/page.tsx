@@ -99,6 +99,9 @@ import {
   DialogTitle,
 } from "@/components/ui/shadcn/dialog";
 import { Switch } from "@/components/ui/switch";
+import { getBrandIdentity } from "@/lib/queries/brand";
+import type { BrandIdentity } from "@/types/brand";
+import { applyPresetToComposition, selectDefaultPresetId } from "@/lib/canvas/template-presets";
 
 type StudioTab = "calendario" | "criar" | "banco" | "video" | "automacoes" | "performance" | "conexoes";
 type AutomationTab = "aniversarios" | "datas";
@@ -729,8 +732,7 @@ export default function StudioPage() {
   const [postModalOpen, setPostModalOpen] = useState(false);
   const [postUpdating, setPostUpdating] = useState(false);
   const [postDeleteConfirmOpen, setPostDeleteConfirmOpen] = useState(false);
-  const [brandColorsList, setBrandColorsList] = useState<string[]>([]);
-  const [brandFontsList, setBrandFontsList] = useState<string[]>([]);
+  const [brandIdentity, setBrandIdentity] = useState<BrandIdentity | null>(null);
   const [commDateFilter, setCommDateFilter] = useState({ category: "all", assigned: "all", status: "all" });
   const [commDateExpandedMonths, setCommDateExpandedMonths] = useState<Set<number>>(new Set());
   const [commDateSaving, setCommDateSaving] = useState(false);
@@ -1420,14 +1422,9 @@ export default function StudioPage() {
     if (integrationsRes.status === "fulfilled") setIntegrations(integrationsRes.value);
     if (metricsRes.status === "fulfilled") setMetrics(metricsRes.value);
 
-    // Buscar cores e fontes da marca para o editor
+    // Buscar identidade visual da marca para o editor
     try {
-      const { data: bi } = await supabase.from("brand_identity" as never).select("color_primary, color_secondary, color_accent, color_gradient_start, color_gradient_end, font_display, font_body, font_accent").eq("brand_key", brand).single();
-      if (bi) {
-        const biData = bi as Record<string, string | null>;
-        setBrandColorsList([biData.color_primary, biData.color_secondary, biData.color_accent, biData.color_gradient_start, biData.color_gradient_end].filter((c): c is string => !!c));
-        setBrandFontsList([biData.font_display, biData.font_body, biData.font_accent].filter((f): f is string => !!f));
-      }
+      setBrandIdentity(await getBrandIdentity(brand));
     } catch { /* brand identity optional */ }
 
     const fatalErrors = [postsRes, birthdaysRes, commemorativeRes].filter((r) => r.status === "rejected");
@@ -2878,17 +2875,38 @@ export default function StudioPage() {
 
       // Criar composição por camadas
       if (photoUrl) {
-        const { createDefaultComposition } = await import("@/lib/types/layer-composition");
-        const aspectKey = (postPlatform === "story" || postPlatform === "reels") ? "story" as const : "feed" as const;
-        const comp = createDefaultComposition(
-          photoUrl,
-          mainPhrase,
-          logoUrl || null,
-          aspectKey,
-        );
-        setLayerComposition(comp);
-        setNinaPreviewUrl(photoUrl); // fallback
-        console.log("[STUDIO] Layer composition created");
+        if (postPlatform === "carousel") {
+          // Carousel: cria múltiplos slides
+          const { createDefaultCarousel } = await import("@/components/studio/criar/CarouselBuilder");
+          const presetId = selectDefaultPresetId(brandIdentity?.brand_key || brand, "carousel", activeTones);
+          const slideTexts = [
+            mainPhrase || "Slide 1",
+            data?.caption?.split("\n")[0]?.substring(0, 60) || "Slide 2",
+            brand === "la_music_kids" ? "LA Music Kids" : "LA Music School",
+          ];
+          const carousel = createDefaultCarousel(photoUrl, slideTexts, logoUrl || null, brandIdentity, presetId);
+          setCarouselComposition(carousel);
+          setLayerComposition(null);
+          setNinaPreviewUrl(photoUrl);
+          console.log(`[STUDIO] Carousel composition created with ${carousel.slides.length} slides`);
+        } else {
+          const { createDefaultComposition } = await import("@/lib/types/layer-composition");
+          const aspectKey = (postPlatform === "story" || postPlatform === "reels") ? "story" as const : "feed" as const;
+          const presetId = selectDefaultPresetId(brandIdentity?.brand_key || brand, aspectKey, activeTones);
+          const baseComp = createDefaultComposition({
+            photoUrl,
+            mainText: mainPhrase,
+            logoUrl: logoUrl || null,
+            aspectRatio: aspectKey,
+            brandIdentity,
+            platform: aspectKey,
+          });
+          const comp = applyPresetToComposition(presetId, baseComp, brandIdentity);
+          setLayerComposition(comp);
+          setCarouselComposition(null);
+          setNinaPreviewUrl(photoUrl); // fallback
+          console.log("[STUDIO] Layer composition created");
+        }
       } else {
         setNinaPreviewUrl(data?.image_url ?? null);
       }
@@ -2961,9 +2979,9 @@ export default function StudioPage() {
         } catch (e) { console.error("[STUDIO] Export error:", e); }
       }
 
-      // Cria o post com status draft
+      // Cria o post com status draft (timezone São Paulo = UTC-3)
       const dbPostType = postPlatform === "feed" ? "image" : postPlatform;
-      const scheduledFor = `${postDate}T${postTime}:00`;
+      const scheduledFor = `${postDate}T${postTime}:00-03:00`;
       const { data: postData, error: insertError } = await supabase
         .from("posts")
         .insert({
@@ -2976,7 +2994,7 @@ export default function StudioPage() {
           created_by_ai: true,
           created_by: userId,
           ai_agent_name: "Nina",
-          metadata: { image_url: publishImageUrl, layers: layerComposition },
+          metadata: { image_url: publishImageUrl, layers: layerComposition, layers_v2: layerComposition },
         } as never)
         .select("id")
         .single();
@@ -2989,23 +3007,7 @@ export default function StudioPage() {
 
       const createdPostId = (postData as { id: string }).id;
 
-      // Insere na fila de publicação
-      const { error: queueError } = await supabase
-        .from("studio_publish_queue")
-        .insert({
-          post_id: createdPostId,
-          brand,
-          scheduled_for: new Date().toISOString(),
-          status: "pending",
-        } as never);
-
-      if (queueError) {
-        console.error("[STUDIO] Queue insert error:", queueError);
-        toast.error("Erro ao adicionar à fila de publicação.");
-        return;
-      }
-
-      // Publica imediatamente
+      // Publica imediatamente via edge function
       const { data: publishData, error: fnError } = await supabase.functions.invoke<PublishScheduledPostsResponse>("publish-scheduled-posts", {
         body: { post_id: createdPostId },
       });
@@ -3040,8 +3042,8 @@ export default function StudioPage() {
       return;
     }
 
-    // Validação: não permitir agendamento no passado
-    const scheduledDate = new Date(`${postDate}T${postTime}:00`);
+    // Validação: não permitir agendamento no passado (São Paulo = UTC-3)
+    const scheduledDate = new Date(`${postDate}T${postTime}:00-03:00`);
     const now = new Date();
     if (scheduledDate <= now) {
       toast.error("Não é possível agendar no passado. Escolha um horário futuro.");
@@ -3085,7 +3087,7 @@ export default function StudioPage() {
       }
 
       const dbPostType = postPlatform === "feed" ? "image" : postPlatform;
-      const scheduledFor = `${postDate}T${postTime}:00`;
+      const scheduledFor = `${postDate}T${postTime}:00-03:00`;
       const { data: postData, error: insertError } = await supabase
         .from("posts")
         .insert({
@@ -3098,7 +3100,7 @@ export default function StudioPage() {
           created_by_ai: true,
           created_by: schedUserId,
           ai_agent_name: "Nina",
-          metadata: { image_url: schedImageUrl, layers: layerComposition },
+          metadata: { image_url: schedImageUrl, layers: layerComposition, layers_v2: layerComposition },
         } as never)
         .select("id")
         .single();
@@ -3106,24 +3108,6 @@ export default function StudioPage() {
       if (insertError || !postData) {
         console.error("[STUDIO] Schedule error:", insertError);
         toast.error("Erro ao agendar post.");
-        return;
-      }
-
-      const createdId = (postData as { id: string }).id;
-
-      // Insere na fila de publicação para o horário agendado
-      const { error: queueError } = await supabase
-        .from("studio_publish_queue")
-        .insert({
-          post_id: createdId,
-          brand,
-          scheduled_for: scheduledFor,
-          status: "pending",
-        } as never);
-
-      if (queueError) {
-        console.error("[STUDIO] Queue insert error:", queueError);
-        toast.error("Erro ao adicionar à fila.");
         return;
       }
 
@@ -3466,7 +3450,7 @@ export default function StudioPage() {
                 carousel={carouselComposition}
                 onChange={setCarouselComposition}
                 renderSlideEditor={(slide: import("@/lib/types/layer-composition").LayerComposition, _idx: number, onSlideChange: (s: import("@/lib/types/layer-composition").LayerComposition) => void) => (
-                  <LayerComposer composition={slide} onChange={onSlideChange} brandColors={brandColorsList} brandFonts={brandFontsList} />
+                  <LayerComposer composition={slide} onChange={onSlideChange} brandIdentity={brandIdentity} />
                 )}
               />
             );
@@ -3478,8 +3462,7 @@ export default function StudioPage() {
               <LayerComposer
                 composition={layerComposition}
                 onChange={setLayerComposition}
-                brandColors={brandColorsList}
-                brandFonts={brandFontsList}
+                brandIdentity={brandIdentity}
               />
             );
           })()
@@ -3527,7 +3510,7 @@ export default function StudioPage() {
                 caption: postCaption, post_type: dbPostType, status: "awaiting_approval",
                 brand, scheduled_for: `${postDate}T${postTime}:00`,
                 created_by_ai: true, created_by: userId, ai_agent_name: "Nina",
-                metadata: { image_url: approvalImageUrl, layers: layerComposition },
+                metadata: { image_url: approvalImageUrl, layers: layerComposition, layers_v2: layerComposition },
               } as never);
               if (insertErr) { toast.error("Erro ao enviar para aprovação."); return; }
               toast.success("Enviado para aprovação! O Yuri será notificado.");
