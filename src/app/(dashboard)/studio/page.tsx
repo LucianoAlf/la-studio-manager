@@ -803,6 +803,10 @@ export default function StudioPage() {
   const [ninaPreviewUrl, setNinaPreviewUrl] = useState<string | null>(null);
   const [ninaHashtags, setNinaHashtags] = useState<string[]>([]);
   const [ninaGenerationMethod, setNinaGenerationMethod] = useState<string | null>(null);
+  const [activeTones, setActiveTones] = useState<string[]>(["inspirador", "divertido", "profissional"]);
+  const [carouselComposition, setCarouselComposition] = useState<import("@/lib/types/layer-composition").CarouselComposition | null>(null);
+  const [captionVariations, setCaptionVariations] = useState<Array<{ tone: string; phrase: string; caption: string; hashtags: string[] }>>([]);
+  const [selectedCaptionIdx, setSelectedCaptionIdx] = useState(-1);
   const [layerComposition, setLayerComposition] = useState<import("@/lib/types/layer-composition").LayerComposition | null>(null);
   const [isGeneratingWithNina, setIsGeneratingWithNina] = useState(false);
   const [isPublishingNow, setIsPublishingNow] = useState(false);
@@ -3359,6 +3363,9 @@ export default function StudioPage() {
           )}
         </div>
 
+        {/* Referências visuais */}
+        {(() => { const { ReferenceTemplatePicker } = require("@/components/studio/criar/ReferenceTemplatePicker"); return <ReferenceTemplatePicker brand={brand} category={postPlatform === "story" ? "story" : postPlatform === "carousel" ? "carousel" : "single_image"} selectedUrl={selectedEventPhotoForNina?.file_url || null} onSelect={(url: string) => setSelectedEventPhotoForNina({ id: "ref", person_name: null, brand: null, file_url: url, birth_date: null, source: "upload", metadata: null } as PhotoAsset)} />; })()}
+
         <div className="space-y-2">
           <label className="block text-xs text-slate-400">Legenda</label>
           <textarea
@@ -3390,6 +3397,9 @@ export default function StudioPage() {
             placeholder="Descreva o estilo da arte e objetivo do post..."
           />
         </div>
+
+        {/* Tom da legenda */}
+        {(() => { const { ToneSelector } = require("@/components/studio/criar/ToneSelector"); return <ToneSelector activeTones={activeTones || ["inspirador", "divertido", "profissional"]} onChange={(t: string[]) => setActiveTones(t)} />; })()}
 
         <Button
           variant="primary"
@@ -3426,13 +3436,31 @@ export default function StudioPage() {
         </div>
 
         {ninaHashtags.length > 0 ? <p className="text-xs text-slate-500">Hashtags: {ninaHashtags.join(" ")}</p> : null}
+
+        {/* Variações de legenda */}
+        {captionVariations.length > 0 && (() => { const { CaptionVariationPicker } = require("@/components/studio/criar/CaptionVariationPicker"); return <CaptionVariationPicker variations={captionVariations} selectedIndex={selectedCaptionIdx} onSelect={(idx: number) => { setSelectedCaptionIdx(idx); const v = captionVariations[idx]; if (v) { setPostCaption(v.caption + "\n\n" + v.hashtags.join(" ")); if (layerComposition && layerComposition.textLayers.length > 0) { setLayerComposition({ ...layerComposition, textLayers: layerComposition.textLayers.map((l: import("@/lib/types/layer-composition").TextLayer, i: number) => i === 0 ? { ...l, content: v.phrase } : l) }); } } }} />; })()}
       </Card>
 
       <Card variant="default" className="space-y-4">
         <h3 className="text-sm font-semibold text-slate-100">Preview</h3>
 
         {/* Layer Composer — editor interativo por camadas */}
-        {layerComposition ? (
+        {/* Carousel mode */}
+        {carouselComposition && postPlatform === "carousel" ? (
+          (() => {
+            const { CarouselBuilder } = require("@/components/studio/criar/CarouselBuilder");
+            const { LayerComposer } = require("@/components/studio/LayerComposer");
+            return (
+              <CarouselBuilder
+                carousel={carouselComposition}
+                onChange={setCarouselComposition}
+                renderSlideEditor={(slide: import("@/lib/types/layer-composition").LayerComposition, _idx: number, onSlideChange: (s: import("@/lib/types/layer-composition").LayerComposition) => void) => (
+                  <LayerComposer composition={slide} onChange={onSlideChange} brandColors={brandColorsList} brandFonts={brandFontsList} />
+                )}
+              />
+            );
+          })()
+        ) : layerComposition ? (
           (() => {
             const { LayerComposer } = require("@/components/studio/LayerComposer");
             return (
