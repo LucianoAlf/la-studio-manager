@@ -268,8 +268,9 @@ export async function getBirthdaysOverview(brand: StudioBrand): Promise<{ upcomi
       .from("birthday_automation_log" as never)
       .select("id, student_id, student_name, brand, approval_status, created_at, published_at")
       .eq("brand", brand)
+      .gte("created_at", new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString())
       .order("created_at", { ascending: false })
-      .limit(20),
+      .limit(100),
   ]);
 
   if (assetsResp.error) {

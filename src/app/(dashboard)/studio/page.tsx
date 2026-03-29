@@ -3993,6 +3993,7 @@ export default function StudioPage() {
           {!birthdayHistory.some(h => h.student_name === item.person_name) && (
             <Button variant="outline" size="sm">Pular</Button>
           )}
+        </div>
       </div>
     );
 
@@ -4030,19 +4031,37 @@ export default function StudioPage() {
           </div>
 
           <Card variant="default" className="space-y-3">
-            <h3 className="text-sm font-semibold text-slate-100">Histórico</h3>
+            <h3 className="text-sm font-semibold text-slate-100">Histórico do mês ({birthdayHistory.length})</h3>
             {birthdayHistory.length === 0 ? (
-              <p className="text-sm text-slate-500">Sem histórico recente.</p>
+              <p className="text-sm text-slate-500">Nenhum post de aniversário este mês.</p>
             ) : (
-              birthdayHistory.map((row) => (
-                <div key={row.id} className="flex items-center justify-between rounded-lg border border-slate-800 bg-slate-900/50 p-3">
-                  <div>
-                    <p className="text-sm text-slate-100">{row.student_name}</p>
-                    <p className="text-xs text-slate-500">{new Date(row.created_at).toLocaleString("pt-BR")}</p>
+              <div className="max-h-[500px] overflow-y-auto space-y-2 pr-1">
+              {birthdayHistory.map((row) => {
+                const student = birthdays.find(b => b.person_name === row.student_name);
+                return (
+                <div key={row.id} className="flex items-center gap-3 rounded-lg border border-slate-800 bg-slate-900/50 p-3">
+                  {student?.file_url ? (
+                    <img src={student.file_url} alt="" className="h-10 w-10 rounded-full object-cover border border-slate-700 flex-shrink-0" />
+                  ) : (
+                    <div className="h-10 w-10 rounded-full bg-slate-800 flex items-center justify-center text-xs text-slate-400 flex-shrink-0">
+                      {row.student_name.split(" ").map(n => n[0]).join("").substring(0, 2)}
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-slate-100 truncate">{row.student_name}</p>
+                    <p className="text-xs text-slate-500">
+                      {row.brand === "la_music_kids" ? "LA Music Kids" : "LA Music School"}
+                      {student?.unit && ` • ${student.unit.replace("_", " ").replace(/\b\w/g, c => c.toUpperCase())}`}
+                      {` • ${new Date(row.created_at).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}`}
+                    </p>
                   </div>
-                  <Badge variant="status" color={row.approval_status.includes("approved") ? "#22C55E" : "#F59E0B"}>{row.approval_status}</Badge>
+                  <Badge variant="status" color={row.approval_status.includes("publish") ? "#22C55E" : row.approval_status === "pending" ? "#F59E0B" : "#94A3B8"}>
+                    {row.approval_status.includes("publish") ? "Publicado" : row.approval_status === "pending" ? "Pendente" : row.approval_status}
+                  </Badge>
                 </div>
-              ))
+                );
+              })}
+              </div>
             )}
           </Card>
         </div>
