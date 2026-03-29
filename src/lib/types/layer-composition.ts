@@ -91,6 +91,18 @@ export interface LayerComposition {
   filters?: ImageFilters;
 }
 
+// Composição de carrossel (multi-slide)
+export interface CarouselComposition {
+  version: 1;
+  slides: LayerComposition[];
+  sharedBranding: {
+    logoLayer: LogoLayer | null;
+    gradient: GradientLayer;
+    fontFamily: string;
+    accentColor: string;
+  };
+}
+
 // Defaults para criar uma composição inicial
 export function createDefaultComposition(
   photoUrl: string,
