@@ -158,8 +158,8 @@ export function LayerComposer({ composition, onChange, onExport, brandColors, br
 }
 
 // Accordion component
-function Accordion({ title, defaultOpen, action, children }: { title: string; defaultOpen?: boolean; action?: React.ReactNode; children: React.ReactNode }) {
-  const [open, setOpen] = useState(!!defaultOpen);
+function Accordion({ title, defaultOpen: _defaultOpen, action, children }: { title: string; defaultOpen?: boolean; action?: React.ReactNode; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
   return (
     <div className="rounded-lg border border-slate-800 bg-slate-900/40 overflow-hidden">
       <button type="button" onClick={() => setOpen(!open)} className="flex items-center justify-between w-full px-3 py-2.5 hover:bg-slate-800/50 transition-colors">
