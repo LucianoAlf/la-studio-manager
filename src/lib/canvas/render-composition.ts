@@ -89,24 +89,26 @@ export function loadImage(url: string): Promise<HTMLImageElement> {
 // =============================================
 // Carregar Google Font
 // =============================================
+const injectedLinks = new Set<string>();
+
 export async function ensureFontLoaded(fontFamily: string, weight: number = 700): Promise<void> {
-  const fontSpec = `${weight} 48px "${fontFamily}"`;
-  try {
-    await document.fonts.load(fontSpec);
-  } catch {
-    // Tentar carregar do Google Fonts
-    const link = document.createElement("link");
-    link.rel = "stylesheet";
-    link.href = `https://fonts.googleapis.com/css2?family=${fontFamily.replace(/ /g, "+")}:wght@${weight}&display=swap`;
-    document.head.appendChild(link);
-    // Esperar a fonte carregar
-    await new Promise<void>((resolve) => {
-      const check = () => {
-        document.fonts.load(fontSpec).then(() => resolve()).catch(() => setTimeout(check, 100));
-      };
-      setTimeout(check, 200);
-    });
+  // Injetar stylesheet se ainda não foi
+  const linkId = `gfont-${fontFamily.replace(/\s/g, "-")}`;
+  if (!injectedLinks.has(linkId)) {
+    injectedLinks.add(linkId);
+    if (!document.getElementById(linkId)) {
+      const link = document.createElement("link");
+      link.id = linkId;
+      link.rel = "stylesheet";
+      link.href = `https://fonts.googleapis.com/css2?family=${fontFamily.replace(/ /g, "+")}:wght@400;500;600;700;800;900&display=swap`;
+      document.head.appendChild(link);
+    }
   }
+
+  // Esperar a fonte carregar via FontFace API
+  try {
+    await document.fonts.load(`${weight} 48px "${fontFamily}"`);
+  } catch { /* fallback */ }
 }
 
 // =============================================

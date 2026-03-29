@@ -60,7 +60,7 @@ export function LayerComposer({ composition, onChange, onExport }: Props) {
 
   useEffect(() => {
     if (renderTimerRef.current) clearTimeout(renderTimerRef.current);
-    renderTimerRef.current = setTimeout(doRender, 80);
+    renderTimerRef.current = setTimeout(doRender, 150);
     return () => { if (renderTimerRef.current) clearTimeout(renderTimerRef.current); };
   }, [doRender]);
 
@@ -99,11 +99,7 @@ export function LayerComposer({ composition, onChange, onExport }: Props) {
               display: "block",
             }}
           />
-          {rendering && (
-            <div className="absolute inset-0 flex items-center justify-center bg-slate-950/50">
-              <div className="h-6 w-6 animate-spin rounded-full border-2 border-cyan-500 border-t-transparent" />
-            </div>
-          )}
+          {/* Spinner removido — render é rápido o suficiente */}
           {!photoImg && (
             <div className="flex items-center justify-center p-8 text-sm text-slate-500" style={{ aspectRatio: `${dims.width}/${dims.height}`, width: 250 }}>
               Gere uma imagem para começar
