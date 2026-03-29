@@ -4,8 +4,14 @@
  * Gera imagem SEMPRE (com ou sem foto do aluno)
  */
 
-import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+// @ts-ignore - import remoto resolvido pelo runtime Deno/Supabase
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
+
+declare const Deno: {
+  env: { get: (key: string) => string | undefined };
+  serve: (handler: (req: Request) => Response | Promise<Response>) => void;
+};
 
 function toBase64(bytes: Uint8Array): string {
   let binary = ''
@@ -34,7 +40,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-serve(async (req: Request) => {
+Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY)

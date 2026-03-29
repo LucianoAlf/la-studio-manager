@@ -114,112 +114,62 @@ export function LayerComposer({ composition, onChange, onExport, brandColors, br
         </div>
       </div>
 
-      {/* Text Editor — Multi-layer */}
-      <Card variant="default" className="p-3 space-y-3">
-        <div className="flex items-center justify-between">
-          <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">Texto ({composition.textLayers.length})</h4>
-          <button
-            type="button"
-            onClick={() => {
-              const newLayer = {
-                id: `text-${Date.now()}`,
-                content: "Novo texto",
-                fontFamily: brandFonts?.[0] || "Inter",
-                fontSize: 0.04,
-                fontWeight: 600,
-                fontStyle: "normal" as const,
-                color: "#FFFFFF",
-                position: { x: 0.5, y: 0.5 },
-                anchor: "center" as const,
-                maxWidthRatio: 0.85,
-                shadow: { color: "rgba(0,0,0,0.5)", blur: 4, offsetX: 0, offsetY: 1 },
-              };
-              onChange({ ...composition, textLayers: [...composition.textLayers, newLayer] });
-            }}
-            className="text-xs text-cyan-400 hover:text-cyan-300"
-          >
-            + Adicionar texto
-          </button>
-        </div>
+      {/* TEXTO — Accordion */}
+      <Accordion title={`Texto (${composition.textLayers.length})`} defaultOpen action={
+        <button type="button" onClick={(e) => { e.stopPropagation(); const nl = { id: `text-${Date.now()}`, content: "Novo texto", fontFamily: brandFonts?.[0] || "Inter", fontSize: 0.04, fontWeight: 600, fontStyle: "normal" as const, color: "#FFFFFF", position: { x: 0.5, y: 0.5 }, anchor: "center" as const, maxWidthRatio: 0.85, shadow: { color: "rgba(0,0,0,0.5)", blur: 4, offsetX: 0, offsetY: 1 } }; onChange({ ...composition, textLayers: [...composition.textLayers, nl] }); }} className="text-[10px] text-cyan-400 hover:text-cyan-300">+ Adicionar</button>
+      }>
         {composition.textLayers.map((layer, i) => (
-          <div key={layer.id} className="relative">
-            {i > 0 && <div className="mb-2 border-t border-slate-800" />}
-            <div className="flex items-start gap-2">
+          <div key={layer.id}>
+            {i > 0 && <div className="my-2 border-t border-slate-800" />}
+            <div className="flex items-start gap-1">
               <div className="flex-1">
-                <TextLayerEditor
-                  layer={layer}
-                  brandColors={brandColors}
-                  brandFonts={brandFonts}
-                  onChange={(updated) => {
-                    const newLayers = [...composition.textLayers];
-                    newLayers[i] = updated;
-                    onChange({ ...composition, textLayers: newLayers });
-                  }}
-                />
+                <TextLayerEditor layer={layer} brandColors={brandColors} brandFonts={brandFonts} onChange={(updated) => { const nl = [...composition.textLayers]; nl[i] = updated; onChange({ ...composition, textLayers: nl }); }} />
               </div>
               {composition.textLayers.length > 1 && (
-                <button
-                  type="button"
-                  onClick={() => onChange({ ...composition, textLayers: composition.textLayers.filter((_, idx) => idx !== i) })}
-                  className="mt-6 p-1.5 rounded text-slate-500 hover:text-red-400 hover:bg-red-900/20"
-                  title="Remover texto"
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14"/></svg>
-                </button>
+                <button type="button" onClick={() => onChange({ ...composition, textLayers: composition.textLayers.filter((_, idx) => idx !== i) })} className="mt-6 p-1 rounded text-slate-500 hover:text-red-400" title="Remover">✕</button>
               )}
             </div>
           </div>
         ))}
-        {composition.textLayers.length === 0 && (
-          <p className="text-xs text-slate-500">Nenhum texto adicionado.</p>
-        )}
-      </Card>
+        {composition.textLayers.length === 0 && <p className="text-xs text-slate-500">Nenhum texto.</p>}
+      </Accordion>
 
-      {/* Logo Positioner */}
+      {/* LOGO — Accordion */}
       {composition.logoLayer && (
-        <Card variant="default" className="p-3 space-y-2">
-          <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">Logo</h4>
-          <LogoPositioner
-            layer={composition.logoLayer}
-            onChange={(updated) => onChange({ ...composition, logoLayer: updated })}
-          />
-        </Card>
+        <Accordion title="Logo">
+          <LogoPositioner layer={composition.logoLayer} onChange={(updated) => onChange({ ...composition, logoLayer: updated })} />
+        </Accordion>
       )}
 
-      {/* Gradient toggle */}
-      <Card variant="default" className="p-3">
-        <div className="flex items-center justify-between">
-          <span className="text-xs text-slate-400">Gradiente de fundo</span>
-          <div className="flex items-center gap-2">
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.1"
-              value={composition.gradient.opacity}
-              onChange={(e) => onChange({
-                ...composition,
-                gradient: { ...composition.gradient, opacity: parseFloat(e.target.value), enabled: parseFloat(e.target.value) > 0 },
-              })}
-              className="w-20 accent-cyan-500"
-            />
-            <span className="text-xs text-slate-500 w-8">{Math.round(composition.gradient.opacity * 100)}%</span>
-          </div>
+      {/* GRADIENTE — Accordion */}
+      <Accordion title="Gradiente">
+        <div className="flex items-center gap-2">
+          <input type="range" min="0" max="1" step="0.1" value={composition.gradient.opacity} onChange={(e) => onChange({ ...composition, gradient: { ...composition.gradient, opacity: parseFloat(e.target.value), enabled: parseFloat(e.target.value) > 0 } })} className="flex-1 accent-cyan-500" />
+          <span className="text-xs text-slate-500 w-8">{Math.round(composition.gradient.opacity * 100)}%</span>
         </div>
-      </Card>
+      </Accordion>
 
-      {/* Image Filters */}
-      {(() => {
-        const { ImageFilterControls } = require("./criar/ImageFilterControls");
-        return (
-          <Card variant="default" className="p-3">
-            <ImageFilterControls
-              filters={composition.filters || { brightness: 0, contrast: 0, saturation: 0, warmth: 0 }}
-              onChange={(filters: import("@/lib/types/layer-composition").ImageFilters) => onChange({ ...composition, filters })}
-            />
-          </Card>
-        );
-      })()}
+      {/* AJUSTES — Accordion */}
+      <Accordion title="Ajustes de imagem">
+        {(() => { const { ImageFilterControls } = require("./criar/ImageFilterControls"); return <ImageFilterControls filters={composition.filters || { brightness: 0, contrast: 0, saturation: 0, warmth: 0 }} onChange={(filters: import("@/lib/types/layer-composition").ImageFilters) => onChange({ ...composition, filters })} />; })()}
+      </Accordion>
+    </div>
+  );
+}
+
+// Accordion component
+function Accordion({ title, defaultOpen, action, children }: { title: string; defaultOpen?: boolean; action?: React.ReactNode; children: React.ReactNode }) {
+  const [open, setOpen] = useState(!!defaultOpen);
+  return (
+    <div className="rounded-lg border border-slate-800 bg-slate-900/40 overflow-hidden">
+      <button type="button" onClick={() => setOpen(!open)} className="flex items-center justify-between w-full px-3 py-2.5 hover:bg-slate-800/50 transition-colors">
+        <span className="text-[11px] font-semibold text-slate-300 uppercase tracking-wider">{title}</span>
+        <div className="flex items-center gap-2">
+          {action}
+          <span className={`text-slate-500 text-xs transition-transform ${open ? "rotate-0" : "-rotate-90"}`}>▾</span>
+        </div>
+      </button>
+      {open && <div className="px-3 pb-3 pt-1 border-t border-slate-800/50">{children}</div>}
     </div>
   );
 }
