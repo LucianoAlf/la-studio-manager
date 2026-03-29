@@ -10,7 +10,8 @@
       "mcp__claude_ai_Supabase__get_logs",
       "Bash(ls -la src/app/\\\\\\(dashboard\\\\\\)/)",
       "Bash(npx next:*)",
-      "mcp__claude_ai_Supabase__deploy_edge_function"
+      "mcp__claude_ai_Supabase__deploy_edge_function",
+      "WebSearch"
     ]
   }
 }

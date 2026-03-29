@@ -713,7 +713,7 @@ export default function StudioPage() {
   }>({ open: false, clip: null, format: 'REELS', isPublishing: false, error: null });
 
   const [birthdays, setBirthdays] = useState<PhotoAsset[]>([]);
-  const [birthdayHistory, setBirthdayHistory] = useState<Array<{ id: string; student_name: string; approval_status: string; created_at: string }>>([]);
+  const [birthdayHistory, setBirthdayHistory] = useState<Array<{ id: string; student_name: string; brand: string; approval_status: string; created_at: string }>>([]);
   const [birthdayGenerating, setBirthdayGenerating] = useState<Record<string, boolean>>({});
   const [birthdayPreview, setBirthdayPreview] = useState<{ assetId: string; imageUrl: string; studentName: string } | null>(null);
   const [birthdayPublishing, setBirthdayPublishing] = useState(false);

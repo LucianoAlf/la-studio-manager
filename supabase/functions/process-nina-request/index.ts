@@ -42,9 +42,9 @@ serve(async (req: Request) => {
 
   try {
     const body = await req.json()
-    const { mode = 'brief', brand = 'la_music_school', brief, student_id, commemorative_date_id, post_type = 'feed', reference_image_url, event_asset_id, event_name } = body
+    const { mode = 'brief', brand = 'la_music_school', brief, student_id, commemorative_date_id, post_type = 'feed', reference_image_url, event_asset_id, event_name, generation_mode = 'flat' } = body
 
-    console.log(`[NINA] v25 | mode=${mode} brand=${brand} post_type=${post_type}`)
+    console.log(`[NINA] v26 | mode=${mode} brand=${brand} post_type=${post_type} gen=${generation_mode}`)
 
     const { data: config } = await supabase.from('nina_config').select('*').single()
     if (!config?.is_enabled) return json({ success: false, error: 'Nina pausada.' }, 503)
@@ -128,9 +128,10 @@ serve(async (req: Request) => {
     const isStory = post_type === 'story'
     const dimensions = isStory ? '1080x1920 portrait' : '1080x1080 square'
 
+    const isPhotoOnly = generation_mode === 'photo_only'
     const imagePrompt = buildImagePrompt({
       mode, brand, brief, studentData, commemorativeData, brandName, isKids,
-      event_name, mainPhrase, post_type, dimensions, hasPhoto: !!refUrl, hasLogo: !!logoUrl,
+      event_name, mainPhrase, post_type, dimensions, hasPhoto: !!refUrl, hasLogo: !isPhotoOnly && !!logoUrl, photoOnly: isPhotoOnly,
     })
 
     // Build parts: prompt + optional photo + optional logo
@@ -144,7 +145,7 @@ serve(async (req: Request) => {
       }
     }
 
-    if (logoUrl) {
+    if (logoUrl && !isPhotoOnly) {
       const logo = await fetchAsBase64(logoUrl)
       if (logo) {
         imageParts.push({ inlineData: { mimeType: logo.mime, data: logo.data } })
@@ -223,12 +224,15 @@ serve(async (req: Request) => {
     return json({
       success: true,
       image_url: imageUrl || refUrl,
+      photo_url: isPhotoOnly ? (imageUrl || refUrl) : undefined,
       caption,
       hashtags,
       mode_used: mode,
+      generation_mode: generation_mode,
       generation_method: imageUrl ? 'gemini_image' : 'frontend_canvas',
       main_phrase: mainPhrase,
-      needs_text_overlay: !imageUrl, // Only needs overlay if Gemini image failed
+      needs_text_overlay: isPhotoOnly || !imageUrl,
+      logo_url: logoUrl,
       text_config: {
         phrase: mainPhrase,
         brand_name: brandName,
@@ -290,7 +294,37 @@ A legenda deve celebrar esta data, conectar com a escola e inspirar os seguidore
 }
 
 function buildImagePrompt(p: any): string {
-  const { mode, brand, brief, studentData, commemorativeData, brandName, isKids, event_name, mainPhrase, post_type, dimensions, hasPhoto, hasLogo } = p
+  const { mode, brand, brief, studentData, commemorativeData, brandName, isKids, event_name, mainPhrase, post_type, dimensions, hasPhoto, hasLogo, photoOnly } = p
+
+  // PHOTO ONLY MODE: gera apenas a foto cinematográfica, sem texto nem logo
+  if (photoOnly) {
+    let prompt = `Generate a cinematic photograph (${dimensions}). PURE PHOTOGRAPHY ONLY.\n`
+    prompt += `Shot on 85mm lens, f/1.8, shallow depth of field, natural bokeh. Cinematic color grading. Warm natural lighting.\n`
+    prompt += `${isKids ? 'Subject: A real child (5-12 years old) in a music school environment.' : 'Subject: A real young person (18-25 years old) in a music environment.'}\n`
+    prompt += `ABSOLUTELY NO TEXT, NO LOGOS, NO WATERMARKS, NO GRAPHICS, NO OVERLAYS. Pure photography only.\n`
+
+    if (mode === 'commemorative' && commemorativeData) {
+      const dn = (commemorativeData.name || '').toLowerCase()
+      if (dn.includes('piano') || dn.includes('pianista')) prompt += isKids ? 'Scene: Child at piano, soft side lighting.' : 'Scene: Young person at grand piano, dramatic window light, profile.'
+      else if (dn.includes('guitarra') || dn.includes('guitarrista')) prompt += isKids ? 'Scene: Child with electric guitar, natural light.' : 'Scene: Young guitarist, close-up, moody lighting.'
+      else if (dn.includes('violao') || dn.includes('violão') || dn.includes('violonista')) prompt += isKids ? 'Scene: Child with acoustic guitar, warm light.' : 'Scene: Young adult with acoustic guitar, window light.'
+      else if (dn.includes('bateria') || dn.includes('baterista')) prompt += isKids ? 'Scene: Child behind drums, soft lighting.' : 'Scene: Young drummer, action shot, warm tones.'
+      else if (dn.includes('jazz')) prompt += isKids ? 'Scene: Child with brass instrument.' : 'Scene: Young saxophone player, moody warm lighting.'
+      else if (dn.includes('rock')) prompt += isKids ? 'Scene: Kid with electric guitar, spotlight.' : 'Scene: Young guitarist, single spotlight, dark background.'
+      else if (dn.includes('mae') || dn.includes('mãe')) prompt += 'Scene: Mother and child at piano, warm natural light.'
+      else if (dn.includes('pai')) prompt += 'Scene: Father and child with guitars, warm light.'
+      else prompt += isKids ? 'Scene: Child playing instrument, natural light, clean background.' : 'Scene: Young musician, cinematic portrait, warm tones.'
+    } else if (event_name) {
+      prompt += `Scene: ${isKids ? 'Children performing music, warm atmosphere.' : 'Young musicians on stage, dramatic lighting.'}`
+    } else if (brief) {
+      prompt += `Scene: ${brief}. Musical context, cinematic quality.`
+    } else {
+      prompt += isKids ? 'Scene: Child discovering music, natural light.' : 'Scene: Young musician, cinematic, passionate.'
+    }
+
+    prompt += '\nFINAL: Must look like professional photographer portfolio. Real person, real instrument. NO text, NO graphics, NO logos anywhere in the image.'
+    return prompt
+  }
 
   let prompt = `Create an Instagram ${post_type === 'story' ? 'Story' : 'post'} image (${dimensions}).
 
