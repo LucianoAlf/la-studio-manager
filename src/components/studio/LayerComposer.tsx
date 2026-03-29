@@ -15,15 +15,18 @@ import {
 import { AspectRatioSwitcher } from "./AspectRatioSwitcher";
 import { TextLayerEditor } from "./TextLayerEditor";
 import { LogoPositioner } from "./LogoPositioner";
+import { TemplatePresetPicker } from "./criar/TemplatePresetPicker";
 import { Card } from "@/components/ui";
 
 interface Props {
   composition: LayerComposition;
   onChange: (composition: LayerComposition) => void;
   onExport?: (blob: Blob) => void;
+  brandColors?: string[];
+  brandFonts?: string[];
 }
 
-export function LayerComposer({ composition, onChange, onExport }: Props) {
+export function LayerComposer({ composition, onChange, onExport, brandColors, brandFonts }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [photoImg, setPhotoImg] = useState<HTMLImageElement | null>(null);
   const [logoImg, setLogoImg] = useState<HTMLImageElement | null>(null);
@@ -88,6 +91,9 @@ export function LayerComposer({ composition, onChange, onExport }: Props) {
       {/* Aspect Ratio Switcher */}
       <AspectRatioSwitcher value={composition.aspectRatio} onChange={handleAspectRatioChange} />
 
+      {/* Template Presets */}
+      <TemplatePresetPicker composition={composition} onChange={onChange} />
+
       {/* Canvas Preview */}
       <div className="flex justify-center">
         <div className="relative rounded-lg overflow-hidden bg-slate-950 border border-slate-800" style={{ maxHeight: previewMaxH }}>
@@ -108,23 +114,66 @@ export function LayerComposer({ composition, onChange, onExport }: Props) {
         </div>
       </div>
 
-      {/* Text Editor */}
-      {composition.textLayers.length > 0 && (
-        <Card variant="default" className="p-3 space-y-2">
-          <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">Texto</h4>
-          {composition.textLayers.map((layer, i) => (
-            <TextLayerEditor
-              key={layer.id}
-              layer={layer}
-              onChange={(updated) => {
-                const newLayers = [...composition.textLayers];
-                newLayers[i] = updated;
-                onChange({ ...composition, textLayers: newLayers });
-              }}
-            />
-          ))}
-        </Card>
-      )}
+      {/* Text Editor — Multi-layer */}
+      <Card variant="default" className="p-3 space-y-3">
+        <div className="flex items-center justify-between">
+          <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">Texto ({composition.textLayers.length})</h4>
+          <button
+            type="button"
+            onClick={() => {
+              const newLayer = {
+                id: `text-${Date.now()}`,
+                content: "Novo texto",
+                fontFamily: brandFonts?.[0] || "Inter",
+                fontSize: 0.04,
+                fontWeight: 600,
+                fontStyle: "normal" as const,
+                color: "#FFFFFF",
+                position: { x: 0.5, y: 0.5 },
+                anchor: "center" as const,
+                maxWidthRatio: 0.85,
+                shadow: { color: "rgba(0,0,0,0.5)", blur: 4, offsetX: 0, offsetY: 1 },
+              };
+              onChange({ ...composition, textLayers: [...composition.textLayers, newLayer] });
+            }}
+            className="text-xs text-cyan-400 hover:text-cyan-300"
+          >
+            + Adicionar texto
+          </button>
+        </div>
+        {composition.textLayers.map((layer, i) => (
+          <div key={layer.id} className="relative">
+            {i > 0 && <div className="mb-2 border-t border-slate-800" />}
+            <div className="flex items-start gap-2">
+              <div className="flex-1">
+                <TextLayerEditor
+                  layer={layer}
+                  brandColors={brandColors}
+                  brandFonts={brandFonts}
+                  onChange={(updated) => {
+                    const newLayers = [...composition.textLayers];
+                    newLayers[i] = updated;
+                    onChange({ ...composition, textLayers: newLayers });
+                  }}
+                />
+              </div>
+              {composition.textLayers.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => onChange({ ...composition, textLayers: composition.textLayers.filter((_, idx) => idx !== i) })}
+                  className="mt-6 p-1.5 rounded text-slate-500 hover:text-red-400 hover:bg-red-900/20"
+                  title="Remover texto"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14"/></svg>
+                </button>
+              )}
+            </div>
+          </div>
+        ))}
+        {composition.textLayers.length === 0 && (
+          <p className="text-xs text-slate-500">Nenhum texto adicionado.</p>
+        )}
+      </Card>
 
       {/* Logo Positioner */}
       {composition.logoLayer && (

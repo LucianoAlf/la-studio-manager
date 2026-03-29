@@ -41,6 +41,7 @@ export interface TextLayer {
   fontFamily: string;
   fontSize: number;       // relativo à largura do canvas (ex: 0.06 = 6% da largura)
   fontWeight: number;     // 400, 500, 600, 700, 800, 900
+  fontStyle?: "normal" | "italic";
   color: string;          // hex
   position: { x: number; y: number }; // normalizado 0-1
   anchor: "center" | "left" | "right";

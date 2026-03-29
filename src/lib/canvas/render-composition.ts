@@ -100,7 +100,7 @@ export async function ensureFontLoaded(fontFamily: string, weight: number = 700)
       const link = document.createElement("link");
       link.id = linkId;
       link.rel = "stylesheet";
-      link.href = `https://fonts.googleapis.com/css2?family=${fontFamily.replace(/ /g, "+")}:wght@400;500;600;700;800;900&display=swap`;
+      link.href = `https://fonts.googleapis.com/css2?family=${fontFamily.replace(/ /g, "+")}:ital,wght@0,400;0,500;0,600;0,700;0,800;0,900;1,400;1,500;1,600;1,700;1,800;1,900&display=swap`;
       document.head.appendChild(link);
     }
   }
@@ -127,8 +127,9 @@ function drawTextLayer(
 
   ctx.save();
 
-  // Fonte
-  ctx.font = `${layer.fontWeight} ${fontSize}px "${layer.fontFamily}", sans-serif`;
+  // Fonte (com suporte a itálico)
+  const fontStyle = layer.fontStyle === "italic" ? "italic " : "";
+  ctx.font = `${fontStyle}${layer.fontWeight} ${fontSize}px "${layer.fontFamily}", sans-serif`;
   ctx.textAlign = layer.anchor;
   ctx.textBaseline = "middle";
 

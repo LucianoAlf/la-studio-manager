@@ -729,6 +729,8 @@ export default function StudioPage() {
   const [postModalOpen, setPostModalOpen] = useState(false);
   const [postUpdating, setPostUpdating] = useState(false);
   const [postDeleteConfirmOpen, setPostDeleteConfirmOpen] = useState(false);
+  const [brandColorsList, setBrandColorsList] = useState<string[]>([]);
+  const [brandFontsList, setBrandFontsList] = useState<string[]>([]);
   const [commDateFilter, setCommDateFilter] = useState({ category: "all", assigned: "all", status: "all" });
   const [commDateExpandedMonths, setCommDateExpandedMonths] = useState<Set<number>>(new Set());
   const [commDateSaving, setCommDateSaving] = useState(false);
@@ -1413,6 +1415,16 @@ export default function StudioPage() {
     if (commemorativeRes.status === "fulfilled") setCommemorativeDates(commemorativeRes.value);
     if (integrationsRes.status === "fulfilled") setIntegrations(integrationsRes.value);
     if (metricsRes.status === "fulfilled") setMetrics(metricsRes.value);
+
+    // Buscar cores e fontes da marca para o editor
+    try {
+      const { data: bi } = await supabase.from("brand_identity" as never).select("color_primary, color_secondary, color_accent, color_gradient_start, color_gradient_end, font_display, font_body, font_accent").eq("brand_key", brand).single();
+      if (bi) {
+        const biData = bi as Record<string, string | null>;
+        setBrandColorsList([biData.color_primary, biData.color_secondary, biData.color_accent, biData.color_gradient_start, biData.color_gradient_end].filter((c): c is string => !!c));
+        setBrandFontsList([biData.font_display, biData.font_body, biData.font_accent].filter((f): f is string => !!f));
+      }
+    } catch { /* brand identity optional */ }
 
     const fatalErrors = [postsRes, birthdaysRes, commemorativeRes].filter((r) => r.status === "rejected");
     if (fatalErrors.length > 0) {
@@ -3409,7 +3421,7 @@ export default function StudioPage() {
               {isGeneratingWithNina ? <SpinnerGap size={12} className="animate-spin" /> : null}
               Regenerar
             </Button>
-            <Button variant="outline" size="sm" disabled>Editar no Canva ↗</Button>
+            {/* Botão Canva removido — tudo feito internamente */}
           </div>
         </div>
 
@@ -3427,6 +3439,8 @@ export default function StudioPage() {
               <LayerComposer
                 composition={layerComposition}
                 onChange={setLayerComposition}
+                brandColors={brandColorsList}
+                brandFonts={brandFontsList}
               />
             );
           })()
@@ -3448,7 +3462,39 @@ export default function StudioPage() {
         )}
 
         <div className="space-y-2">
-          <Button className="w-full" variant="outline" size="sm" disabled>Enviar para aprovação</Button>
+          <Button className="w-full" variant="outline" size="sm" disabled={!ninaPreviewUrl && !layerComposition} onClick={async () => {
+            try {
+              // Exportar composição se disponível
+              let approvalImageUrl = ninaPreviewUrl;
+              if (layerComposition) {
+                const { exportCompositionToBlob, loadImage } = await import("@/lib/canvas/render-composition");
+                const photo = await loadImage(layerComposition.background.photoUrl);
+                let logo: HTMLImageElement | null = null;
+                if (layerComposition.logoLayer?.logoUrl) logo = await loadImage(layerComposition.logoLayer.logoUrl).catch(() => null);
+                const blob = await exportCompositionToBlob(layerComposition, { photo, logo });
+                const path = `nina/approval-${brand}-${Date.now()}.jpg`;
+                const { error: upErr } = await supabase.storage.from("posts").upload(path, blob, { contentType: "image/jpeg", upsert: true });
+                if (!upErr) { const { data: urlData } = supabase.storage.from("posts").getPublicUrl(path); approvalImageUrl = urlData.publicUrl; }
+              }
+              // Buscar user ID
+              let userId: string | null = null;
+              const { data: { user } } = await supabase.auth.getUser();
+              if (user) userId = user.id;
+              else { const { data: admin } = await supabase.from("user_profiles" as never).select("user_id").eq("is_admin", true).limit(1).single(); userId = (admin as { user_id: string } | null)?.user_id ?? null; }
+              // Criar post com status awaiting_approval
+              const dbPostType = postPlatform === "feed" ? "image" : postPlatform;
+              const { error: insertErr } = await supabase.from("posts").insert({
+                title: postBrief.slice(0, 100) || "Post Nina",
+                caption: postCaption, post_type: dbPostType, status: "awaiting_approval",
+                brand, scheduled_for: `${postDate}T${postTime}:00`,
+                created_by_ai: true, created_by: userId, ai_agent_name: "Nina",
+                metadata: { image_url: approvalImageUrl, layers: layerComposition },
+              } as never);
+              if (insertErr) { toast.error("Erro ao enviar para aprovação."); return; }
+              toast.success("Enviado para aprovação! O Yuri será notificado.");
+              await loadBaseData();
+            } catch { toast.error("Erro ao enviar."); }
+          }}>Enviar para aprovação</Button>
           <Button
             className="w-full"
             variant="accent"
