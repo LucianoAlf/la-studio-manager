@@ -2852,6 +2852,7 @@ export default function StudioPage() {
           brief: postBrief,
           post_type: postPlatform,
           generation_mode: "photo_only",
+          tones: activeTones,
           event_asset_id: selectedEventPhotoForNina?.id ?? null,
           reference_image_url: selectedEventPhotoForNina?.file_url ?? null,
           event_name: selectedEventPhotoForNina?.event_name ?? null,
@@ -2894,6 +2895,16 @@ export default function StudioPage() {
 
       setNinaHashtags(hashtags);
       setNinaGenerationMethod("layer_composition");
+
+      // Processar variações de legenda
+      const vars = (data as Record<string, unknown>)?.caption_variations as Array<{ tone: string; phrase: string; caption: string; hashtags: string[] }> | undefined;
+      if (vars && vars.length > 0) {
+        setCaptionVariations(vars);
+        setSelectedCaptionIdx(0);
+      } else {
+        setCaptionVariations([]);
+        setSelectedCaptionIdx(-1);
+      }
 
       const generatedCaption = [data?.caption?.trim(), hashtags.join(" ")].filter(Boolean).join("\n\n");
       if (generatedCaption) {

@@ -42,7 +42,7 @@ serve(async (req: Request) => {
 
   try {
     const body = await req.json()
-    const { mode = 'brief', brand = 'la_music_school', brief, student_id, commemorative_date_id, post_type = 'feed', reference_image_url, event_asset_id, event_name, generation_mode = 'flat' } = body
+    const { mode = 'brief', brand = 'la_music_school', brief, student_id, commemorative_date_id, post_type = 'feed', reference_image_url, event_asset_id, event_name, generation_mode = 'flat', tones } = body
 
     console.log(`[NINA] v26 | mode=${mode} brand=${brand} post_type=${post_type} gen=${generation_mode}`)
 
@@ -118,6 +118,28 @@ serve(async (req: Request) => {
       mainPhrase = brief || commemorativeData?.name || 'Música transforma vidas'
       caption = `${mainPhrase} ${brandName}`
       hashtags = isKids ? ['#LAMusicKids', '#Musica'] : ['#LAMusicSchool', '#Musica']
+    }
+
+    // STEP 1B: Multi-variation caption (if tones provided)
+    let captionVariations: Array<{ tone: string; phrase: string; caption: string; hashtags: string[] }> = []
+    if (Array.isArray(tones) && tones.length > 0) {
+      try {
+        const tonesStr = tones.join(', ')
+        let vp = `Voce e Nina, diretora criativa da ${brandName}. Gere ${tones.length} variacoes de legenda para Instagram, cada uma com um tom diferente: ${tonesStr}. `
+        vp += `Tom da marca: ${isKids ? 'alegre, leve, criancas e pais' : 'proximo, autentico, emocional, jovens adultos'}. `
+        if (mode === 'commemorative' && commemorativeData) vp += `Contexto: "${commemorativeData.name}". `
+        else if (brief) vp += `Contexto: ${brief}. `
+        vp += `REGRAS: phrase = nome + data APENAS. SEM cliches. NÃO use "as teclas que encantam" ou "musica transforma vidas". `
+        vp += `Responda APENAS JSON: {"variations":[{"tone":"...","phrase":"...","caption":"...legenda autentica max 2 paragrafos...","hashtags":["#t1","#t2","#t3"]}]}`
+        const vr = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${TEXT_MODEL}:generateContent?key=${GEMINI_API_KEY}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ text: vp }] }] }) })
+        if (vr.ok) {
+          const vd = await vr.json()
+          const vt = vd.candidates?.[0]?.content?.parts?.[0]?.text || ''
+          const vj = JSON.parse(vt.replace(/```json|```/g, '').trim())
+          captionVariations = vj.variations || []
+          console.log(`[NINA] ${captionVariations.length} caption variations generated`)
+        }
+      } catch (e) { console.error('[NINA] Variations err:', e) }
     }
 
     // =========================================================
@@ -227,6 +249,7 @@ serve(async (req: Request) => {
       photo_url: isPhotoOnly ? (imageUrl || refUrl) : undefined,
       caption,
       hashtags,
+      caption_variations: captionVariations.length > 0 ? captionVariations : undefined,
       mode_used: mode,
       generation_mode: generation_mode,
       generation_method: imageUrl ? 'gemini_image' : 'frontend_canvas',
