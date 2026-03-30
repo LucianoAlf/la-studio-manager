@@ -10,6 +10,8 @@ export type StudioPlatform = "story" | "feed" | "reels" | "carousel";
 export interface NinaConfig {
   id: string;
   is_enabled: boolean;
+  auto_publish_birthdays: boolean;
+  birthday_approval_required: boolean;
   default_post_time: string | null;
   default_brand: StudioBrand | null;
 }
@@ -57,9 +59,11 @@ export interface GroupedEvent {
 export interface BirthdayLogItem {
   id: string;
   student_id: string;
+  asset_id: string | null;
   student_name: string;
   brand: StudioBrand;
   approval_status: string;
+  image_url: string | null;
   created_at: string;
   published_at: string | null;
 }
@@ -252,7 +256,7 @@ export async function getPhotoAssets(
   };
 }
 
-export async function getBirthdaysOverview(brand: StudioBrand): Promise<{ upcoming: PhotoAsset[]; history: BirthdayLogItem[] }> {
+export async function getBirthdaysOverview(brand: StudioBrand): Promise<{ upcoming: PhotoAsset[]; allAssets: PhotoAsset[]; history: BirthdayLogItem[] }> {
   const supabase = getSupabase();
 
   const [assetsResp, historyResp] = await Promise.all([
@@ -266,7 +270,7 @@ export async function getBirthdaysOverview(brand: StudioBrand): Promise<{ upcomi
       .limit(2000),
     supabase
       .from("birthday_automation_log" as never)
-      .select("id, student_id, student_name, brand, approval_status, created_at, published_at")
+      .select("id, student_id, asset_id, student_name, brand, approval_status, image_url, created_at, published_at")
       .eq("brand", brand)
       .gte("created_at", new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString())
       .order("created_at", { ascending: false })
@@ -315,6 +319,7 @@ export async function getBirthdaysOverview(brand: StudioBrand): Promise<{ upcomi
 
   return {
     upcoming,
+    allAssets,
     history: (historyResp.data ?? []) as unknown as BirthdayLogItem[],
   };
 }

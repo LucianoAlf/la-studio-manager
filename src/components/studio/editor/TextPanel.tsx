@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import type { BrandIdentity } from "@/types/brand";
 import { GOOGLE_FONTS } from "@/types/brand";
 import type { LayerComposition, TextLayer } from "@/lib/types/layer-composition";
@@ -15,6 +16,14 @@ import { EditorPanel } from "./EditorPanel";
 
 const EXTRA_FONTS = ["Bebas Neue", "Anton", "DM Sans", "Space Grotesk", "Outfit", "Caveat", "Pacifico"];
 const ALL_FONTS = [...GOOGLE_FONTS, ...EXTRA_FONTS];
+const WEIGHT_OPTIONS = [
+  { value: 400, label: "400 • Regular" },
+  { value: 500, label: "500 • Medium" },
+  { value: 600, label: "600 • Semibold" },
+  { value: 700, label: "700 • Bold" },
+  { value: 800, label: "800 • Extra Bold" },
+  { value: 900, label: "900 • Black" },
+];
 const POSITION_PRESETS = [
   { label: "Topo", x: 0.5, y: 0.12 },
   { label: "Centro", x: 0.5, y: 0.5 },
@@ -29,6 +38,7 @@ interface Props {
 }
 
 export function TextPanel({ composition, onChange, brandIdentity }: Props) {
+  const [advancedOpenById, setAdvancedOpenById] = useState<Record<string, boolean>>({});
   const brandFonts = [brandIdentity?.font_display, brandIdentity?.font_body, brandIdentity?.font_accent].filter(Boolean) as string[];
   const brandColors = [
     "#FFFFFF",
@@ -80,6 +90,10 @@ export function TextPanel({ composition, onChange, brandIdentity }: Props) {
         },
       ],
     });
+  };
+
+  const toggleAdvanced = (layerId: string) => {
+    setAdvancedOpenById((current) => ({ ...current, [layerId]: !current[layerId] }));
   };
 
   return (
@@ -138,8 +152,8 @@ export function TextPanel({ composition, onChange, brandIdentity }: Props) {
                 <Select value={String(layer.fontWeight)} onValueChange={(value) => updateLayer(layer.id, { fontWeight: Number(value) })}>
                   <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {[400, 500, 600, 700, 800, 900].map((weight) => (
-                      <SelectItem key={weight} value={String(weight)}>{weight}</SelectItem>
+                    {WEIGHT_OPTIONS.map((weight) => (
+                      <SelectItem key={weight.value} value={String(weight.value)}>{weight.label}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -148,13 +162,13 @@ export function TextPanel({ composition, onChange, brandIdentity }: Props) {
                 <button
                   type="button"
                   onClick={() => updateLayer(layer.id, { fontStyle: layer.fontStyle === "italic" ? "normal" : "italic" })}
-                  className={`h-9 w-9 rounded-lg border text-sm italic ${
+                  className={`h-9 rounded-lg border px-3 text-xs font-medium ${
                     layer.fontStyle === "italic"
                       ? "border-cyan-500 bg-cyan-500/20 text-cyan-300"
                       : "border-slate-700 text-slate-400 hover:bg-slate-800"
                   }`}
                 >
-                  I
+                  Itálico
                 </button>
               </Field>
             </div>
@@ -169,52 +183,12 @@ export function TextPanel({ composition, onChange, brandIdentity }: Props) {
                 onChange={(value) => updateLayer(layer.id, { fontSize: value })}
               />
               <SliderField
-                label={`Largura (${Math.round(layer.maxWidthRatio * 100)}%)`}
-                min={0.4}
-                max={0.95}
-                step={0.01}
-                value={layer.maxWidthRatio}
-                onChange={(value) => updateLayer(layer.id, { maxWidthRatio: value })}
-              />
-              <SliderField
-                label={`Entrelinhas (${(layer.lineHeight ?? 1.1).toFixed(2)})`}
-                min={0.8}
-                max={2}
-                step={0.05}
-                value={layer.lineHeight ?? 1.1}
-                onChange={(value) => updateLayer(layer.id, { lineHeight: value })}
-              />
-              <SliderField
                 label={`Espaçamento (${layer.letterSpacing ?? 0}px)`}
                 min={-2}
                 max={10}
                 step={0.5}
                 value={layer.letterSpacing ?? 0}
                 onChange={(value) => updateLayer(layer.id, { letterSpacing: value })}
-              />
-              <SliderField
-                label={`Opacidade (${Math.round((layer.opacity ?? 1) * 100)}%)`}
-                min={0.1}
-                max={1}
-                step={0.05}
-                value={layer.opacity ?? 1}
-                onChange={(value) => updateLayer(layer.id, { opacity: value })}
-              />
-              <SliderField
-                label={`Stroke (${layer.stroke?.width ?? 0}px)`}
-                min={0}
-                max={8}
-                step={0.5}
-                value={layer.stroke?.width ?? 0}
-                onChange={(value) => updateLayer(layer.id, {
-                  stroke: value <= 0
-                    ? undefined
-                    : {
-                        color: layer.stroke?.color || "#000000",
-                        opacity: layer.stroke?.opacity ?? 0.9,
-                        width: value,
-                      },
-                })}
               />
             </div>
 
@@ -254,29 +228,6 @@ export function TextPanel({ composition, onChange, brandIdentity }: Props) {
               </div>
             </Field>
 
-            <Field label="Alinhamento">
-              <div className="grid grid-cols-3 gap-1">
-                {([
-                  ["left", "Esquerda"],
-                  ["center", "Centro"],
-                  ["right", "Direita"],
-                ] as const).map(([anchor, label]) => (
-                  <button
-                    key={anchor}
-                    type="button"
-                    onClick={() => updateLayer(layer.id, { anchor })}
-                    className={`rounded-md border px-2 py-1.5 text-xs ${
-                      layer.anchor === anchor
-                        ? "border-cyan-500 bg-cyan-500/20 text-cyan-300"
-                        : "border-slate-700 text-slate-400 hover:bg-slate-800"
-                    }`}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </Field>
-
             <Field label="Posição">
               <div className="grid grid-cols-4 gap-1">
                 {POSITION_PRESETS.map((preset) => (
@@ -296,58 +247,135 @@ export function TextPanel({ composition, onChange, brandIdentity }: Props) {
               </div>
             </Field>
 
-            <div className="grid grid-cols-2 gap-2">
-              <SliderField
-                label={`Nudge X (${Math.round(layer.position.x * 100)}%)`}
-                min={0.05}
-                max={0.95}
-                step={0.01}
-                value={layer.position.x}
-                onChange={(value) => updateLayer(layer.id, { position: { ...layer.position, x: value } })}
-              />
-              <SliderField
-                label={`Nudge Y (${Math.round(layer.position.y * 100)}%)`}
-                min={0.05}
-                max={0.95}
-                step={0.01}
-                value={layer.position.y}
-                onChange={(value) => updateLayer(layer.id, { position: { ...layer.position, y: value } })}
-              />
+            <div className="border-t border-slate-800 pt-3">
+              <button
+                type="button"
+                onClick={() => toggleAdvanced(layer.id)}
+                className="text-xs font-medium text-slate-400 transition-colors hover:text-slate-200"
+              >
+                {advancedOpenById[layer.id] ? "Ocultar ajustes avançados" : "Mostrar ajustes avançados"}
+              </button>
             </div>
 
-            <Field label="Estilo">
-              <div className="flex flex-wrap gap-1">
-                <button
-                  type="button"
-                  onClick={() => updateLayer(layer.id, { textTransform: layer.textTransform === "uppercase" ? "none" : "uppercase" })}
-                  className={`rounded-md border px-2 py-1.5 text-xs ${
-                    layer.textTransform === "uppercase"
-                      ? "border-cyan-500 bg-cyan-500/20 text-cyan-300"
-                      : "border-slate-700 text-slate-400 hover:bg-slate-800"
-                  }`}
-                >
-                  CAIXA ALTA
-                </button>
-                {([
-                  ["Sem sombra", undefined],
-                  ["Sombra suave", { color: "rgba(0,0,0,0.45)", blur: 5, offsetX: 0, offsetY: 2 }],
-                  ["Sombra forte", { color: "rgba(0,0,0,0.8)", blur: 12, offsetX: 0, offsetY: 4 }],
-                ] as const).map(([label, shadow]) => (
-                  <button
-                    key={label}
-                    type="button"
-                    onClick={() => updateLayer(layer.id, { shadow })}
-                    className={`rounded-md border px-2 py-1.5 text-xs ${
-                      JSON.stringify(layer.shadow || null) === JSON.stringify(shadow || null)
-                        ? "border-cyan-500 bg-cyan-500/20 text-cyan-300"
-                        : "border-slate-700 text-slate-400 hover:bg-slate-800"
-                    }`}
-                  >
-                    {label}
-                  </button>
-                ))}
+            {advancedOpenById[layer.id] ? (
+              <div className="space-y-3 rounded-lg border border-slate-800 bg-slate-950/30 p-3">
+                <Field label="Alinhamento">
+                  <div className="grid grid-cols-3 gap-1">
+                    {([
+                      ["left", "Esquerda"],
+                      ["center", "Centro"],
+                      ["right", "Direita"],
+                    ] as const).map(([anchor, label]) => (
+                      <button
+                        key={anchor}
+                        type="button"
+                        onClick={() => updateLayer(layer.id, { anchor })}
+                        className={`rounded-md border px-2 py-1.5 text-xs ${
+                          layer.anchor === anchor
+                            ? "border-cyan-500 bg-cyan-500/20 text-cyan-300"
+                            : "border-slate-700 text-slate-400 hover:bg-slate-800"
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </Field>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <SliderField
+                    label={`Largura (${Math.round(layer.maxWidthRatio * 100)}%)`}
+                    min={0.4}
+                    max={0.95}
+                    step={0.01}
+                    value={layer.maxWidthRatio}
+                    onChange={(value) => updateLayer(layer.id, { maxWidthRatio: value })}
+                  />
+                  <SliderField
+                    label={`Entrelinhas (${(layer.lineHeight ?? 1.1).toFixed(2)})`}
+                    min={0.8}
+                    max={2}
+                    step={0.05}
+                    value={layer.lineHeight ?? 1.1}
+                    onChange={(value) => updateLayer(layer.id, { lineHeight: value })}
+                  />
+                  <SliderField
+                    label={`Opacidade (${Math.round((layer.opacity ?? 1) * 100)}%)`}
+                    min={0.1}
+                    max={1}
+                    step={0.05}
+                    value={layer.opacity ?? 1}
+                    onChange={(value) => updateLayer(layer.id, { opacity: value })}
+                  />
+                  <SliderField
+                    label={`Nudge X (${Math.round(layer.position.x * 100)}%)`}
+                    min={0.05}
+                    max={0.95}
+                    step={0.01}
+                    value={layer.position.x}
+                    onChange={(value) => updateLayer(layer.id, { position: { ...layer.position, x: value } })}
+                  />
+                  <SliderField
+                    label={`Nudge Y (${Math.round(layer.position.y * 100)}%)`}
+                    min={0.05}
+                    max={0.95}
+                    step={0.01}
+                    value={layer.position.y}
+                    onChange={(value) => updateLayer(layer.id, { position: { ...layer.position, y: value } })}
+                  />
+                  <SliderField
+                    label={`Stroke (${layer.stroke?.width ?? 0}px)`}
+                    min={0}
+                    max={8}
+                    step={0.5}
+                    value={layer.stroke?.width ?? 0}
+                    onChange={(value) => updateLayer(layer.id, {
+                      stroke: value <= 0
+                        ? undefined
+                        : {
+                            color: layer.stroke?.color || "#000000",
+                            opacity: layer.stroke?.opacity ?? 0.9,
+                            width: value,
+                          },
+                    })}
+                  />
+                </div>
+
+                <Field label="Estilo">
+                  <div className="flex flex-wrap gap-1">
+                    <button
+                      type="button"
+                      onClick={() => updateLayer(layer.id, { textTransform: layer.textTransform === "uppercase" ? "none" : "uppercase" })}
+                      className={`rounded-md border px-2 py-1.5 text-xs ${
+                        layer.textTransform === "uppercase"
+                          ? "border-cyan-500 bg-cyan-500/20 text-cyan-300"
+                          : "border-slate-700 text-slate-400 hover:bg-slate-800"
+                      }`}
+                    >
+                      CAIXA ALTA
+                    </button>
+                    {([
+                      ["Sem sombra", undefined],
+                      ["Sombra suave", { color: "rgba(0,0,0,0.45)", blur: 5, offsetX: 0, offsetY: 2 }],
+                      ["Sombra forte", { color: "rgba(0,0,0,0.8)", blur: 12, offsetX: 0, offsetY: 4 }],
+                    ] as const).map(([label, shadow]) => (
+                      <button
+                        key={label}
+                        type="button"
+                        onClick={() => updateLayer(layer.id, { shadow })}
+                        className={`rounded-md border px-2 py-1.5 text-xs ${
+                          JSON.stringify(layer.shadow || null) === JSON.stringify(shadow || null)
+                            ? "border-cyan-500 bg-cyan-500/20 text-cyan-300"
+                            : "border-slate-700 text-slate-400 hover:bg-slate-800"
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </Field>
               </div>
-            </Field>
+            ) : null}
           </div>
         ))}
       </div>

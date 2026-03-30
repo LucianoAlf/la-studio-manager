@@ -5,6 +5,7 @@
 
 import {
   type LayerComposition,
+  type ShapeLayer,
   type TextLayer,
   type LogoPresetPosition,
   type CropArea,
@@ -326,6 +327,59 @@ function drawGradient(
   drawVignetteGradient(ctx, W, H, gradientLayer);
 }
 
+function drawRoundedRectPath(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+): void {
+  const safeRadius = Math.min(radius, width / 2, height / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + safeRadius, y);
+  ctx.lineTo(x + width - safeRadius, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + safeRadius);
+  ctx.lineTo(x + width, y + height - safeRadius);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - safeRadius, y + height);
+  ctx.lineTo(x + safeRadius, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - safeRadius);
+  ctx.lineTo(x, y + safeRadius);
+  ctx.quadraticCurveTo(x, y, x + safeRadius, y);
+  ctx.closePath();
+}
+
+function drawShapeLayer(
+  ctx: CanvasRenderingContext2D,
+  layer: ShapeLayer,
+  W: number,
+  H: number,
+): void {
+  const x = layer.x * W;
+  const y = layer.y * H;
+  const width = layer.width * W;
+  const height = layer.height * H;
+  const radius = (layer.radius || 0) * Math.min(W, H);
+
+  ctx.save();
+  ctx.globalAlpha = typeof layer.opacity === "number" ? layer.opacity : 1;
+  drawRoundedRectPath(ctx, x, y, width, height, radius);
+
+  if (layer.fill) {
+    ctx.fillStyle = layer.fill;
+    ctx.fill();
+  }
+
+  if (layer.strokeColor && layer.strokeWidth && layer.strokeWidth > 0) {
+    ctx.globalAlpha = typeof layer.strokeOpacity === "number" ? layer.strokeOpacity : 1;
+    ctx.strokeStyle = layer.strokeColor;
+    ctx.lineWidth = layer.strokeWidth;
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
 export async function renderComposition(
   canvas: HTMLCanvasElement,
   composition: LayerComposition,
@@ -364,6 +418,10 @@ export async function renderComposition(
   }
 
   ctx.filter = "none";
+
+  for (const shapeLayer of normalized.shapeLayers || []) {
+    drawShapeLayer(ctx, shapeLayer, W, H);
+  }
 
   drawGradient(ctx, W, H, normalized.gradient);
 

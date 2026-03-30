@@ -9,9 +9,11 @@ import { EditorPanel } from "./EditorPanel";
 interface Props {
   composition: LayerComposition;
   onChange: (composition: LayerComposition) => void;
+  showGuides: boolean;
+  onToggleGuides: () => void;
 }
 
-export function BackgroundPanel({ composition, onChange }: Props) {
+export function BackgroundPanel({ composition, onChange, showGuides, onToggleGuides }: Props) {
   const [crop, setCrop] = useState<Point>({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
   const aspect = ASPECT_RATIOS[composition.aspectRatio].width / ASPECT_RATIOS[composition.aspectRatio].height;
@@ -27,7 +29,26 @@ export function BackgroundPanel({ composition, onChange }: Props) {
   const cropKey = `${composition.background.photoUrl}-${composition.aspectRatio}`;
 
   return (
-    <EditorPanel title="Background" defaultOpen>
+    <EditorPanel
+      title="Background"
+      defaultOpen
+      action={(
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onToggleGuides();
+          }}
+          className={`rounded-md border px-2 py-1 text-[10px] uppercase tracking-wider transition-colors ${
+            showGuides
+              ? "border-cyan-500 bg-cyan-500/20 text-cyan-300"
+              : "border-slate-700 text-slate-400 hover:bg-slate-800"
+          }`}
+        >
+          {showGuides ? "Guias on" : "Guias off"}
+        </button>
+      )}
+    >
       <div className="space-y-3">
         <div className="overflow-hidden rounded-lg border border-slate-800 bg-black">
           <div className="relative h-[280px]">

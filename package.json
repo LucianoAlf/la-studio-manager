@@ -4,7 +4,6 @@
   "private": true,
   "description": "Marketing Hub — LA Music School",
   "scripts": {
-    "predev": "npm run clean:next",
     "dev": "next dev -p 3001",
     "dev:3001": "next dev -p 3001",
     "clean:next": "node -e \"require('fs').rmSync('.next',{recursive:true,force:true})\"",

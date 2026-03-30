@@ -26,13 +26,22 @@ interface Props {
   composition: LayerComposition;
   onChange: (composition: LayerComposition) => void;
   brandIdentity?: BrandIdentity | null;
+  showAspectSwitcher?: boolean;
+  showPresetStrip?: boolean;
 }
 
-export function LayerComposer({ composition, onChange, brandIdentity }: Props) {
+export function LayerComposer({
+  composition,
+  onChange,
+  brandIdentity,
+  showAspectSwitcher = true,
+  showPresetStrip = true,
+}: Props) {
   const normalizedComposition = deserializeComposition(composition, brandIdentity);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [photoImg, setPhotoImg] = useState<HTMLImageElement | null>(null);
   const [logoImg, setLogoImg] = useState<HTMLImageElement | null>(null);
+  const [showSafeAreaGuides, setShowSafeAreaGuides] = useState(false);
   const renderTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
@@ -85,9 +94,13 @@ export function LayerComposer({ composition, onChange, brandIdentity }: Props) {
 
   return (
     <div className="space-y-4">
-      <AspectRatioSwitcher value={normalizedComposition.aspectRatio} onChange={handleAspectRatioChange} />
+      {showAspectSwitcher ? (
+        <AspectRatioSwitcher value={normalizedComposition.aspectRatio} onChange={handleAspectRatioChange} />
+      ) : null}
 
-      <PresetStrip composition={normalizedComposition} onChange={onChange} brandIdentity={brandIdentity} />
+      {showPresetStrip ? (
+        <PresetStrip composition={normalizedComposition} onChange={onChange} brandIdentity={brandIdentity} />
+      ) : null}
 
       <div className="flex justify-center">
         <div className="relative overflow-hidden rounded-[22px] border border-slate-800 bg-slate-950" style={{ maxHeight: previewMaxH }}>
@@ -99,7 +112,7 @@ export function LayerComposer({ composition, onChange, brandIdentity }: Props) {
               display: "block",
             }}
           />
-          {photoImg ? <SafeAreaOverlay aspectRatio={normalizedComposition.aspectRatio} /> : null}
+          {photoImg && showSafeAreaGuides ? <SafeAreaOverlay aspectRatio={normalizedComposition.aspectRatio} /> : null}
           {!photoImg ? (
             <div
               className="flex items-center justify-center p-8 text-sm text-slate-500"
@@ -111,7 +124,12 @@ export function LayerComposer({ composition, onChange, brandIdentity }: Props) {
         </div>
       </div>
 
-      <BackgroundPanel composition={normalizedComposition} onChange={onChange} />
+      <BackgroundPanel
+        composition={normalizedComposition}
+        onChange={onChange}
+        showGuides={showSafeAreaGuides}
+        onToggleGuides={() => setShowSafeAreaGuides((current) => !current)}
+      />
       <TextPanel composition={normalizedComposition} onChange={onChange} brandIdentity={brandIdentity} />
       <LogoPanel composition={normalizedComposition} onChange={onChange} brandIdentity={brandIdentity} />
       <OverlayPanel composition={normalizedComposition} onChange={onChange} brandIdentity={brandIdentity} />

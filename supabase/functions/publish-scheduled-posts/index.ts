@@ -24,8 +24,60 @@ interface PostRow {
   brand: string
   post_type: string
   caption: string | null
-  metadata: { image_url?: string; slides?: string[] } | null
+  metadata: { image_url?: string; slides?: string[]; slide_urls?: string[] } | null
   scheduled_for: string | null
+}
+
+async function createInstagramImageContainer(
+  instagramAccountId: string,
+  accessToken: string,
+  imageUrl: string,
+  caption?: string | null,
+  isStory?: boolean,
+  isCarouselItem?: boolean,
+): Promise<string> {
+  const params = new URLSearchParams({
+    access_token: accessToken,
+    image_url: imageUrl,
+    ...(isStory ? { media_type: 'STORIES' } : {}),
+    ...(caption && !isStory && !isCarouselItem ? { caption } : {}),
+    ...(isCarouselItem ? { is_carousel_item: 'true' } : {}),
+  })
+
+  const response = await fetch(
+    `https://graph.facebook.com/v21.0/${instagramAccountId}/media`,
+    { method: 'POST', body: params }
+  )
+  const data = await response.json()
+
+  if (!data.id) {
+    throw new Error(`Container failed: ${JSON.stringify(data)}`)
+  }
+
+  return data.id as string
+}
+
+async function publishInstagramContainer(
+  instagramAccountId: string,
+  accessToken: string,
+  creationId: string,
+): Promise<string> {
+  const publishParams = new URLSearchParams({
+    creation_id: creationId,
+    access_token: accessToken,
+  })
+
+  const publishRes = await fetch(
+    `https://graph.facebook.com/v21.0/${instagramAccountId}/media_publish`,
+    { method: 'POST', body: publishParams }
+  )
+  const publishData = await publishRes.json()
+
+  if (!publishData.id) {
+    throw new Error(`Publish failed: ${JSON.stringify(publishData)}`)
+  }
+
+  return publishData.id as string
 }
 
 serve(async (req: Request) => {
@@ -81,7 +133,8 @@ serve(async (req: Request) => {
     for (const post of posts) {
       try {
         const imageUrl = post.metadata?.image_url
-        if (!imageUrl) {
+        const slideUrls = post.metadata?.slide_urls || post.metadata?.slides || []
+        if (!imageUrl && post.post_type !== 'carousel') {
           throw new Error('No image_url in metadata')
         }
 
@@ -103,50 +156,66 @@ serve(async (req: Request) => {
           throw new Error('Missing access_token or instagram_account_id')
         }
 
-        // Determine media type
-        const isStory = post.post_type === 'story' || post.post_type === 'reels'
-        const mediaType = isStory ? 'STORIES' : 'IMAGE'
+        let publishId = ''
 
-        // Step 1: Create media container
-        const containerParams = new URLSearchParams({
-          access_token,
-          image_url: imageUrl,
-          ...(isStory ? { media_type: 'STORIES' } : {}),
-          ...(post.caption && !isStory ? { caption: post.caption } : {}),
-        })
+        if (post.post_type === 'carousel') {
+          if (!Array.isArray(slideUrls) || slideUrls.length < 2) {
+            throw new Error('Carousel requires at least 2 slide_urls in metadata')
+          }
 
-        const createRes = await fetch(
-          `https://graph.facebook.com/v21.0/${instagram_account_id}/media`,
-          { method: 'POST', body: containerParams }
-        )
-        const createData = await createRes.json()
+          const childIds: string[] = []
+          for (const slideUrl of slideUrls.slice(0, 10)) {
+            const childId = await createInstagramImageContainer(
+              instagram_account_id,
+              access_token,
+              slideUrl,
+              null,
+              false,
+              true,
+            )
+            childIds.push(childId)
+          }
 
-        if (!createData.id) {
-          throw new Error(`Container failed: ${JSON.stringify(createData)}`)
+          await new Promise(r => setTimeout(r, 3000))
+
+          const parentParams = new URLSearchParams({
+            access_token,
+            media_type: 'CAROUSEL',
+            children: childIds.join(','),
+            ...(post.caption ? { caption: post.caption } : {}),
+          })
+
+          const parentRes = await fetch(
+            `https://graph.facebook.com/v21.0/${instagram_account_id}/media`,
+            { method: 'POST', body: parentParams }
+          )
+          const parentData = await parentRes.json()
+
+          if (!parentData.id) {
+            throw new Error(`Carousel parent failed: ${JSON.stringify(parentData)}`)
+          }
+
+          console.log(`[PUBLISH] Carousel container created: ${parentData.id} (${childIds.length} slides)`)
+          await new Promise(r => setTimeout(r, 3000))
+          publishId = await publishInstagramContainer(instagram_account_id, access_token, parentData.id as string)
+        } else {
+          const isStory = post.post_type === 'story' || post.post_type === 'reels'
+          const mediaType = isStory ? 'STORIES' : 'IMAGE'
+          const creationId = await createInstagramImageContainer(
+            instagram_account_id,
+            access_token,
+            imageUrl!,
+            post.caption,
+            isStory,
+            false,
+          )
+
+          console.log(`[PUBLISH] Container created: ${creationId} (${mediaType})`)
+          await new Promise(r => setTimeout(r, 3000))
+          publishId = await publishInstagramContainer(instagram_account_id, access_token, creationId)
         }
 
-        console.log(`[PUBLISH] Container created: ${createData.id} (${mediaType})`)
-
-        // Step 2: Wait for processing
-        await new Promise(r => setTimeout(r, 3000))
-
-        // Step 3: Publish
-        const publishParams = new URLSearchParams({
-          creation_id: createData.id,
-          access_token,
-        })
-
-        const publishRes = await fetch(
-          `https://graph.facebook.com/v21.0/${instagram_account_id}/media_publish`,
-          { method: 'POST', body: publishParams }
-        )
-        const publishData = await publishRes.json()
-
-        if (!publishData.id) {
-          throw new Error(`Publish failed: ${JSON.stringify(publishData)}`)
-        }
-
-        console.log(`[PUBLISH] Published! IG Post ID: ${publishData.id}`)
+        console.log(`[PUBLISH] Published! IG Post ID: ${publishId}`)
 
         // Update post status
         await supabase
@@ -154,7 +223,7 @@ serve(async (req: Request) => {
           .update({
             status: 'published',
             published_at: new Date().toISOString(),
-            metadata: { ...post.metadata, ig_post_id: publishData.id },
+            metadata: { ...post.metadata, ig_post_id: publishId },
           } as never)
           .eq('id', post.id)
 

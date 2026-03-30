@@ -102,8 +102,17 @@ import { Switch } from "@/components/ui/switch";
 import { getBrandIdentity } from "@/lib/queries/brand";
 import type { BrandIdentity } from "@/types/brand";
 import { applyPresetToComposition, selectDefaultPresetId } from "@/lib/canvas/template-presets";
+import type { CarouselKind, CarouselProject, CarouselSlide, CarouselTheme } from "@/lib/carousel/types";
+import {
+  applyBrandingToCarouselProject,
+  applyCarouselLayoutToComposition,
+  applyThemeToCarouselProject,
+  createCarouselProject,
+} from "@/lib/carousel/create-carousel-project";
+import { deserializeCarouselProject } from "@/lib/carousel/deserialize-carousel-project";
+import { serializeCarouselProject } from "@/lib/carousel/serialize-carousel-project";
 
-type StudioTab = "calendario" | "criar" | "banco" | "video" | "automacoes" | "performance" | "conexoes";
+type StudioTab = "calendario" | "criar" | "carousel" | "banco" | "video" | "automacoes" | "performance" | "conexoes";
 type AutomationTab = "aniversarios" | "datas";
 
 type PostStatus = StudioPost["status"];
@@ -114,6 +123,14 @@ type NinaGenerationResponse = {
   logo_url?: string | null;
   caption?: string | null;
   hashtags?: string[] | string | null;
+  slides?: Array<{
+    role?: "cover" | "hook" | "content" | "proof" | "cta";
+    headline?: string | null;
+    body?: string | null;
+    cta?: string | null;
+    layout_type?: string | null;
+    summary?: string | null;
+  }> | null;
   generation_method?: string | null;
   generation_mode?: string | null;
   main_phrase?: string | null;
@@ -540,6 +557,7 @@ const TABS: { id: StudioTab; label: string; icon: Icon }[] = [
   { id: "calendario", label: "Calendário", icon: CalendarDots },
   { id: "criar", label: "Criar", icon: Sparkle },
   { id: "banco", label: "Banco de Fotos", icon: Images },
+  { id: "carousel", label: "Carrossel", icon: Images },
   { id: "video", label: "Vídeo", icon: VideoCamera },
   { id: "automacoes", label: "Automações", icon: Lightning },
   { id: "performance", label: "Performance", icon: ChartBar },
@@ -719,7 +737,8 @@ export default function StudioPage() {
   }>({ open: false, clip: null, format: 'REELS', isPublishing: false, error: null });
 
   const [birthdays, setBirthdays] = useState<PhotoAsset[]>([]);
-  const [birthdayHistory, setBirthdayHistory] = useState<Array<{ id: string; student_name: string; brand: string; approval_status: string; created_at: string }>>([]);
+  const [allBirthdayAssets, setAllBirthdayAssets] = useState<PhotoAsset[]>([]);
+  const [birthdayHistory, setBirthdayHistory] = useState<Array<{ id: string; student_name: string; brand: string; approval_status: string; image_url?: string | null; asset_id?: string | null; created_at: string }>>([]);
   const [birthdayGenerating, setBirthdayGenerating] = useState<Record<string, boolean>>({});
   const [birthdayPreview, setBirthdayPreview] = useState<{ assetId: string; imageUrl: string; studentName: string } | null>(null);
   const [birthdayPublishing, setBirthdayPublishing] = useState(false);
@@ -806,7 +825,12 @@ export default function StudioPage() {
   const [ninaHashtags, setNinaHashtags] = useState<string[]>([]);
   const [ninaGenerationMethod, setNinaGenerationMethod] = useState<string | null>(null);
   const [activeTones, setActiveTones] = useState<string[]>(["inspirador", "divertido", "profissional"]);
-  const [carouselComposition, setCarouselComposition] = useState<import("@/lib/types/layer-composition").CarouselComposition | null>(null);
+  const [carouselProject, setCarouselProject] = useState<CarouselProject | null>(null);
+  const [carouselKind, setCarouselKind] = useState<CarouselKind>("educational");
+  const [carouselTone, setCarouselTone] = useState("profissional");
+  const [carouselSlideCount, setCarouselSlideCount] = useState(6);
+  const [carouselCta, setCarouselCta] = useState("Agende uma aula experimental");
+  const [activeCarouselSlideIndex, setActiveCarouselSlideIndex] = useState(0);
   const [captionVariations, setCaptionVariations] = useState<Array<{ tone: string; phrase: string; caption: string; hashtags: string[] }>>([]);
   const [selectedCaptionIdx, setSelectedCaptionIdx] = useState(-1);
   const [layerComposition, setLayerComposition] = useState<import("@/lib/types/layer-composition").LayerComposition | null>(null);
@@ -1416,6 +1440,7 @@ export default function StudioPage() {
     if (postsRes.status === "fulfilled") setPosts(postsRes.value);
     if (birthdaysRes.status === "fulfilled") {
       setBirthdays(birthdaysRes.value.upcoming);
+      setAllBirthdayAssets(birthdaysRes.value.allAssets);
       setBirthdayHistory(birthdaysRes.value.history);
     }
     if (commemorativeRes.status === "fulfilled") setCommemorativeDates(commemorativeRes.value);
@@ -2718,7 +2743,7 @@ export default function StudioPage() {
 
   // Carregar fotos de eventos quando abrir aba Criar
   useEffect(() => {
-    if (activeTab === "criar") {
+    if (activeTab === "criar" || activeTab === "carousel") {
       void loadEventPhotosForNina();
     }
   }, [activeTab, loadEventPhotosForNina, brand]);
@@ -2838,6 +2863,211 @@ export default function StudioPage() {
     }
   }, [targetEventForPhotos, additionalPhotos, supabase, compressImage, loadGroupedEvents, selectedEvent, brand, uploadFilesInParallel]);
 
+  const getCurrentStudioUserId = useCallback(async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user?.id) return user.id;
+
+    const { data: admin } = await supabase
+      .from("user_profiles" as never)
+      .select("user_id")
+      .eq("is_admin", true)
+      .limit(1)
+      .single();
+
+    return (admin as { user_id: string } | null)?.user_id ?? null;
+  }, [supabase]);
+
+  const uploadCompositionImage = useCallback(async (
+    composition: import("@/lib/types/layer-composition").LayerComposition,
+    prefix: string,
+  ) => {
+    const { exportCompositionToBlob, loadImage } = await import("@/lib/canvas/render-composition");
+    const photo = await loadImage(composition.background.photoUrl);
+    let logo: HTMLImageElement | null = null;
+    if (composition.logoLayer?.logoUrl) {
+      logo = await loadImage(composition.logoLayer.logoUrl).catch(() => null);
+    }
+
+    const blob = await exportCompositionToBlob(composition, { photo, logo });
+    const path = `nina/${prefix}-${brand}-${Date.now()}.jpg`;
+    const { error: uploadError } = await supabase.storage.from("posts").upload(path, blob, {
+      contentType: "image/jpeg",
+      upsert: true,
+    });
+    if (uploadError) throw uploadError;
+
+    const { data } = supabase.storage.from("posts").getPublicUrl(path);
+    return data.publicUrl;
+  }, [brand, supabase]);
+
+  const exportCarouselAssets = useCallback(async (project: CarouselProject, prefix: string) => {
+    const slideUrls: string[] = [];
+
+    for (let index = 0; index < project.slides.length; index += 1) {
+      const slide = project.slides[index];
+      try {
+        const url = await uploadCompositionImage(slide.composition, `${prefix}-${project.id}-${index + 1}`);
+        slideUrls.push(url);
+      } catch (error) {
+        console.error("[STUDIO][CAROUSEL] export slide failed", error);
+        if (slide.photoUrl) {
+          slideUrls.push(slide.photoUrl);
+        } else {
+          throw error;
+        }
+      }
+    }
+
+    const coverIndex = Math.min(project.coverSlideIndex, Math.max(0, slideUrls.length - 1));
+    const coverUrl = slideUrls[coverIndex] || slideUrls[0] || null;
+    const coverComposition = project.slides[coverIndex]?.composition || project.slides[0]?.composition || null;
+    return { slideUrls, coverUrl, coverComposition };
+  }, [uploadCompositionImage]);
+
+  const buildCarouselMetadata = useCallback((
+    project: CarouselProject,
+    slideUrls: string[],
+    coverUrl: string | null,
+    coverComposition: import("@/lib/types/layer-composition").LayerComposition | null,
+  ) => {
+    const serializedProject = serializeCarouselProject({
+      ...project,
+      slides: project.slides.map((slide, index) => ({
+        ...slide,
+        index,
+        renderUrl: slideUrls[index] || slide.renderUrl,
+      })),
+    });
+
+    return {
+      image_url: coverUrl,
+      slide_urls: slideUrls,
+      slides: slideUrls,
+      carousel_kind: project.kind,
+      cover_index: serializedProject.coverSlideIndex,
+      carousel_project: serializedProject,
+      carousel_slides: serializedProject.slides,
+      layers: coverComposition,
+      layers_v2: coverComposition,
+    };
+  }, []);
+
+  const handleGenerateCarouselDeck = async () => {
+    setIsGeneratingWithNina(true);
+    try {
+      const [outlineResult, photoResult] = await Promise.all([
+        supabase.functions.invoke<NinaGenerationResponse>("nina-create-post", {
+          body: {
+            mode: "carousel_outline",
+            brand,
+            brief: postBrief,
+            carousel_kind: carouselKind,
+            slide_count: carouselSlideCount,
+            tones: [carouselTone],
+            event_name: selectedEventPhotoForNina?.event_name ?? null,
+          },
+        }),
+        supabase.functions.invoke<NinaGenerationResponse>("nina-create-post", {
+          body: {
+            mode: "brief",
+            brand,
+            brief: postBrief,
+            post_type: "feed",
+            generation_mode: "photo_only",
+            tones: [carouselTone],
+            event_asset_id: selectedEventPhotoForNina?.id ?? null,
+            reference_image_url: selectedEventPhotoForNina?.file_url ?? null,
+            event_name: selectedEventPhotoForNina?.event_name ?? null,
+          },
+        }),
+      ]);
+
+      if (outlineResult.error && photoResult.error) {
+        toast.error("Não foi possível gerar o deck do carrossel agora.");
+        return;
+      }
+
+      const parseHashtags = (value?: NinaGenerationResponse["hashtags"]) => (
+        Array.isArray(value)
+          ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+          : typeof value === "string"
+            ? value.split(/\s+/).filter((item) => item.startsWith("#") && item.trim().length > 1)
+            : []
+      );
+
+      const outlineData = outlineResult.data;
+      const photoData = photoResult.data;
+      const hashtags = Array.from(new Set([
+        ...parseHashtags(outlineData?.hashtags),
+        ...parseHashtags(photoData?.hashtags),
+      ]));
+
+      const photoUrl = photoData?.photo_url || photoData?.image_url || selectedEventPhotoForNina?.file_url || null;
+      const photoPool = [
+        selectedEventPhotoForNina?.file_url,
+        photoUrl,
+        ...eventPhotosForNina.map((photo) => photo.file_url),
+      ].filter((url, index, list): url is string => Boolean(url) && list.indexOf(url) === index);
+
+      const photoAssetIds = [
+        selectedEventPhotoForNina?.id,
+        ...eventPhotosForNina.map((photo) => photo.id),
+      ];
+
+      const outlineSlides = Array.isArray(outlineData?.slides)
+        ? outlineData.slides
+            .map((slide) => ({
+              role: (
+                slide.role === "hook" || slide.role === "content" || slide.role === "proof" || slide.role === "cta"
+                  ? slide.role
+                  : "cover"
+              ) as CarouselSlide["role"],
+              layoutType: slide.layout_type || "cover-hero",
+              headline: slide.headline || undefined,
+              body: slide.body || undefined,
+              cta: slide.cta || undefined,
+              summary: slide.summary || undefined,
+            }))
+            .slice(0, carouselSlideCount)
+        : [];
+
+      const generatedCaption = [
+        outlineData?.caption?.trim() || photoData?.caption?.trim(),
+        hashtags.join(" "),
+      ].filter(Boolean).join("\n\n");
+      if (generatedCaption) {
+        setPostCaption(generatedCaption);
+      }
+
+      const project = createCarouselProject({
+        brandId: brand,
+        kind: carouselKind,
+        tone: carouselTone,
+        brief: postBrief,
+        caption: outlineData?.caption || photoData?.caption || postCaption,
+        cta: carouselCta,
+        brandIdentity,
+        photoUrls: photoPool,
+        photoAssetIds,
+        slideCount: carouselSlideCount,
+        outlineSlides,
+      });
+
+      setCarouselProject(project);
+      setActiveCarouselSlideIndex(0);
+      setLayerComposition(null);
+      setNinaPreviewUrl(photoUrl);
+      setNinaHashtags(hashtags);
+      setNinaGenerationMethod(outlineSlides.length > 0 ? "carousel_outline" : "carousel_project");
+      toast.success("Deck gerado com sucesso!");
+    } catch (error) {
+      console.error("[STUDIO][CAROUSEL] generate error:", error);
+      toast.error("Falha ao gerar o carrossel.");
+    } finally {
+      setIsGeneratingWithNina(false);
+    }
+  };
+
   const handleGenerateWithNina = async () => {
     setIsGeneratingWithNina(true);
     try {
@@ -2873,40 +3103,23 @@ export default function StudioPage() {
       const logoUrl = (data as Record<string, unknown>)?.logo_url as string | undefined;
       const mainPhrase = data?.main_phrase || data?.text_config?.phrase || postBrief || "";
 
-      // Criar composição por camadas
       if (photoUrl) {
-        if (postPlatform === "carousel") {
-          // Carousel: cria múltiplos slides
-          const { createDefaultCarousel } = await import("@/components/studio/criar/CarouselBuilder");
-          const presetId = selectDefaultPresetId(brandIdentity?.brand_key || brand, "carousel", activeTones);
-          const slideTexts = [
-            mainPhrase || "Slide 1",
-            data?.caption?.split("\n")[0]?.substring(0, 60) || "Slide 2",
-            brand === "la_music_kids" ? "LA Music Kids" : "LA Music School",
-          ];
-          const carousel = createDefaultCarousel(photoUrl, slideTexts, logoUrl || null, brandIdentity, presetId);
-          setCarouselComposition(carousel);
-          setLayerComposition(null);
-          setNinaPreviewUrl(photoUrl);
-          console.log(`[STUDIO] Carousel composition created with ${carousel.slides.length} slides`);
-        } else {
-          const { createDefaultComposition } = await import("@/lib/types/layer-composition");
-          const aspectKey = (postPlatform === "story" || postPlatform === "reels") ? "story" as const : "feed" as const;
-          const presetId = selectDefaultPresetId(brandIdentity?.brand_key || brand, aspectKey, activeTones);
-          const baseComp = createDefaultComposition({
-            photoUrl,
-            mainText: mainPhrase,
-            logoUrl: logoUrl || null,
-            aspectRatio: aspectKey,
-            brandIdentity,
-            platform: aspectKey,
-          });
-          const comp = applyPresetToComposition(presetId, baseComp, brandIdentity);
-          setLayerComposition(comp);
-          setCarouselComposition(null);
-          setNinaPreviewUrl(photoUrl); // fallback
-          console.log("[STUDIO] Layer composition created");
-        }
+        const { createDefaultComposition } = await import("@/lib/types/layer-composition");
+        const aspectKey = (postPlatform === "story" || postPlatform === "reels") ? "story" as const : "feed" as const;
+        const presetId = selectDefaultPresetId(brandIdentity?.brand_key || brand, aspectKey, activeTones);
+        const baseComp = createDefaultComposition({
+          photoUrl,
+          mainText: mainPhrase,
+          logoUrl: logoUrl || null,
+          aspectRatio: aspectKey,
+          brandIdentity,
+          platform: aspectKey,
+        });
+        const comp = applyPresetToComposition(presetId, baseComp, brandIdentity);
+        setLayerComposition(comp);
+        setCarouselProject(null);
+        setNinaPreviewUrl(photoUrl);
+        console.log("[STUDIO] Layer composition created");
       } else {
         setNinaPreviewUrl(data?.image_url ?? null);
       }
@@ -2963,7 +3176,7 @@ export default function StudioPage() {
       let publishImageUrl = ninaPreviewUrl;
       if (layerComposition) {
         try {
-          const { exportCompositionToBlob, loadImage } = await import("@/lib/canvas/render-composition");
+          const { exportCompositionToBlob, loadImage } = await import("../../../lib/canvas/render-composition");
           const photo = await loadImage(layerComposition.background.photoUrl);
           let logo: HTMLImageElement | null = null;
           if (layerComposition.logoLayer?.logoUrl) {
@@ -3070,7 +3283,7 @@ export default function StudioPage() {
       let schedImageUrl = ninaPreviewUrl;
       if (layerComposition) {
         try {
-          const { exportCompositionToBlob, loadImage } = await import("@/lib/canvas/render-composition");
+          const { exportCompositionToBlob, loadImage } = await import("../../../lib/canvas/render-composition");
           const photo = await loadImage(layerComposition.background.photoUrl);
           let logo: HTMLImageElement | null = null;
           if (layerComposition.logoLayer?.logoUrl) {
@@ -3125,6 +3338,451 @@ export default function StudioPage() {
     }
   };
 
+  const handleApplyBrandingToCarousel = useCallback(() => {
+    if (!carouselProject) return;
+    setCarouselProject(applyBrandingToCarouselProject(carouselProject, brandIdentity));
+  }, [brandIdentity, carouselProject]);
+
+  const handleApplyCarouselTheme = useCallback((themePatch: Partial<CarouselTheme>) => {
+    setCarouselProject((current) => (
+      current ? applyThemeToCarouselProject(current, themePatch, brandIdentity) : current
+    ));
+  }, [brandIdentity]);
+
+  const handleRegenerateCarouselDeck = () => {
+    void handleGenerateCarouselDeck();
+  };
+
+  const handleDuplicatePreviousCarouselStyle = useCallback(() => {
+    if (!carouselProject || activeCarouselSlideIndex <= 0) return;
+
+    setCarouselProject((current) => {
+      if (!current) return current;
+
+      const previous = current.slides[activeCarouselSlideIndex - 1];
+      const active = current.slides[activeCarouselSlideIndex];
+      if (!previous || !active) return current;
+
+      return {
+        ...current,
+        updatedAt: new Date().toISOString(),
+        slides: current.slides.map((slide, index) => {
+          if (index !== activeCarouselSlideIndex) return slide;
+          return {
+            ...slide,
+            layoutType: previous.layoutType,
+            composition: {
+              ...previous.composition,
+              background: slide.composition.background,
+              textLayers: previous.composition.textLayers.map((layer, layerIndex) => ({
+                ...layer,
+                id: `${layer.id}-${Date.now()}-${layerIndex}`,
+                content: slide.composition.textLayers[layerIndex]?.content || slide.headline || layer.content,
+              })),
+            },
+          };
+        }),
+      };
+    });
+  }, [activeCarouselSlideIndex, carouselProject]);
+
+  const handleCarouselLayoutChange = useCallback((layoutType: string) => {
+    if (!carouselProject) return;
+
+    setCarouselProject((current) => {
+      if (!current) return current;
+      const slide = current.slides[activeCarouselSlideIndex];
+      if (!slide) return current;
+
+      const composition = applyCarouselLayoutToComposition(
+        {
+          ...slide.composition,
+          background: {
+            ...slide.composition.background,
+            photoUrl: slide.photoUrl || slide.composition.background.photoUrl,
+          },
+        },
+        { ...slide, layoutType },
+        current.theme,
+        brandIdentity,
+      );
+
+      return {
+        ...current,
+        updatedAt: new Date().toISOString(),
+        slides: current.slides.map((item, index) => (
+          index === activeCarouselSlideIndex
+            ? { ...item, layoutType, composition }
+            : item
+        )),
+      };
+    });
+  }, [activeCarouselSlideIndex, brandIdentity, carouselProject]);
+
+  const handleAddCarouselSlide = useCallback(() => {
+    setCarouselProject((current) => {
+      if (!current || current.slides.length >= 8) return current;
+
+      const source = current.slides[current.slides.length - 1];
+      const duplicate: CarouselSlide = {
+        ...source,
+        id: `${source.id}-copy-${Date.now()}`,
+        index: current.slides.length,
+        role: source.role === "cta" ? "content" : source.role,
+        summary: "Novo slide",
+        composition: {
+          ...source.composition,
+          textLayers: source.composition.textLayers.map((layer, layerIndex) => ({
+            ...layer,
+            id: `${layer.id}-new-${Date.now()}-${layerIndex}`,
+          })),
+        },
+      };
+
+      const next = {
+        ...current,
+        slideCount: current.slides.length + 1,
+        updatedAt: new Date().toISOString(),
+        slides: [...current.slides, duplicate].map((slide, index) => ({ ...slide, index })),
+      };
+
+      setActiveCarouselSlideIndex(next.slides.length - 1);
+      return next;
+    });
+  }, []);
+
+  const handleRemoveCarouselSlide = useCallback((indexToRemove: number) => {
+    setCarouselProject((current) => {
+      if (!current || current.slides.length <= 4) return current;
+      const slides = current.slides.filter((_, index) => index !== indexToRemove).map((slide, index) => ({ ...slide, index }));
+      const nextCoverIndex = current.coverSlideIndex === indexToRemove
+        ? Math.max(0, Math.min(indexToRemove, slides.length - 1))
+        : current.coverSlideIndex > indexToRemove
+          ? current.coverSlideIndex - 1
+          : current.coverSlideIndex;
+      setActiveCarouselSlideIndex((prev) => Math.max(0, Math.min(prev, slides.length - 1)));
+      return {
+        ...current,
+        slides,
+        slideCount: slides.length,
+        coverSlideIndex: nextCoverIndex,
+        updatedAt: new Date().toISOString(),
+      };
+    });
+  }, []);
+
+  const handleDuplicateCarouselSlide = useCallback((indexToDuplicate: number) => {
+    setCarouselProject((current) => {
+      if (!current || current.slides.length >= 8) return current;
+      const source = current.slides[indexToDuplicate];
+      if (!source) return current;
+
+      const duplicate: CarouselSlide = {
+        ...source,
+        id: `${source.id}-copy-${Date.now()}`,
+        summary: `${source.summary || source.headline || "Slide"} (cópia)`,
+        composition: {
+          ...source.composition,
+          textLayers: source.composition.textLayers.map((layer, layerIndex) => ({
+            ...layer,
+            id: `${layer.id}-copy-${Date.now()}-${layerIndex}`,
+          })),
+        },
+      };
+
+      const slides = [...current.slides];
+      slides.splice(indexToDuplicate + 1, 0, duplicate);
+      const normalizedSlides = slides.map((slide, index) => ({ ...slide, index }));
+      const nextCoverIndex = current.coverSlideIndex > indexToDuplicate
+        ? current.coverSlideIndex + 1
+        : current.coverSlideIndex;
+      setActiveCarouselSlideIndex(indexToDuplicate + 1);
+      return {
+        ...current,
+        slides: normalizedSlides,
+        slideCount: normalizedSlides.length,
+        coverSlideIndex: nextCoverIndex,
+        updatedAt: new Date().toISOString(),
+      };
+    });
+  }, []);
+
+  const handleMoveCarouselSlide = useCallback((index: number, direction: -1 | 1) => {
+    setCarouselProject((current) => {
+      if (!current) return current;
+      const targetIndex = index + direction;
+      if (targetIndex < 0 || targetIndex >= current.slides.length) return current;
+
+      const slides = [...current.slides];
+      const [moved] = slides.splice(index, 1);
+      slides.splice(targetIndex, 0, moved);
+      const normalizedSlides = slides.map((slide, slideIndex) => ({ ...slide, index: slideIndex }));
+      const coverSlide = current.slides[current.coverSlideIndex];
+      const nextCoverIndex = coverSlide
+        ? normalizedSlides.findIndex((slide) => slide.id === coverSlide.id)
+        : 0;
+      setActiveCarouselSlideIndex(targetIndex);
+      return {
+        ...current,
+        slides: normalizedSlides,
+        coverSlideIndex: Math.max(0, nextCoverIndex),
+        updatedAt: new Date().toISOString(),
+      };
+    });
+  }, []);
+
+  const handleSetCarouselCover = useCallback((index: number) => {
+    setCarouselProject((current) => {
+      if (!current || !current.slides[index]) return current;
+      return {
+        ...current,
+        coverSlideIndex: index,
+        updatedAt: new Date().toISOString(),
+      };
+    });
+  }, []);
+
+  const handleRegenerateCarouselSlide = useCallback((index: number) => {
+    setCarouselProject((current) => {
+      if (!current) return current;
+      const slide = current.slides[index];
+      if (!slide) return current;
+
+      const photoPool = current.slides
+        .map((item) => item.photoUrl)
+        .filter((url, itemIndex, list): url is string => Boolean(url) && list.indexOf(url) === itemIndex);
+      const nextPhotoUrl = photoPool.length > 1
+        ? photoPool[(index + 1) % photoPool.length] || slide.photoUrl
+        : slide.photoUrl;
+
+      const refreshedComposition = applyCarouselLayoutToComposition(
+        {
+          ...slide.composition,
+          background: {
+            ...slide.composition.background,
+            photoUrl: nextPhotoUrl || slide.composition.background.photoUrl,
+          },
+        },
+        {
+          ...slide,
+        },
+        current.theme,
+        brandIdentity,
+      );
+
+      return {
+        ...current,
+        updatedAt: new Date().toISOString(),
+        slides: current.slides.map((item, itemIndex) => (
+          itemIndex === index
+            ? {
+                ...item,
+                photoUrl: nextPhotoUrl,
+                composition: refreshedComposition,
+              }
+            : item
+        )),
+      };
+    });
+  }, [brandIdentity]);
+
+  const handleExportCarouselDeck = async () => {
+    if (!carouselProject) {
+      toast.info("Gere o carrossel primeiro.");
+      return;
+    }
+
+    try {
+      const { exportCompositionToBlob, loadImage } = await import("../../../lib/canvas/render-composition");
+
+      for (let index = 0; index < carouselProject.slides.length; index += 1) {
+        const slide = carouselProject.slides[index];
+        const photo = await loadImage(slide.composition.background.photoUrl);
+        const logo = slide.composition.logoLayer?.logoUrl
+          ? await loadImage(slide.composition.logoLayer.logoUrl).catch(() => null)
+          : null;
+        const blob = await exportCompositionToBlob(slide.composition, { photo, logo });
+        const downloadUrl = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = downloadUrl;
+        anchor.download = `${(carouselProject.title || "carousel").toLowerCase().replace(/[^a-z0-9]+/gi, "-")}-slide-${index + 1}.jpg`;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
+      }
+
+      toast.success("Slides exportados.");
+    } catch (error) {
+      console.error("[STUDIO][CAROUSEL] export error:", error);
+      toast.error("Não foi possível exportar o deck.");
+    }
+  };
+
+  const handleSendCarouselForApproval = async () => {
+    if (!carouselProject) {
+      toast.info("Gere o carrossel primeiro.");
+      return;
+    }
+
+    try {
+      const userId = await getCurrentStudioUserId();
+      if (!userId) {
+        toast.error("Usuário não autenticado.");
+        return;
+      }
+
+      const { slideUrls, coverUrl, coverComposition } = await exportCarouselAssets(carouselProject, "carousel-approval");
+      const metadata = buildCarouselMetadata(carouselProject, slideUrls, coverUrl, coverComposition);
+
+      const { error } = await supabase.from("posts").insert({
+        title: carouselProject.title || postBrief.slice(0, 100) || "Carousel Nina",
+        caption: postCaption,
+        post_type: "carousel",
+        status: "awaiting_approval",
+        brand,
+        scheduled_for: `${postDate}T${postTime}:00-03:00`,
+        created_by_ai: true,
+        created_by: userId,
+        ai_agent_name: "Nina",
+        metadata,
+      } as never);
+
+      if (error) {
+        toast.error("Erro ao enviar carrossel para aprovação.");
+        return;
+      }
+
+      toast.success("Carrossel enviado para aprovação.");
+      await loadBaseData();
+    } catch (error) {
+      console.error("[STUDIO][CAROUSEL] approval error:", error);
+      toast.error("Erro ao enviar carrossel para aprovação.");
+    }
+  };
+
+  const handlePublishCarouselNow = async () => {
+    if (!carouselProject) {
+      toast.info("Gere o carrossel primeiro.");
+      return;
+    }
+
+    setIsPublishingNow(true);
+    try {
+      const userId = await getCurrentStudioUserId();
+      if (!userId) {
+        toast.error("Usuário não autenticado.");
+        return;
+      }
+
+      const { slideUrls, coverUrl, coverComposition } = await exportCarouselAssets(carouselProject, "carousel-publish");
+      const metadata = buildCarouselMetadata(carouselProject, slideUrls, coverUrl, coverComposition);
+      const scheduledFor = `${postDate}T${postTime}:00-03:00`;
+
+      const { data: postData, error: insertError } = await supabase
+        .from("posts")
+        .insert({
+          title: carouselProject.title || postBrief.slice(0, 100) || "Carousel Nina",
+          caption: postCaption,
+          post_type: "carousel",
+          status: "draft",
+          brand,
+          scheduled_for: scheduledFor,
+          created_by_ai: true,
+          created_by: userId,
+          ai_agent_name: "Nina",
+          metadata,
+        } as never)
+        .select("id")
+        .single();
+
+      if (insertError || !postData) {
+        toast.error("Erro ao criar post de carrossel.");
+        return;
+      }
+
+      const createdPostId = (postData as { id: string }).id;
+      const { data: publishData, error: fnError } = await supabase.functions.invoke<PublishScheduledPostsResponse>("publish-scheduled-posts", {
+        body: { post_id: createdPostId },
+      });
+
+      if (fnError) {
+        toast.error(getPublishErrorMessage(fnError, publishData ?? undefined) ?? "Não foi possível publicar o carrossel.");
+        return;
+      }
+
+      if (!publishData?.success || (publishData.published ?? 0) < 1) {
+        toast.error(getPublishErrorMessage(null, publishData ?? undefined) ?? "Não foi possível publicar o carrossel.");
+        return;
+      }
+
+      toast.success("Carrossel publicado com sucesso!");
+      setCarouselProject(null);
+      setPostCaption("");
+      setPostBrief("");
+      await loadBaseData();
+    } catch (error) {
+      console.error("[STUDIO][CAROUSEL] publish error:", error);
+      toast.error("Falha ao publicar o carrossel.");
+    } finally {
+      setIsPublishingNow(false);
+    }
+  };
+
+  const handleScheduleCarousel = async () => {
+    if (!carouselProject) {
+      toast.info("Gere o carrossel primeiro.");
+      return;
+    }
+
+    const scheduledDate = new Date(`${postDate}T${postTime}:00-03:00`);
+    if (scheduledDate <= new Date()) {
+      toast.error("Não é possível agendar no passado. Escolha um horário futuro.");
+      return;
+    }
+
+    setIsScheduling(true);
+    try {
+      const userId = await getCurrentStudioUserId();
+      if (!userId) {
+        toast.error("Usuário não autenticado.");
+        return;
+      }
+
+      const { slideUrls, coverUrl, coverComposition } = await exportCarouselAssets(carouselProject, "carousel-schedule");
+      const metadata = buildCarouselMetadata(carouselProject, slideUrls, coverUrl, coverComposition);
+      const scheduledFor = `${postDate}T${postTime}:00-03:00`;
+
+      const { error: insertError } = await supabase
+        .from("posts")
+        .insert({
+          title: carouselProject.title || postBrief.slice(0, 100) || "Carousel Nina",
+          caption: postCaption,
+          post_type: "carousel",
+          status: "scheduled",
+          brand,
+          scheduled_for: scheduledFor,
+          created_by_ai: true,
+          created_by: userId,
+          ai_agent_name: "Nina",
+          metadata,
+        } as never);
+
+      if (insertError) {
+        toast.error("Erro ao agendar carrossel.");
+        return;
+      }
+
+      toast.success(`Carrossel agendado para ${postDate} às ${postTime}!`);
+      await loadBaseData();
+    } catch (error) {
+      console.error("[STUDIO][CAROUSEL] schedule error:", error);
+      toast.error("Falha ao agendar o carrossel.");
+    } finally {
+      setIsScheduling(false);
+    }
+  };
+
   // Seleciona uma foto aleatória do array
   const handleSelectRandomEventPhoto = useCallback(() => {
     if (eventPhotosForNina.length === 0) return;
@@ -3167,6 +3825,7 @@ export default function StudioPage() {
       // Refresh birthday history
       const birthdaysRes = await getBirthdaysOverview(brand);
       setBirthdays(birthdaysRes.upcoming);
+      setAllBirthdayAssets(birthdaysRes.allAssets);
       setBirthdayHistory(birthdaysRes.history);
     } catch (err) {
       toast.error("Erro ao gerar post de aniversário");
@@ -3282,7 +3941,18 @@ export default function StudioPage() {
 
         <div className="space-y-3">
           <label className="block text-xs text-slate-400">Plataforma</label>
-          <Select value={postPlatform} onValueChange={(v) => setPostPlatform(v as StudioPlatform)}>
+          <Select
+            value={postPlatform}
+            onValueChange={(value) => {
+              if (value === "carousel") {
+                setActiveTab("carousel");
+                setPostPlatform("story");
+                return;
+              }
+
+              setPostPlatform(value as StudioPlatform);
+            }}
+          >
             <SelectTrigger className="border-slate-700 bg-slate-900/70 text-slate-200"><SelectValue /></SelectTrigger>
             <SelectContent>
               {PLATFORM_OPTIONS.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}
@@ -3440,22 +4110,7 @@ export default function StudioPage() {
         <h3 className="text-sm font-semibold text-slate-100">Preview</h3>
 
         {/* Layer Composer — editor interativo por camadas */}
-        {/* Carousel mode */}
-        {carouselComposition && postPlatform === "carousel" ? (
-          (() => {
-            const { CarouselBuilder } = require("@/components/studio/criar/CarouselBuilder");
-            const { LayerComposer } = require("@/components/studio/LayerComposer");
-            return (
-              <CarouselBuilder
-                carousel={carouselComposition}
-                onChange={setCarouselComposition}
-                renderSlideEditor={(slide: import("@/lib/types/layer-composition").LayerComposition, _idx: number, onSlideChange: (s: import("@/lib/types/layer-composition").LayerComposition) => void) => (
-                  <LayerComposer composition={slide} onChange={onSlideChange} brandIdentity={brandIdentity} />
-                )}
-              />
-            );
-          })()
-        ) : layerComposition ? (
+        {layerComposition ? (
           (() => {
             const { LayerComposer } = require("@/components/studio/LayerComposer");
             return (
@@ -3489,7 +4144,7 @@ export default function StudioPage() {
               // Exportar composição se disponível
               let approvalImageUrl = ninaPreviewUrl;
               if (layerComposition) {
-                const { exportCompositionToBlob, loadImage } = await import("@/lib/canvas/render-composition");
+                const { exportCompositionToBlob, loadImage } = await import("../../../lib/canvas/render-composition");
                 const photo = await loadImage(layerComposition.background.photoUrl);
                 let logo: HTMLImageElement | null = null;
                 if (layerComposition.logoLayer?.logoUrl) logo = await loadImage(layerComposition.logoLayer.logoUrl).catch(() => null);
@@ -3545,6 +4200,68 @@ export default function StudioPage() {
       </Card>
     </div>
   );
+
+  const renderCarouselTab = () => {
+    const { CarouselStudio } = require("@/components/studio/carousel/CarouselStudio");
+
+    return (
+      <CarouselStudio
+        brand={brand}
+        onBrandChange={(nextBrand: StudioBrand) => {
+          setBrand(nextBrand);
+          setCarouselProject((current) => current ? { ...current, brandId: nextBrand } : current);
+        }}
+        brandIdentity={brandIdentity}
+        brief={postBrief}
+        onBriefChange={setPostBrief}
+        caption={postCaption}
+        onCaptionChange={setPostCaption}
+        carouselKind={carouselKind}
+        onCarouselKindChange={(nextKind: CarouselKind) => {
+          setCarouselKind(nextKind);
+          setCarouselSlideCount(nextKind === "educational" ? Math.max(carouselSlideCount, 6) : Math.min(Math.max(carouselSlideCount, 5), 8));
+        }}
+        tone={carouselTone}
+        onToneChange={setCarouselTone}
+        slideCount={carouselSlideCount}
+        onSlideCountChange={setCarouselSlideCount}
+        cta={carouselCta}
+        onCtaChange={setCarouselCta}
+        eventPhotos={eventPhotosForNina}
+        selectedEventPhoto={selectedEventPhotoForNina}
+        onSelectEventPhoto={setSelectedEventPhotoForNina}
+        onSelectRandomPhoto={handleSelectRandomEventPhoto}
+        loadingEventPhotos={loadingEventPhotosForNina}
+        postDate={postDate}
+        onPostDateChange={setPostDate}
+        postTime={postTime}
+        onPostTimeChange={setPostTime}
+        project={carouselProject}
+        activeSlideIndex={activeCarouselSlideIndex}
+        onActiveSlideIndexChange={setActiveCarouselSlideIndex}
+        onGenerate={() => void handleGenerateCarouselDeck()}
+        isGenerating={isGeneratingWithNina}
+        onProjectChange={setCarouselProject}
+        onThemeChange={handleApplyCarouselTheme}
+        onApplyBrandingToAll={handleApplyBrandingToCarousel}
+        onRegenerateDeck={handleRegenerateCarouselDeck}
+        onDuplicatePreviousStyle={handleDuplicatePreviousCarouselStyle}
+        onLayoutChange={handleCarouselLayoutChange}
+        onAddSlide={handleAddCarouselSlide}
+        onRemoveSlide={handleRemoveCarouselSlide}
+        onDuplicateSlide={handleDuplicateCarouselSlide}
+        onMoveSlide={handleMoveCarouselSlide}
+        onSetCoverSlide={handleSetCarouselCover}
+        onRegenerateSlide={handleRegenerateCarouselSlide}
+        onExportDeck={() => void handleExportCarouselDeck()}
+        onSendForApproval={() => void handleSendCarouselForApproval()}
+        onPublishNow={() => void handlePublishCarouselNow()}
+        onSchedule={() => void handleScheduleCarousel()}
+        isPublishing={isPublishingNow}
+        isScheduling={isScheduling}
+      />
+    );
+  };
 
   const renderPhotosTab = () => (
     <div className="space-y-4">
@@ -4120,6 +4837,41 @@ export default function StudioPage() {
       {automationTab === "aniversarios" ? (
         <div className="grid gap-4 lg:grid-cols-2">
           <div className="space-y-4">
+            {/* Toggle auto-publish */}
+            <Card variant="default" className="flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-100">Nina automática</h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  {ninaConfig?.auto_publish_birthdays
+                    ? "Nina publica aniversários automaticamente às 10h (só alunos com foto)"
+                    : "Publicação automática desligada — gere manualmente abaixo"}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={async () => {
+                  if (!ninaConfig) return;
+                  const newVal = !ninaConfig.auto_publish_birthdays;
+                  try {
+                    await supabase.from("nina_config").update({ auto_publish_birthdays: newVal } as never).eq("id", ninaConfig.id);
+                    setNinaConfig({ ...ninaConfig, auto_publish_birthdays: newVal });
+                    toast.success(newVal ? "Nina ativada para aniversários!" : "Nina desligada para aniversários.");
+                  } catch { toast.error("Erro ao atualizar configuração."); }
+                }}
+                className={cn(
+                  "relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none",
+                  ninaConfig?.auto_publish_birthdays ? "bg-cyan-500" : "bg-slate-700"
+                )}
+              >
+                <span
+                  className={cn(
+                    "pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out",
+                    ninaConfig?.auto_publish_birthdays ? "translate-x-5" : "translate-x-0"
+                  )}
+                />
+              </button>
+            </Card>
+
             {/* Aniversariantes de HOJE */}
             {birthdaysToday.length > 0 && (
               <Card variant="default" className="space-y-3 border-orange-500/30">
@@ -4150,11 +4902,12 @@ export default function StudioPage() {
             ) : (
               <div className="max-h-[500px] overflow-y-auto space-y-2 pr-1">
               {birthdayHistory.map((row) => {
-                const student = birthdays.find(b => b.person_name === row.student_name);
+                const student = allBirthdayAssets.find(b => b.person_name === row.student_name || (row.asset_id && b.id === row.asset_id));
+                const avatarUrl = student?.file_url || null;
                 return (
                 <div key={row.id} className="flex items-center gap-3 rounded-lg border border-slate-800 bg-slate-900/50 p-3">
-                  {student?.file_url ? (
-                    <img src={student.file_url} alt="" className="h-10 w-10 rounded-full object-cover border border-slate-700 flex-shrink-0" />
+                  {avatarUrl ? (
+                    <img src={avatarUrl} alt="" className="h-10 w-10 rounded-full object-cover border border-slate-700 flex-shrink-0" />
                   ) : (
                     <div className="h-10 w-10 rounded-full bg-slate-800 flex items-center justify-center text-xs text-slate-400 flex-shrink-0">
                       {row.student_name.split(" ").map(n => n[0]).join("").substring(0, 2)}
@@ -4475,7 +5228,7 @@ export default function StudioPage() {
 
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-[1600px] space-y-4 px-4 py-5">
-          <div className="grid grid-cols-2 gap-2 rounded-xl border border-slate-800 bg-slate-900/60 p-1 md:grid-cols-7">
+          <div className="grid grid-cols-2 gap-2 rounded-xl border border-slate-800 bg-slate-900/60 p-1 md:grid-cols-8">
             {TABS.map((tab) => {
               const Icon = tab.icon;
               const active = activeTab === tab.id;
@@ -4508,6 +5261,7 @@ export default function StudioPage() {
 
           {activeTab === "calendario" && renderCalendarTab()}
           {activeTab === "criar" && renderCreateTab()}
+          {activeTab === "carousel" && renderCarouselTab()}
           {activeTab === "banco" && renderPhotosTab()}
           {activeTab === "video" && renderVideoTab()}
           {activeTab === "automacoes" && renderAutomationsTab()}
@@ -4941,6 +5695,7 @@ export default function StudioPage() {
                     // Refresh birthday history
                     const birthdaysRes = await getBirthdaysOverview(brand);
                     setBirthdays(birthdaysRes.upcoming);
+                    setAllBirthdayAssets(birthdaysRes.allAssets);
                     setBirthdayHistory(birthdaysRes.history);
                   } else {
                     toast.error(result.error || "Erro ao publicar");
@@ -5158,6 +5913,37 @@ export default function StudioPage() {
               }}>
                 Regenerar com IA
               </Button>
+              {selectedPost.post_type === "carousel" && selectedPost.metadata?.carousel_project ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => {
+                    const project = deserializeCarouselProject(selectedPost.metadata?.carousel_project);
+                    if (!project) {
+                      toast.error("Não foi possível reabrir este carrossel.");
+                      return;
+                    }
+                    setBrand(selectedPost.brand);
+                    setPostBrief(selectedPost.title || "");
+                    setPostCaption(selectedPost.caption || "");
+                    setPostDate(selectedPost.scheduled_for?.substring(0, 10) || brazilNow.date);
+                    setPostTime(selectedPost.scheduled_for?.substring(11, 16) || brazilNow.time);
+                    setCarouselProject({ ...project, brandId: selectedPost.brand });
+                    setCarouselKind(project.kind);
+                    setCarouselTone(project.tone);
+                    setCarouselSlideCount(project.slideCount);
+                    setCarouselCta(project.cta || carouselCta);
+                    setActiveCarouselSlideIndex(project.coverSlideIndex || 0);
+                    setPostModalOpen(false);
+                    setSelectedPost(null);
+                    setActiveTab("carousel");
+                  }}
+                >
+                  Editar no Studio Carousel
+                </Button>
+              ) : null}
 
               {/* Status */}
               <div className="flex items-center gap-2">

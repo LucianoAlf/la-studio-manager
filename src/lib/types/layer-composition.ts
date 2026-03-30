@@ -74,6 +74,21 @@ export interface LogoLayer {
   offset?: { x: number; y: number };
 }
 
+export interface ShapeLayer {
+  id: string;
+  kind: "rect";
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  radius?: number;
+  fill?: string;
+  opacity?: number;
+  strokeColor?: string;
+  strokeWidth?: number;
+  strokeOpacity?: number;
+}
+
 export interface LinearGradientLayer {
   kind: "linear";
   enabled: boolean;
@@ -115,6 +130,7 @@ export interface LayerComposition {
   version: 2;
   aspectRatio: AspectRatioKey;
   background: BackgroundLayer;
+  shapeLayers?: ShapeLayer[];
   textLayers: TextLayer[];
   logoLayer: LogoLayer | null;
   gradient: GradientLayer;
@@ -175,6 +191,7 @@ interface LegacyLayerComposition {
     cropArea?: Partial<CropArea>;
     focalPoint?: { x?: number; y?: number };
   };
+  shapeLayers?: Array<Partial<ShapeLayer>>;
   textLayers?: LegacyTextLayer[];
   logoLayer?: LegacyLogoLayer | null;
   gradient?: LegacyGradientLayer;
@@ -477,6 +494,20 @@ export function deserializeComposition(input: unknown, brandIdentity?: BrandIden
         y: clamp01(focalPoint.y, DEFAULT_FOCAL_POINT.y),
       },
     },
+    shapeLayers: (source.shapeLayers || []).map((layer, index) => ({
+      id: layer.id || `shape-${index + 1}`,
+      kind: "rect",
+      x: clamp01(layer.x, 0),
+      y: clamp01(layer.y, 0),
+      width: clamp01(layer.width, 1),
+      height: clamp01(layer.height, 1),
+      radius: clamp01(layer.radius, 0),
+      fill: typeof layer.fill === "string" ? layer.fill : "#FFFFFF",
+      opacity: clamp01(layer.opacity, 1),
+      strokeColor: typeof layer.strokeColor === "string" ? layer.strokeColor : undefined,
+      strokeWidth: typeof layer.strokeWidth === "number" ? clamp(layer.strokeWidth, 0, 24) : undefined,
+      strokeOpacity: typeof layer.strokeOpacity === "number" ? clamp01(layer.strokeOpacity, 1) : undefined,
+    })),
     textLayers: (source.textLayers || []).map((layer, index) => normalizeTextLayer(layer, index, brandIdentity)),
     logoLayer: normalizeLogoLayer(source.logoLayer, brandIdentity),
     gradient: normalizeGradientLayer(source.gradient, brandIdentity),
@@ -522,6 +553,7 @@ export function createDefaultComposition(
       cropArea: DEFAULT_CROP,
       focalPoint: DEFAULT_FOCAL_POINT,
     },
+    shapeLayers: [],
     textLayers: [
       {
         id: "main",
