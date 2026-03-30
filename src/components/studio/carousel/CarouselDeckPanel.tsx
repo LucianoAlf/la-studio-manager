@@ -6,6 +6,7 @@ import { CarouselThumb } from "./CarouselThumb";
 interface Props {
   project: CarouselProject;
   activeSlideIndex: number;
+  generatingSlideIndex?: number | null;
   onSelectSlide: (index: number) => void;
   onAddSlide: () => void;
   onRemoveSlide: (index: number) => void;
@@ -21,6 +22,7 @@ interface Props {
 export function CarouselDeckPanel({
   project,
   activeSlideIndex,
+  generatingSlideIndex,
   onSelectSlide,
   onAddSlide,
   onRemoveSlide,
@@ -88,6 +90,7 @@ export function CarouselDeckPanel({
                 active={activeSlideIndex === index}
                 onClick={() => onSelectSlide(index)}
                 isCover={project.coverSlideIndex === index}
+                isGenerating={generatingSlideIndex === index}
                 renderWidth={210}
                 className="w-full"
               />

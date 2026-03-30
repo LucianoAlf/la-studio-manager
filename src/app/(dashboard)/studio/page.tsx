@@ -831,6 +831,7 @@ export default function StudioPage() {
   const [carouselSlideCount, setCarouselSlideCount] = useState(6);
   const [carouselCta, setCarouselCta] = useState("Agende uma aula experimental");
   const [activeCarouselSlideIndex, setActiveCarouselSlideIndex] = useState(0);
+  const [generatingSlideIndex, setGeneratingSlideIndex] = useState<number | null>(null);
   const [captionVariations, setCaptionVariations] = useState<Array<{ tone: string; phrase: string; caption: string; hashtags: string[] }>>([]);
   const [selectedCaptionIdx, setSelectedCaptionIdx] = useState(-1);
   const [layerComposition, setLayerComposition] = useState<import("@/lib/types/layer-composition").LayerComposition | null>(null);
@@ -3059,7 +3060,82 @@ export default function StudioPage() {
       setNinaPreviewUrl(photoUrl);
       setNinaHashtags(hashtags);
       setNinaGenerationMethod(outlineSlides.length > 0 ? "carousel_outline" : "carousel_project");
-      toast.success("Deck gerado com sucesso!");
+      toast.success("Outline gerado! Gerando imagens dos slides...");
+
+      // ── Generate slide images one by one via Claude + Browserless ──
+      const biColors = {
+        primary: brandIdentity?.color_primary || "#E8185A",
+        secondary: brandIdentity?.color_secondary || "#0E0E0E",
+        accent: brandIdentity?.color_accent || "#F5F2EE",
+      };
+      const biPayload = {
+        brand_name: brandIdentity?.brand_name || (brand === "la_music_kids" ? "LA Music Kids" : "LA Music School"),
+        colors: biColors,
+        font_display: brandIdentity?.font_display || "Bebas Neue",
+        font_body: brandIdentity?.font_body || "DM Sans",
+      };
+      const logoUrlForSlides = brandIdentity?.logo_primary_url || brandIdentity?.logo_icon_url || null;
+
+      let styleReferenceHtml = "";
+
+      for (let si = 0; si < project.slides.length; si++) {
+        setGeneratingSlideIndex(si);
+        const s = project.slides[si];
+        try {
+          const slidePayload: Record<string, unknown> = {
+            role: s.role,
+            layout_type: s.layoutType,
+            headline: s.headline || "",
+            body: s.body || "",
+            cta: s.cta || "",
+            photo_subject: s.summary || "",
+          };
+
+          // Add style reference for slides after the first
+          const extraBody: Record<string, unknown> = {};
+          if (si > 0 && styleReferenceHtml) {
+            extraBody.style_reference_html = styleReferenceHtml.substring(0, 2000);
+          }
+
+          const { data: slideData, error: slideErr } = await supabase.functions.invoke("nina-create-post", {
+            body: {
+              mode: "carousel_slides",
+              brand,
+              project_id: project.id,
+              engine: "claude",
+              brand_identity: biPayload,
+              logo_url: logoUrlForSlides,
+              photo_url: s.photoUrl || photoUrl || null,
+              slides: [slidePayload],
+              ...extraBody,
+            },
+          });
+
+          if (!slideErr && slideData?.slides?.[0]?.render_url) {
+            const renderUrl = slideData.slides[0].render_url;
+            // Save first slide HTML for style reference (from Claude response if available)
+            if (si === 0 && slideData.slides[0].html) {
+              styleReferenceHtml = slideData.slides[0].html;
+            }
+            setCarouselProject((prev) => {
+              if (!prev) return prev;
+              return {
+                ...prev,
+                slides: prev.slides.map((ps, idx) =>
+                  idx === si ? { ...ps, renderUrl } : ps
+                ),
+              };
+            });
+            console.log(`[STUDIO] Slide ${si + 1} rendered: ${renderUrl}`);
+          } else {
+            console.error(`[STUDIO] Slide ${si} failed:`, slideErr, slideData);
+          }
+        } catch (e) {
+          console.error(`[STUDIO] Slide ${si} error:`, e);
+        }
+      }
+      setGeneratingSlideIndex(null);
+      toast.success("Carrossel gerado com sucesso!");
     } catch (error) {
       console.error("[STUDIO][CAROUSEL] generate error:", error);
       toast.error("Falha ao gerar o carrossel.");
@@ -4241,6 +4317,7 @@ export default function StudioPage() {
         onActiveSlideIndexChange={setActiveCarouselSlideIndex}
         onGenerate={() => void handleGenerateCarouselDeck()}
         isGenerating={isGeneratingWithNina}
+        generatingSlideIndex={generatingSlideIndex}
         onProjectChange={setCarouselProject}
         onThemeChange={handleApplyCarouselTheme}
         onApplyBrandingToAll={handleApplyBrandingToCarousel}

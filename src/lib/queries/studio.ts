@@ -259,6 +259,18 @@ export async function getPhotoAssets(
 export async function getBirthdaysOverview(brand: StudioBrand): Promise<{ upcoming: PhotoAsset[]; allAssets: PhotoAsset[]; history: BirthdayLogItem[] }> {
   const supabase = getSupabase();
 
+  const BIRTHDAY_TEST_NAME_BLOCKLIST = new Set([
+    "manuela souza soares",
+    "maria eduarda pery natividade",
+  ]);
+
+  const normalizePersonName = (value: string | null | undefined): string =>
+    (value ?? "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .trim()
+      .toLowerCase();
+
   const [assetsResp, historyResp] = await Promise.all([
     supabase
       .from("assets" as never)
@@ -293,7 +305,17 @@ export async function getBirthdaysOverview(brand: StudioBrand): Promise<{ upcomi
   const upcomingLimit = new Date(todayStart);
   upcomingLimit.setDate(todayStart.getDate() + 7);
 
-  const allAssets = (assetsResp.data ?? []) as unknown as PhotoAsset[];
+  const allAssets = ((assetsResp.data ?? []) as unknown as PhotoAsset[]).map((item) => {
+    const normalizedName = normalizePersonName(item.person_name);
+    if (BIRTHDAY_TEST_NAME_BLOCKLIST.has(normalizedName)) {
+      return {
+        ...item,
+        file_url: "",
+      };
+    }
+
+    return item;
+  });
   console.log(`[BIRTHDAYS] Total assets fetched: ${allAssets.length}`);
 
   const upcoming = allAssets

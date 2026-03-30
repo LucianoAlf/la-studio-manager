@@ -152,6 +152,358 @@ Deno.serve(async (req: Request) => {
       })
     }
 
+    // =========================================================
+    // MODE: carousel_slides — Claude HTML → Browserless → PNG (ou Gemini fallback)
+    // =========================================================
+    if (mode === 'carousel_slides') {
+      const { slides: slidesDef, brand_identity, photo_url, logo_url, project_id, engine = 'claude', style_reference_html } = body
+
+      if (!slidesDef || !Array.isArray(slidesDef) || slidesDef.length === 0) {
+        return json({ success: false, error: 'slides array is required' }, 400)
+      }
+
+      const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY')
+      const useClaude = engine === 'claude' && !!ANTHROPIC_KEY
+
+      console.log(`[NINA] Generating ${slidesDef.length} carousel slides via ${useClaude ? 'Claude+Browserless' : 'Gemini'}...`)
+
+      const results: Array<{ index: number; render_url: string | null; role: string; html?: string; error?: string }> = []
+
+      // For Gemini engine: preload photo/logo as base64
+      let photoB64: { data: string; mime: string } | null = null
+      let logoB64: { data: string; mime: string } | null = null
+      if (!useClaude) {
+        photoB64 = photo_url ? await fetchAsBase64(photo_url) : null
+        logoB64 = logo_url ? await fetchAsBase64(logo_url) : null
+      }
+
+      for (let i = 0; i < slidesDef.length; i++) {
+        const slide = slidesDef[i]
+        const { role, headline, body: bodyText, cta, layout_type } = slide
+        console.log(`[NINA] Slide ${i + 1}/${slidesDef.length}: ${role} (${useClaude ? 'claude' : 'gemini'})`)
+
+        try {
+          let imageBytes: Uint8Array | null = null
+          let imgContentType = 'image/jpeg'
+          let generatedHtml = ''
+
+          if (useClaude) {
+            // ── Detect if slide needs a Gemini-generated photo ──
+            const PHOTO_LAYOUTS = ['cover-split', 'photo-overlay', 'photo-dark-split']
+            const needsPhoto = PHOTO_LAYOUTS.includes(layout_type || '')
+            let slidePhotoUrl: string | null = photo_url || null
+
+            if (needsPhoto && !slidePhotoUrl) {
+              // Generate cinematic photo via Gemini
+              console.log(`[NINA] Slide ${i}: generating photo via Gemini for ${layout_type}`)
+              const photoSubject = slide.photo_subject || 'young musician playing instrument, cinematic, dramatic lighting'
+              const geminiPhotoPrompt = `Cinematic photograph for an Instagram carousel slide.
+Style: editorial, dramatic lighting, shallow depth of field, 85mm lens, f/1.8.
+Subject: ${photoSubject}
+NO text. NO logos. NO UI elements. NO watermarks. Pure photographic image.
+Aspect ratio: 4:5 (1080x1350). Professional photography quality.`
+
+              try {
+                const gemPhotoRes = await fetch(
+                  `https://generativelanguage.googleapis.com/v1beta/models/${IMAGE_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
+                  {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      contents: [{ parts: [{ text: geminiPhotoPrompt }] }],
+                      generationConfig: { responseModalities: ['IMAGE', 'TEXT'] },
+                    }),
+                  }
+                )
+                if (gemPhotoRes.ok) {
+                  const gemPhotoData = await gemPhotoRes.json()
+                  let photoB64Data: string | null = null
+                  let photoMime = 'image/jpeg'
+                  for (const part of (gemPhotoData.candidates?.[0]?.content?.parts || [])) {
+                    if (part.inlineData?.data) { photoB64Data = part.inlineData.data; photoMime = part.inlineData.mimeType || 'image/jpeg'; break }
+                  }
+                  if (photoB64Data) {
+                    const photoBytes = Uint8Array.from(atob(photoB64Data), c => c.charCodeAt(0))
+                    const photoExt = photoMime.includes('png') ? 'png' : 'jpg'
+                    const photoPath = `carousel/${brand}/${project_id || Date.now()}/photo-${i}.${photoExt}`
+                    const { error: photoUpErr } = await supabase.storage.from('posts').upload(photoPath, photoBytes, { contentType: photoMime, upsert: true })
+                    if (!photoUpErr) {
+                      const { data: photoUrlData } = supabase.storage.from('posts').getPublicUrl(photoPath)
+                      slidePhotoUrl = photoUrlData.publicUrl
+                      console.log(`[NINA] Slide ${i} photo generated: ${slidePhotoUrl}`)
+                    }
+                  }
+                }
+              } catch (e) {
+                console.error(`[NINA] Slide ${i} Gemini photo failed:`, e)
+              }
+            }
+
+            // ── Build layout instructions based on layout_type ──
+            let layoutInstruction = ''
+            if (needsPhoto && slidePhotoUrl) {
+              if (layout_type === 'cover-split') {
+                layoutInstruction = `PHOTO URL (use as <img>): ${slidePhotoUrl}
+LAYOUT: Split layout. Photo occupies RIGHT half (50-55%). LEFT half has off-white (#F5F2EE) background with text.
+Photo must be full-height, object-fit: cover. Soft gradient mask at border between text and photo.
+Decorative color accent at bottom corners.`
+              } else if (layout_type === 'photo-overlay') {
+                layoutInstruction = `PHOTO URL (use as background-image): ${slidePhotoUrl}
+LAYOUT: Photo as full background with dark overlay (rgba(0,0,0,0.6)).
+White text on top. Optional glass-morphism card at bottom for key info.`
+              } else if (layout_type === 'photo-dark-split') {
+                layoutInstruction = `PHOTO URL (use as <img>): ${slidePhotoUrl}
+LAYOUT: Dark (#0E0E0E) background. Photo on LEFT 46% with pink right border (4px solid ${(brand_identity?.colors?.primary) || '#E8185A'}).
+Text on RIGHT side: tip label in pink, big Bebas headline, body text below.`
+              }
+            }
+
+            // ── Cover slide: use fixed template (skip Claude) ──
+            if (role === 'cover' && (layout_type === 'cover-hero' || !layout_type)) {
+              console.log(`[NINA] Slide ${i}: using fixed cover template`)
+              const bi = brand_identity || {}
+              const primaryColor = bi.colors?.primary || '#E8185A'
+              // Split headline into lines: one word per line, max 3 lines
+              const words = (headline || 'TÍTULO').split(/\s+/)
+              const headlineHtml = words.map((w: string) => w.toUpperCase()).join('<br>')
+              const preText = (bodyText || '').toUpperCase().substring(0, 40)
+              const subText = bodyText || ''
+              const slideCount = slidesDef.length
+
+              const coverHtml = `<!DOCTYPE html>
+<html><head>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{width:1080px;height:1350px;background:#0E0E0E;font-family:'DM Sans',sans-serif;position:relative;overflow:hidden}
+.stripe{position:absolute;top:0;right:0;width:420px;height:100%;background:${primaryColor};clip-path:polygon(30% 0,100% 0,100% 100%,0% 100%)}
+.bg-num{position:absolute;top:-40px;right:60px;font-family:'Bebas Neue',sans-serif;font-size:520px;line-height:1;color:rgba(255,255,255,0.05);z-index:1;user-select:none}
+.tag{position:absolute;top:64px;left:64px;font-size:22px;font-weight:500;letter-spacing:6px;text-transform:uppercase;color:rgba(255,255,255,0.35);z-index:2}
+.headline{position:absolute;bottom:200px;left:64px;right:460px;z-index:2}
+.headline .pre{font-size:28px;font-weight:500;letter-spacing:2px;color:${primaryColor};text-transform:uppercase;margin-bottom:8px}
+.headline h1{font-family:'Bebas Neue',sans-serif;font-size:140px;line-height:0.88;color:white;letter-spacing:2px;word-break:keep-all;overflow-wrap:normal}
+.sub{position:absolute;bottom:120px;left:64px;font-size:24px;color:rgba(255,255,255,0.45);font-weight:300;z-index:2}
+.arrow{position:absolute;bottom:100px;right:80px;width:72px;height:72px;border:2px solid rgba(255,255,255,0.25);border-radius:50%;z-index:2;display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,0.4);font-size:28px}
+</style></head>
+<body>
+  <div class="stripe"></div>
+  <div class="bg-num">${slideCount}</div>
+  <div class="tag">DICAS DE TÉCNICA</div>
+  <div class="headline">
+    <div class="pre">${preText}</div>
+    <h1>${headlineHtml}</h1>
+  </div>
+  <div class="sub">${subText}</div>
+  <div class="arrow">→</div>
+</body></html>`
+
+              // Render via Browserless
+              const BROWSERLESS_KEY_COVER = Deno.env.get('BROWSERLESS_API_KEY') || ''
+              const bRes = await fetch(`https://chrome.browserless.io/screenshot?token=${BROWSERLESS_KEY_COVER}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  html: coverHtml,
+                  options: { type: 'jpeg', quality: 92, fullPage: false },
+                  viewport: { width: 1080, height: 1350, deviceScaleFactor: 1 },
+                }),
+              })
+
+              if (!bRes.ok) {
+                const err = await bRes.text()
+                console.error(`[NINA] Slide ${i} cover Browserless error:`, bRes.status, err)
+                results.push({ index: i, render_url: null, role, error: `Browserless ${bRes.status}` })
+                continue
+              }
+
+              const coverBuf = await bRes.arrayBuffer()
+              imageBytes = new Uint8Array(coverBuf)
+              imgContentType = 'image/jpeg'
+              generatedHtml = coverHtml
+              console.log(`[NINA] Slide ${i} cover rendered (${imageBytes.length} bytes)`)
+
+            } else {
+            // ── Non-cover slides: Claude generates HTML ──
+            const bi = brand_identity || {}
+            const colors = bi.colors || {}
+
+            const claudePrompt = `Generate a single Instagram carousel slide as complete self-contained HTML/CSS.
+Page dimensions: exactly 1080x1350px.
+Import Google Fonts at top: Bebas Neue (headlines) and DM Sans (body).
+${needsPhoto && slidePhotoUrl ? 'External images allowed ONLY for the provided photo URL.' : 'No external images or JS.'} No markdown. Output ONLY raw HTML starting with <!DOCTYPE html>.
+
+BRAND: ${bi.brand_name || 'LA Music School'}
+PRIMARY COLOR: ${colors.primary || '#E8185A'}
+DARK: #0E0E0E
+OFF-WHITE: #F5F2EE
+HEADLINE FONT: Bebas Neue
+BODY FONT: DM Sans
+
+SLIDE ${i + 1} of ${slidesDef.length} — ROLE: ${role} — LAYOUT: ${layout_type}
+HEADLINE: "${headline || ''}"
+${bodyText ? `BODY: "${bodyText}"` : ''}
+${cta ? `CTA: "${cta}"` : ''}
+${logo_url ? `LOGO URL (use as <img> bottom of slide): ${logo_url}` : ''}
+${layoutInstruction || ''}
+
+DESIGN RULES:
+- Alternate backgrounds: odd slides use #0E0E0E (dark), even slides use #F5F2EE (light)
+- Slide 1 (cover): dark bg + pink diagonal stripe (clip-path) + giant Bebas headline
+- Content slides: clean layout, large bold headline, readable body text
+- CTA slide: solid pink (${colors.primary || '#E8185A'}) background, white text, white pill button
+- NO random abstract icons. NO lorem ipsum. Portuguese text only.
+- Geometric shapes only (rectangles, lines, circles) as decorative elements
+- Bebas Neue for all headlines (huge, dominant). DM Sans for body (light weight).
+- Logo small at bottom-left or bottom-right
+- Style: editorial magazine, premium, minimal. Like a design agency made it.
+${style_reference_html ? `\nSTYLE REFERENCE — match this slide's visual identity exactly:\n--- REFERENCE HTML (first 2000 chars) ---\n${String(style_reference_html).substring(0, 2000)}\n---\nKeep: same fonts, same weights, same colors, same geometric decoration style, same padding/spacing.\nVary ONLY: background color (alternate dark/light), layout, and content.` : ''}`
+
+            const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
+              method: 'POST',
+              headers: {
+                'x-api-key': ANTHROPIC_KEY!,
+                'anthropic-version': '2023-06-01',
+                'content-type': 'application/json',
+              },
+              body: JSON.stringify({
+                model: 'claude-sonnet-4-6',
+                max_tokens: 4096,
+                messages: [{ role: 'user', content: claudePrompt }],
+              }),
+            })
+
+            if (!claudeRes.ok) {
+              const err = await claudeRes.text()
+              console.error(`[NINA] Slide ${i} Claude error:`, claudeRes.status, err)
+              results.push({ index: i, render_url: null, role, error: `Claude ${claudeRes.status}` })
+              continue
+            }
+
+            const claudeData = await claudeRes.json()
+            let slideHtml = claudeData.content?.[0]?.text || ''
+
+            // Strip markdown fences if present
+            slideHtml = slideHtml.replace(/^```html?\n?/i, '').replace(/\n?```$/i, '').trim()
+
+            if (!slideHtml.includes('<!DOCTYPE') && !slideHtml.includes('<html')) {
+              console.error(`[NINA] Slide ${i}: Claude did not return valid HTML`)
+              results.push({ index: i, render_url: null, role, error: 'Invalid HTML from Claude' })
+              continue
+            }
+
+            generatedHtml = slideHtml
+            console.log(`[NINA] Slide ${i} HTML generated (${slideHtml.length} chars)`)
+
+            // ── Browserless renders HTML → JPEG ──
+            const BROWSERLESS_KEY = Deno.env.get('BROWSERLESS_API_KEY') || ''
+            const browserlessRes = await fetch(`https://chrome.browserless.io/screenshot?token=${BROWSERLESS_KEY}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                html: slideHtml,
+                options: { type: 'jpeg', quality: 92, fullPage: false },
+                viewport: { width: 1080, height: 1350, deviceScaleFactor: 1 },
+              }),
+            })
+
+            if (!browserlessRes.ok) {
+              const err = await browserlessRes.text()
+              console.error(`[NINA] Slide ${i} Browserless error:`, browserlessRes.status, err)
+              results.push({ index: i, render_url: null, role, error: `Browserless ${browserlessRes.status}` })
+              continue
+            }
+
+            const imgBuf = await browserlessRes.arrayBuffer()
+            imageBytes = new Uint8Array(imgBuf)
+            imgContentType = 'image/jpeg'
+            console.log(`[NINA] Slide ${i} screenshot done (${imageBytes.length} bytes)`)
+
+            } // end of else (non-cover Claude slides)
+
+          } else {
+            // ── Gemini generates image directly ──
+            const prompt = buildCarouselSlidePrompt({
+              slide, index: i, total: slidesDef.length,
+              brand_identity, photo_url, logo_url,
+            })
+
+            const parts: unknown[] = [{ text: prompt }]
+            if (photoB64) parts.push({ inlineData: { mimeType: photoB64.mime, data: photoB64.data } })
+            if (logoB64) parts.push({ inlineData: { mimeType: logoB64.mime, data: logoB64.data } })
+
+            const imgRes = await fetch(
+              `https://generativelanguage.googleapis.com/v1beta/models/${IMAGE_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  contents: [{ parts }],
+                  generationConfig: { responseModalities: ['IMAGE', 'TEXT'] },
+                }),
+              }
+            )
+
+            if (!imgRes.ok) {
+              const err = await imgRes.text()
+              console.error(`[NINA] Slide ${i} Gemini error:`, imgRes.status, err)
+              results.push({ index: i, render_url: null, role, error: `Gemini ${imgRes.status}` })
+              continue
+            }
+
+            const imgData = await imgRes.json()
+            let base64: string | null = null
+            let mime = 'image/png'
+            for (const part of (imgData.candidates?.[0]?.content?.parts || [])) {
+              if (part.inlineData?.data) { base64 = part.inlineData.data; mime = part.inlineData.mimeType || 'image/png'; break }
+            }
+
+            if (!base64) {
+              results.push({ index: i, render_url: null, role, error: 'No image from Gemini' })
+              continue
+            }
+
+            imageBytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0))
+            imgContentType = mime
+          }
+
+          // ── Upload to storage ──
+          if (!imageBytes) {
+            results.push({ index: i, render_url: null, role, error: 'No image data' })
+            continue
+          }
+
+          const ext = imgContentType.includes('png') ? 'png' : 'jpg'
+          const fileName = `carousel/${brand}/${project_id || Date.now()}/slide-${i}.${ext}`
+
+          const { error: upErr } = await supabase.storage.from('posts').upload(fileName, imageBytes, { contentType: imgContentType, upsert: true })
+          if (upErr) {
+            console.error(`[NINA] Slide ${i} upload error:`, upErr.message)
+            results.push({ index: i, render_url: null, role, error: upErr.message })
+            continue
+          }
+
+          const { data: urlData } = supabase.storage.from('posts').getPublicUrl(fileName)
+          console.log(`[NINA] Slide ${i} done: ${urlData.publicUrl}`)
+          results.push({ index: i, render_url: urlData.publicUrl, role, ...(generatedHtml ? { html: generatedHtml } : {}) })
+
+        } catch (e) {
+          console.error(`[NINA] Slide ${i} failed:`, e)
+          results.push({ index: i, render_url: null, role, error: String(e) })
+        }
+      }
+
+      const generated = results.filter(r => r.render_url).length
+      console.log(`[NINA] Carousel done: ${generated}/${slidesDef.length} slides`)
+
+      return json({
+        success: generated > 0,
+        slides: results,
+        mode_used: mode,
+        generation_mode: 'carousel_slides',
+        generation_method: useClaude ? 'claude_html_browserless' : 'gemini_image',
+      })
+    }
+
     // Resolve reference image URL
     let refUrl = reference_image_url
     if (!refUrl && event_asset_id) {
@@ -577,6 +929,33 @@ function buildFallbackCarouselOutline(p: any): { slides: Array<Record<string, un
     caption: `${context}\n\nSalve este carrossel para rever e compartilhe com quem vai curtir esse universo musical.`,
     hashtags: ['#Musica', '#EscolaDeMusica', '#InstagramCarousel'],
   }
+}
+
+function buildCarouselSlidePrompt(p: { slide: any; index: number; total: number; brand_identity?: any; photo_url?: string; logo_url?: string }): string {
+  const { slide, index, total, brand_identity, photo_url, logo_url } = p
+  const { role, headline, body, cta, layout_type } = slide || {}
+  const { brand_name, colors, font_display, font_body } = brand_identity || {}
+
+  return `Create a professional Instagram carousel slide image, 1080x1350px (4:5 ratio).
+
+BRAND: ${brand_name || 'LA Music School'}
+PRIMARY COLOR: ${colors?.primary || '#14B8A6'}
+SECONDARY COLOR: ${colors?.secondary || '#0EA5E9'}
+ACCENT COLOR: ${colors?.accent || '#F59E0B'}
+HEADLINE FONT: ${font_display || 'Montserrat'}
+BODY FONT: ${font_body || 'Inter'}
+
+SLIDE ${index + 1} OF ${total} — ROLE: ${role || 'content'}
+LAYOUT: ${layout_type || 'headline-body'}
+HEADLINE: "${headline || ''}"
+${body ? `BODY TEXT: "${body}"` : ''}
+${cta ? `CTA: "${cta}"` : ''}
+
+${photo_url ? 'Use the provided photo as a cinematic background or integrated element.' : 'Text-focused slide. Use brand colors, geometric shapes, typography. NO photos of people.'}
+${logo_url ? 'Include brand logo small at the bottom.' : ''}
+
+STYLE: Clean, modern, editorial. Magazine-quality typography.
+Professional Instagram carousel. No lorem ipsum. Portuguese text only.`
 }
 
 function buildImagePrompt(p: any): string {

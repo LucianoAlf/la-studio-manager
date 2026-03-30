@@ -10,6 +10,7 @@ interface Props {
   active?: boolean;
   onClick?: () => void;
   isCover?: boolean;
+  isGenerating?: boolean;
   renderWidth?: number;
   className?: string;
 }
@@ -19,6 +20,7 @@ export function CarouselThumb({
   active = false,
   onClick,
   isCover = false,
+  isGenerating = false,
   renderWidth = 220,
   className = "",
 }: Props) {
@@ -91,8 +93,19 @@ export function CarouselThumb({
           : "border-slate-800 bg-slate-950/60 hover:border-slate-600 hover:bg-slate-900/70"
       } ${className}`}
     >
-      <div className="overflow-hidden rounded-xl border border-slate-800 bg-slate-950">
-        <canvas ref={canvasRef} className="block w-full" />
+      <div className="overflow-hidden rounded-xl border border-slate-800 bg-slate-950 relative">
+        {slide.renderUrl ? (
+          <img src={slide.renderUrl} alt={`Slide ${slide.index + 1}`} className="block w-full" style={{ aspectRatio: "4/5" }} />
+        ) : isGenerating ? (
+          <div className="flex items-center justify-center bg-slate-950" style={{ aspectRatio: "4/5" }}>
+            <div className="flex flex-col items-center gap-2">
+              <div className="h-6 w-6 animate-spin rounded-full border-2 border-cyan-500 border-t-transparent" />
+              <span className="text-[10px] text-cyan-400">Gerando...</span>
+            </div>
+          </div>
+        ) : (
+          <canvas ref={canvasRef} className="block w-full" />
+        )}
       </div>
       <div className="mt-2 space-y-1">
         <div className="flex items-center justify-between">

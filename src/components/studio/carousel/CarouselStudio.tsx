@@ -38,6 +38,7 @@ interface Props {
   onActiveSlideIndexChange: (index: number) => void;
   onGenerate: () => void;
   isGenerating: boolean;
+  generatingSlideIndex?: number | null;
   onProjectChange: (project: CarouselProject | null) => void;
   onThemeChange: (themePatch: Partial<CarouselTheme>) => void;
   onApplyBrandingToAll: () => void;
@@ -88,6 +89,7 @@ export function CarouselStudio({
   onActiveSlideIndexChange,
   onGenerate,
   isGenerating,
+  generatingSlideIndex,
   onProjectChange,
   onThemeChange,
   onApplyBrandingToAll,
@@ -190,6 +192,7 @@ export function CarouselStudio({
           <CarouselDeckPanel
             project={project}
             activeSlideIndex={activeSlideIndex}
+            generatingSlideIndex={generatingSlideIndex}
             onSelectSlide={onActiveSlideIndexChange}
             onAddSlide={onAddSlide}
             onRemoveSlide={onRemoveSlide}
