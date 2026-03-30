@@ -1,0 +1,1206 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nova Página — Carrossel Studio</title>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,700&display=swap" rel="stylesheet">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --bg: #0F172A;
+  --surface: #1E293B;
+  --surface2: #263349;
+  --border: #334155;
+  --teal: #14B8A6;
+  --teal-dim: rgba(20,184,166,0.12);
+  --orange: #F97316;
+  --pink: #E8185A;
+  --text: #F1F5F9;
+  --muted: #64748B;
+  --muted2: #94A3B8;
+}
+
+body {
+  background: var(--bg);
+  font-family: 'DM Sans', sans-serif;
+  color: var(--text);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ═══════════════════════════════════
+   TOPBAR
+═══════════════════════════════════ */
+.topbar {
+  height: 56px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  flex-shrink: 0;
+}
+
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.back-btn {
+  width: 32px; height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  color: var(--muted2);
+}
+
+.back-btn svg { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 2; }
+
+.page-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.page-title .icon {
+  width: 28px; height: 28px;
+  background: var(--teal-dim);
+  border-radius: 7px;
+  display: flex; align-items: center; justify-content: center;
+}
+
+.page-title .icon svg { width: 14px; height: 14px; stroke: var(--teal); fill: none; stroke-width: 2; }
+.page-title h1 { font-size: 15px; font-weight: 600; color: var(--text); }
+
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.breadcrumb .sep { color: var(--border); }
+.breadcrumb .current { color: var(--teal); }
+
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.btn {
+  display: flex; align-items: center; gap: 6px;
+  padding: 7px 14px;
+  border-radius: 8px;
+  font-size: 13px; font-weight: 500;
+  cursor: pointer;
+  border: none;
+  white-space: nowrap;
+}
+
+.btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--muted2); }
+.btn-teal { background: var(--teal); color: #0F172A; font-weight: 700; }
+.btn-orange { background: var(--orange); color: white; font-weight: 700; }
+.btn svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2; }
+
+/* ═══════════════════════════════════
+   LAYOUT PRINCIPAL — 3 COLUNAS
+═══════════════════════════════════ */
+.main {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 300px 1fr 320px;
+  overflow: hidden;
+  height: calc(100vh - 56px);
+}
+
+/* ═══════════════════════════════════
+   COL 1 — BRIEF / CONFIGURAÇÃO
+═══════════════════════════════════ */
+.col-brief {
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.col-brief::-webkit-scrollbar { width: 4px; }
+.col-brief::-webkit-scrollbar-track { background: transparent; }
+.col-brief::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+.section {
+  padding: 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.section-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 14px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.section-title svg { width: 12px; height: 12px; stroke: currentColor; fill: none; stroke-width: 2; }
+
+.field { margin-bottom: 12px; }
+.field label { display: block; font-size: 11px; font-weight: 500; color: var(--muted2); margin-bottom: 5px; }
+
+.input, .select, .textarea {
+  width: 100%;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-family: 'DM Sans', sans-serif;
+  font-size: 13px;
+  padding: 8px 12px;
+  outline: none;
+}
+
+.input:focus, .select:focus, .textarea:focus {
+  border-color: var(--teal);
+}
+
+.textarea { height: 80px; resize: none; line-height: 1.5; }
+
+.select { appearance: none; cursor: pointer; }
+
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+
+/* Engine selector */
+.engine-selector {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.engine-opt {
+  padding: 8px 10px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: center;
+}
+
+.engine-opt.active {
+  border-color: var(--teal);
+  background: var(--teal-dim);
+}
+
+.engine-opt .e-name { font-size: 12px; font-weight: 600; color: var(--text); }
+.engine-opt.active .e-name { color: var(--teal); }
+.engine-opt .e-desc { font-size: 10px; color: var(--muted); margin-top: 2px; }
+
+/* Slide count selector */
+.slide-count {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.count-pill {
+  padding: 5px 12px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 100px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  color: var(--muted2);
+}
+
+.count-pill.active {
+  border-color: var(--teal);
+  background: var(--teal-dim);
+  color: var(--teal);
+}
+
+/* Gerar button */
+.btn-generate {
+  width: calc(100% - 40px);
+  margin: 16px 20px;
+  padding: 14px;
+  background: var(--teal);
+  color: #0F172A;
+  font-weight: 700;
+  font-size: 14px;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.btn-generate svg { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 2.5; }
+
+/* Photo toggle */
+.photo-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 8px;
+}
+
+.photo-toggle .pt-text .pt-label { font-size: 12px; font-weight: 500; color: var(--text); }
+.photo-toggle .pt-text .pt-sub { font-size: 10px; color: var(--muted); margin-top: 1px; }
+
+.toggle {
+  width: 36px; height: 20px;
+  background: var(--border);
+  border-radius: 100px;
+  position: relative;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.toggle.on { background: var(--teal); }
+.toggle::after {
+  content: '';
+  position: absolute;
+  top: 3px; left: 3px;
+  width: 14px; height: 14px;
+  background: white;
+  border-radius: 50%;
+  transition: left 0.2s;
+}
+.toggle.on::after { left: 19px; }
+
+/* ═══════════════════════════════════
+   COL 2 — DECK / SLIDES
+═══════════════════════════════════ */
+.col-deck {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.deck-header {
+  height: 52px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  flex-shrink: 0;
+}
+
+.deck-info {}
+.deck-info .deck-name { font-size: 14px; font-weight: 600; }
+.deck-info .deck-meta { font-size: 11px; color: var(--muted); margin-top: 1px; }
+
+.deck-actions { display: flex; gap: 8px; }
+
+/* Progress bar */
+.progress-bar {
+  height: 3px;
+  background: var(--border);
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.progress-bar .fill {
+  height: 100%;
+  background: var(--teal);
+  width: 60%;
+  animation: pulse-width 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-width {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.progress-bar.hidden { display: none; }
+
+/* Status bar */
+.status-bar {
+  height: 32px;
+  background: rgba(20,184,166,0.08);
+  border-bottom: 1px solid rgba(20,184,166,0.2);
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.status-bar .spinner {
+  width: 14px; height: 14px;
+  border: 2px solid rgba(20,184,166,0.3);
+  border-top-color: var(--teal);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.status-bar .status-text { font-size: 12px; color: var(--teal); font-weight: 500; }
+
+/* Grid de slides */
+.slides-grid {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 16px;
+  align-content: start;
+}
+
+.slides-grid::-webkit-scrollbar { width: 4px; }
+.slides-grid::-webkit-scrollbar-track { background: transparent; }
+.slides-grid::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+/* Slide card */
+.slide-card {
+  cursor: pointer;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 2px solid transparent;
+  transition: border-color 0.15s;
+  background: var(--surface);
+}
+
+.slide-card:hover { border-color: var(--border); }
+.slide-card.active { border-color: var(--teal); }
+
+.slide-thumb {
+  aspect-ratio: 4/5;
+  background: var(--surface2);
+  position: relative;
+  overflow: hidden;
+}
+
+/* Imagem real do slide */
+.slide-thumb img {
+  width: 100%; height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* Estado gerando */
+.slide-thumb.generating {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.slide-thumb.generating .gen-spinner {
+  width: 24px; height: 24px;
+  border: 2px solid var(--border);
+  border-top-color: var(--teal);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+.slide-thumb.generating .gen-text { font-size: 10px; color: var(--muted); }
+
+/* Estado vazio */
+.slide-thumb.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.slide-thumb.empty svg { width: 28px; height: 28px; stroke: var(--border); fill: none; stroke-width: 1.5; }
+
+/* Role badge */
+.role-badge {
+  position: absolute;
+  top: 6px; right: 6px;
+  background: rgba(0,0,0,0.7);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: rgba(255,255,255,0.7);
+}
+
+.role-badge.cover { background: rgba(20,184,166,0.8); color: white; }
+.role-badge.cta { background: rgba(249,115,22,0.8); color: white; }
+
+/* Slide info */
+.slide-info {
+  padding: 10px 10px 8px;
+}
+
+.slide-num-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 3px;
+}
+
+.slide-num { font-size: 10px; color: var(--muted); font-weight: 500; }
+.slide-role { font-size: 10px; color: var(--muted); }
+
+.slide-summary { font-size: 11px; color: var(--muted2); line-height: 1.4; }
+
+/* Ações do slide */
+.slide-actions {
+  display: flex;
+  gap: 4px;
+  padding: 0 8px 8px;
+}
+
+.slide-action {
+  flex: 1;
+  padding: 5px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--muted2);
+  cursor: pointer;
+  text-align: center;
+}
+
+.slide-action:hover { border-color: var(--teal); color: var(--teal); }
+.slide-action.regen:hover { border-color: var(--orange); color: var(--orange); }
+
+/* Add slide */
+.add-slide-card {
+  aspect-ratio: 4/5;
+  border: 2px dashed var(--border);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  cursor: pointer;
+  color: var(--muted);
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.add-slide-card:hover { border-color: var(--teal); color: var(--teal); }
+.add-slide-card svg { width: 24px; height: 24px; stroke: currentColor; fill: none; stroke-width: 1.5; }
+.add-slide-card span { font-size: 11px; font-weight: 500; }
+
+/* ═══════════════════════════════════
+   COL 3 — EDITOR DO SLIDE ATIVO
+═══════════════════════════════════ */
+.col-editor {
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.editor-header {
+  height: 52px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  flex-shrink: 0;
+}
+
+.editor-title { font-size: 12px; font-weight: 600; color: var(--muted2); }
+.editor-subtitle { font-size: 10px; color: var(--muted); margin-top: 1px; }
+
+/* Preview grande */
+.slide-preview {
+  flex-shrink: 0;
+  padding: 16px;
+  display: flex;
+  justify-content: center;
+  border-bottom: 1px solid var(--border);
+}
+
+.preview-frame {
+  width: 180px;
+  aspect-ratio: 4/5;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--surface2);
+  position: relative;
+}
+
+.preview-frame img { width: 100%; height: 100%; object-fit: cover; }
+.preview-frame.loading {
+  display: flex; align-items: center; justify-content: center;
+  flex-direction: column; gap: 10px;
+}
+
+.preview-frame.loading .spinner {
+  width: 28px; height: 28px;
+  border: 2px solid var(--border);
+  border-top-color: var(--teal);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+.preview-frame.loading p { font-size: 11px; color: var(--muted); }
+
+/* Campos editáveis */
+.editor-fields {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.editor-fields::-webkit-scrollbar { width: 4px; }
+.editor-fields::-webkit-scrollbar-track { background: transparent; }
+.editor-fields::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+.field-group {
+  margin-bottom: 14px;
+}
+
+.field-group label {
+  display: block;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 5px;
+}
+
+.field-input {
+  width: 100%;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-family: 'DM Sans', sans-serif;
+  font-size: 13px;
+  padding: 8px 12px;
+  outline: none;
+}
+
+.field-input:focus { border-color: var(--teal); }
+
+.field-textarea {
+  width: 100%;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-family: 'DM Sans', sans-serif;
+  font-size: 13px;
+  padding: 8px 12px;
+  outline: none;
+  resize: none;
+  height: 80px;
+  line-height: 1.5;
+}
+
+.field-textarea:focus { border-color: var(--teal); }
+
+/* Layout type selector */
+.layout-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.layout-opt {
+  padding: 8px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: center;
+}
+
+.layout-opt.active { border-color: var(--teal); background: var(--teal-dim); }
+
+.layout-opt .l-icon { font-size: 18px; margin-bottom: 3px; }
+.layout-opt .l-name { font-size: 10px; color: var(--muted2); font-weight: 500; }
+.layout-opt.active .l-name { color: var(--teal); }
+
+/* Photo subject field */
+.photo-field {
+  background: rgba(20,184,166,0.06);
+  border: 1px solid rgba(20,184,166,0.2);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 14px;
+}
+
+.photo-field .pf-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.photo-field .pf-label { font-size: 10px; font-weight: 600; letter-spacing: 1.5px; text-transform: uppercase; color: var(--teal); }
+.photo-field .pf-badge { background: var(--teal-dim); border: 1px solid rgba(20,184,166,0.3); border-radius: 4px; padding: 2px 8px; font-size: 9px; color: var(--teal); font-weight: 600; }
+
+/* Regen button */
+.btn-regen {
+  width: 100%;
+  padding: 10px;
+  background: rgba(249,115,22,0.1);
+  border: 1px solid rgba(249,115,22,0.3);
+  border-radius: 8px;
+  color: var(--orange);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.btn-regen svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2; }
+
+/* Export bar */
+.export-bar {
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* ═══════════════════════════════════
+   ESTADO VAZIO (sem deck gerado)
+═══════════════════════════════════ */
+.empty-deck {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 40px;
+}
+
+.empty-icon {
+  width: 64px; height: 64px;
+  background: var(--surface2);
+  border-radius: 16px;
+  display: flex; align-items: center; justify-content: center;
+}
+
+.empty-icon svg { width: 32px; height: 32px; stroke: var(--teal); fill: none; stroke-width: 1.5; }
+.empty-deck h3 { font-size: 16px; font-weight: 600; text-align: center; }
+.empty-deck p { font-size: 13px; color: var(--muted2); text-align: center; max-width: 280px; line-height: 1.6; }
+
+/* ═══════════════════════════════════
+   MOCK SLIDES (preview)
+═══════════════════════════════════ */
+.mock-slide-1 {
+  background: linear-gradient(135deg, #0E0E0E 50%, #E8185A 50%);
+  position: relative;
+}
+
+.mock-slide-1::after {
+  content: 'PALHETADA';
+  position: absolute;
+  bottom: 4px; left: 4px;
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 12px;
+  color: white;
+  letter-spacing: 0.5px;
+}
+
+.mock-slide-2 { background: #F5F2EE; }
+.mock-slide-3 { background: #0E0E0E; }
+.mock-slide-4 { background: #E8185A; }
+</style>
+</head>
+<body>
+
+<!-- TOPBAR -->
+<div class="topbar">
+  <div class="topbar-left">
+    <div class="back-btn">
+      <svg viewBox="0 0 16 16"><polyline points="10,4 6,8 10,12"/></svg>
+    </div>
+    <div class="breadcrumb">
+      <span>Studio</span>
+      <span class="sep">/</span>
+      <span class="current">Carrossel</span>
+    </div>
+  </div>
+
+  <div class="page-title">
+    <div class="icon">
+      <svg viewBox="0 0 14 14"><rect x="1" y="2" width="4" height="10" rx="1"/><rect x="6" y="2" width="4" height="10" rx="1"/><rect x="11" y="4" width="2" height="6" rx="1"/></svg>
+    </div>
+    <h1>Carrossel Studio</h1>
+  </div>
+
+  <div class="topbar-right">
+    <button class="btn btn-ghost">
+      <svg viewBox="0 0 14 14"><path d="M7 1v12M1 7h12"/></svg>
+      Novo deck
+    </button>
+    <button class="btn btn-teal">
+      <svg viewBox="0 0 14 14"><path d="M2 4h10M4 7h6M6 10h2"/></svg>
+      Exportar tudo
+    </button>
+    <button class="btn btn-orange">
+      <svg viewBox="0 0 14 14"><path d="M11 8v4H1V2h8M9 1l4 4-7 7H2v-4L9 1z"/></svg>
+      Publicar
+    </button>
+  </div>
+</div>
+
+<!-- LAYOUT 3 COLUNAS -->
+<div class="main">
+
+  <!-- COL 1: BRIEF -->
+  <div class="col-brief">
+
+    <div class="section">
+      <div class="section-title">
+        <svg viewBox="0 0 12 12"><path d="M1 3h10M1 6h7M1 9h5"/></svg>
+        Briefing
+      </div>
+
+      <div class="field">
+        <label>Marca</label>
+        <select class="select">
+          <option>LA Music School</option>
+          <option>LA Music Kids</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label>Tema / assunto</label>
+        <textarea class="textarea" placeholder="Ex: Dicas de palhetada alternada veloz para guitarristas intermediários...">Dicas de palhetada alternada veloz</textarea>
+      </div>
+
+      <div class="row2">
+        <div class="field">
+          <label>Tipo</label>
+          <select class="select">
+            <option>Educacional</option>
+            <option>Inspiracional</option>
+            <option>Promoção</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Tom</label>
+          <select class="select">
+            <option>Profissional</option>
+            <option>Descontraído</option>
+            <option>Técnico</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>CTA final</label>
+        <input class="input" type="text" value="Agende uma aula experimental">
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">
+        <svg viewBox="0 0 12 12"><rect x="1" y="1" width="4" height="4" rx="0.5"/><rect x="7" y="1" width="4" height="4" rx="0.5"/><rect x="1" y="7" width="4" height="4" rx="0.5"/><rect x="7" y="7" width="4" height="4" rx="0.5"/></svg>
+        Slides
+      </div>
+
+      <div class="field">
+        <label>Quantidade</label>
+        <div class="slide-count">
+          <div class="count-pill">4</div>
+          <div class="count-pill active">6</div>
+          <div class="count-pill">8</div>
+          <div class="count-pill">10</div>
+          <div class="count-pill">12</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">
+        <svg viewBox="0 0 12 12"><circle cx="6" cy="6" r="4"/><path d="M6 4v2l1.5 1.5"/></svg>
+        Motor de geração
+      </div>
+
+      <div class="engine-selector">
+        <div class="engine-opt active">
+          <div class="e-name">Claude</div>
+          <div class="e-desc">Tipografia, ícones, cards</div>
+        </div>
+        <div class="engine-opt">
+          <div class="e-name">Gemini</div>
+          <div class="e-desc">Fotos, ilustrações</div>
+        </div>
+      </div>
+
+      <div class="photo-toggle">
+        <div class="pt-text">
+          <div class="pt-label">Incluir fotos (Gemini)</div>
+          <div class="pt-sub">Gera foto para slides com layout split/overlay</div>
+        </div>
+        <div class="toggle on"></div>
+      </div>
+    </div>
+
+    <button class="btn-generate">
+      <svg viewBox="0 0 16 16"><path d="M8 2L10 6L14 6L11 9L12 13L8 11L4 13L5 9L2 6L6 6Z"/></svg>
+      Gerar com Nina
+    </button>
+
+  </div>
+
+  <!-- COL 2: DECK -->
+  <div class="col-deck">
+
+    <div class="deck-header">
+      <div class="deck-info">
+        <div class="deck-name">Dicas de Palhetada Alternada</div>
+        <div class="deck-meta">6 slides · Educacional · LA Music School</div>
+      </div>
+      <div class="deck-actions">
+        <button class="btn btn-ghost" style="font-size:12px;padding:5px 10px;">Regenerar deck</button>
+      </div>
+    </div>
+
+    <!-- Barra de progresso (visível durante geração) -->
+    <div class="progress-bar">
+      <div class="fill"></div>
+    </div>
+
+    <!-- Status de geração -->
+    <div class="status-bar">
+      <div class="spinner"></div>
+      <span class="status-text">Gerando slide 3 de 6... (Claude Sonnet 4.6)</span>
+    </div>
+
+    <!-- Grid de slides -->
+    <div class="slides-grid">
+
+      <!-- Slide 1: COVER — imagem gerada -->
+      <div class="slide-card active">
+        <div class="slide-thumb">
+          <div class="mock-slide-1" style="width:100%;height:100%;position:relative;">
+            <!-- Preview mockup do cover diagonal -->
+            <div style="position:absolute;top:0;right:0;width:48%;height:100%;background:#E8185A;clip-path:polygon(28% 0,100% 0,100% 100%,0% 100%);"></div>
+            <div style="position:absolute;bottom:16px;left:12px;font-family:'Bebas Neue',sans-serif;font-size:14px;color:white;line-height:1;">PALHE-<br>TADA</div>
+          </div>
+          <div class="role-badge cover">cover</div>
+        </div>
+        <div class="slide-info">
+          <div class="slide-num-row">
+            <span class="slide-num">SLIDE 1</span>
+            <span class="slide-role">cover</span>
+          </div>
+          <div class="slide-summary">Capa impactante com diagonal rosa</div>
+        </div>
+        <div class="slide-actions">
+          <div class="slide-action">Editar</div>
+          <div class="slide-action regen">Regen</div>
+        </div>
+      </div>
+
+      <!-- Slide 2: gerado -->
+      <div class="slide-card">
+        <div class="slide-thumb">
+          <div style="width:100%;height:100%;background:#F5F2EE;position:relative;">
+            <div style="position:absolute;top:0;right:0;width:30%;height:30%;background:#E8185A;clip-path:polygon(100% 0,100% 100%,0 0);"></div>
+            <div style="position:absolute;top:40%;left:12px;font-family:'Bebas Neue',sans-serif;font-size:16px;color:#0E0E0E;line-height:1;">PRESSÃO<br>CERTA</div>
+          </div>
+          <div class="role-badge">content</div>
+        </div>
+        <div class="slide-info">
+          <div class="slide-num-row">
+            <span class="slide-num">SLIDE 2</span>
+            <span class="slide-role">content</span>
+          </div>
+          <div class="slide-summary">Checklist com 3 itens e ícones</div>
+        </div>
+        <div class="slide-actions">
+          <div class="slide-action">Editar</div>
+          <div class="slide-action regen">Regen</div>
+        </div>
+      </div>
+
+      <!-- Slide 3: gerando (spinner) -->
+      <div class="slide-card">
+        <div class="slide-thumb generating">
+          <div class="gen-spinner"></div>
+          <div class="gen-text">Gerando...</div>
+        </div>
+        <div class="slide-info">
+          <div class="slide-num-row">
+            <span class="slide-num">SLIDE 3</span>
+            <span class="slide-role">content</span>
+          </div>
+          <div class="slide-summary">120 BPM — stat highlight</div>
+        </div>
+      </div>
+
+      <!-- Slide 4: aguardando -->
+      <div class="slide-card" style="opacity:0.4;">
+        <div class="slide-thumb empty">
+          <svg viewBox="0 0 28 28"><rect x="4" y="4" width="20" height="20" rx="2"/><path d="M14 10v8M10 14h8"/></svg>
+        </div>
+        <div class="slide-info">
+          <div class="slide-num-row">
+            <span class="slide-num">SLIDE 4</span>
+            <span class="slide-role">proof</span>
+          </div>
+          <div class="slide-summary">Aguardando...</div>
+        </div>
+      </div>
+
+      <!-- Slide 5: aguardando -->
+      <div class="slide-card" style="opacity:0.4;">
+        <div class="slide-thumb empty">
+          <svg viewBox="0 0 28 28"><rect x="4" y="4" width="20" height="20" rx="2"/><path d="M14 10v8M10 14h8"/></svg>
+        </div>
+        <div class="slide-info">
+          <div class="slide-num-row">
+            <span class="slide-num">SLIDE 5</span>
+            <span class="slide-role">cta</span>
+          </div>
+          <div class="slide-summary">Aguardando...</div>
+        </div>
+      </div>
+
+      <!-- Add slide -->
+      <div class="add-slide-card">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>
+        <span>Novo slide</span>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- COL 3: EDITOR -->
+  <div class="col-editor">
+
+    <div class="editor-header">
+      <div>
+        <div class="editor-title">SLIDE 1 — COVER</div>
+        <div class="editor-subtitle">cover-hero · Claude Sonnet 4.6</div>
+      </div>
+      <button class="btn btn-ghost" style="font-size:11px;padding:4px 10px;">Ver HTML</button>
+    </div>
+
+    <!-- Preview do slide ativo -->
+    <div class="slide-preview">
+      <div class="preview-frame">
+        <div style="width:100%;height:100%;background:#0E0E0E;position:relative;overflow:hidden;">
+          <div style="position:absolute;top:0;right:0;width:48%;height:100%;background:#E8185A;clip-path:polygon(28% 0,100% 0,100% 100%,0% 100%);"></div>
+          <div style="position:absolute;top:20px;left:16px;font-size:8px;letter-spacing:3px;color:rgba(255,255,255,0.3);">DICAS DE TÉCNICA</div>
+          <div style="position:absolute;bottom:40px;left:16px;font-family:'Bebas Neue',sans-serif;font-size:28px;color:white;line-height:0.9;">PALHE-<br>TADA<br><span style="color:#E8185A;">VELOZ</span></div>
+          <div style="position:absolute;bottom:20px;left:16px;font-size:8px;color:rgba(255,255,255,0.4);">6 dicas para destravar</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Campos editáveis -->
+    <div class="editor-fields">
+
+      <div class="field-group">
+        <label>Headline</label>
+        <input class="field-input" type="text" value="Palhetada Alternada Veloz">
+      </div>
+
+      <div class="field-group">
+        <label>Subtítulo</label>
+        <input class="field-input" type="text" value="6 dicas para destravar sua técnica">
+      </div>
+
+      <div class="field-group">
+        <label>Layout</label>
+        <div class="layout-grid">
+          <div class="layout-opt active">
+            <div class="l-icon">⬛</div>
+            <div class="l-name">Cover Diagonal</div>
+          </div>
+          <div class="layout-opt">
+            <div class="l-icon">📸</div>
+            <div class="l-name">Split Foto</div>
+          </div>
+          <div class="layout-opt">
+            <div class="l-icon">✅</div>
+            <div class="l-name">Checklist</div>
+          </div>
+          <div class="layout-opt">
+            <div class="l-icon">💬</div>
+            <div class="l-name">Quote Fade</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Photo subject (aparece quando layout tem foto) -->
+      <div class="photo-field" style="display:none;">
+        <div class="pf-header">
+          <span class="pf-label">Foto (Gemini)</span>
+          <span class="pf-badge">GEMINI 3.1</span>
+        </div>
+        <input class="field-input" type="text" placeholder="Ex: guitarrista tocando no palco, close nas mãos, luz dramática">
+      </div>
+
+      <!-- ═══ TEXTOS DO SLIDE ═══ -->
+      <div class="field-group" style="margin-top:4px;">
+        <label style="display:flex;align-items:center;justify-content:space-between;">
+          <span>Camadas de texto</span>
+          <button style="background:var(--teal-dim);border:1px solid rgba(20,184,166,0.3);border-radius:6px;padding:3px 10px;font-size:10px;font-weight:600;color:var(--teal);cursor:pointer;">+ Adicionar</button>
+        </label>
+      </div>
+
+      <!-- Texto 1 -->
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+          <span style="font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--teal);">Texto 1</span>
+          <button style="background:transparent;border:none;color:var(--muted);cursor:pointer;font-size:11px;">✕ Remover</button>
+        </div>
+        <textarea class="field-textarea" style="height:56px;margin-bottom:8px;">Segredos da Palhetada Veloz</textarea>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px;">
+          <select class="field-input" style="padding:6px 10px;font-size:12px;">
+            <option>Bebas Neue</option>
+            <option>DM Sans</option>
+            <option>Montserrat</option>
+            <option>Oswald</option>
+            <option>Plus Jakarta Sans</option>
+          </select>
+          <select class="field-input" style="padding:6px 10px;font-size:12px;">
+            <option>Bold 700</option>
+            <option>Regular 400</option>
+            <option>Light 300</option>
+            <option>ExtraBold 800</option>
+          </select>
+        </div>
+        <div style="display:grid;grid-template-columns:40px 1fr 1fr;gap:6px;align-items:center;">
+          <div style="width:36px;height:36px;border-radius:8px;background:#E8185A;border:2px solid var(--border);cursor:pointer;"></div>
+          <select class="field-input" style="padding:6px 10px;font-size:12px;">
+            <option>Topo</option>
+            <option>Centro</option>
+            <option>Abaixo</option>
+            <option>Rodapé</option>
+          </select>
+          <input class="field-input" type="number" value="64" style="padding:6px 10px;font-size:12px;" placeholder="Tamanho px">
+        </div>
+      </div>
+
+      <!-- Texto 2 -->
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+          <span style="font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted2);">Texto 2</span>
+          <button style="background:transparent;border:none;color:var(--muted);cursor:pointer;font-size:11px;">✕ Remover</button>
+        </div>
+        <textarea class="field-textarea" style="height:48px;margin-bottom:8px;">6 dicas para destravar sua técnica</textarea>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px;">
+          <select class="field-input" style="padding:6px 10px;font-size:12px;">
+            <option>DM Sans</option>
+            <option>Bebas Neue</option>
+            <option>Montserrat</option>
+          </select>
+          <select class="field-input" style="padding:6px 10px;font-size:12px;">
+            <option>Light 300</option>
+            <option>Regular 400</option>
+            <option>Bold 700</option>
+          </select>
+        </div>
+        <div style="display:grid;grid-template-columns:40px 1fr 1fr;gap:6px;align-items:center;">
+          <div style="width:36px;height:36px;border-radius:8px;background:rgba(255,255,255,0.45);border:2px solid var(--border);cursor:pointer;"></div>
+          <select class="field-input" style="padding:6px 10px;font-size:12px;">
+            <option>Abaixo</option>
+            <option>Topo</option>
+            <option>Centro</option>
+            <option>Rodapé</option>
+          </select>
+          <input class="field-input" type="number" value="24" style="padding:6px 10px;font-size:12px;" placeholder="Tamanho px">
+        </div>
+      </div>
+
+      <!-- ═══ LOGOMARCA ═══ -->
+      <div class="field-group" style="margin-top:4px;">
+        <label>Logomarca</label>
+      </div>
+
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:14px;">
+        <!-- Logo toggle -->
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+          <div>
+            <div style="font-size:12px;font-weight:500;color:var(--text);">Incluir logo no slide</div>
+            <div style="font-size:10px;color:var(--muted);margin-top:1px;">LA Music School</div>
+          </div>
+          <div class="toggle on"></div>
+        </div>
+
+        <!-- Variante da logo -->
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:10px;">
+          <div style="padding:8px 6px;background:var(--bg);border:2px solid var(--teal);border-radius:8px;text-align:center;cursor:pointer;">
+            <div style="font-size:16px;margin-bottom:2px;">🔲</div>
+            <div style="font-size:9px;color:var(--teal);font-weight:600;">Ícone</div>
+          </div>
+          <div style="padding:8px 6px;background:var(--bg);border:1px solid var(--border);border-radius:8px;text-align:center;cursor:pointer;">
+            <div style="font-size:16px;margin-bottom:2px;">━</div>
+            <div style="font-size:9px;color:var(--muted2);font-weight:600;">Horizontal</div>
+          </div>
+          <div style="padding:8px 6px;background:var(--bg);border:1px solid var(--border);border-radius:8px;text-align:center;cursor:pointer;">
+            <div style="font-size:16px;margin-bottom:2px;">┃</div>
+            <div style="font-size:9px;color:var(--muted2);font-weight:600;">Vertical</div>
+          </div>
+        </div>
+
+        <!-- Posição da logo -->
+        <div style="margin-bottom:8px;">
+          <div style="font-size:10px;font-weight:600;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin-bottom:5px;">Posição</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+            <div style="padding:6px;background:var(--bg);border:1px solid var(--border);border-radius:6px;font-size:11px;color:var(--muted2);text-align:center;cursor:pointer;">↖ Topo esq.</div>
+            <div style="padding:6px;background:var(--bg);border:1px solid var(--border);border-radius:6px;font-size:11px;color:var(--muted2);text-align:center;cursor:pointer;">↗ Topo dir.</div>
+            <div style="padding:6px;background:var(--bg);border:2px solid var(--teal);border-radius:6px;font-size:11px;color:var(--teal);text-align:center;cursor:pointer;font-weight:600;">↙ Rodapé esq.</div>
+            <div style="padding:6px;background:var(--bg);border:1px solid var(--border);border-radius:6px;font-size:11px;color:var(--muted2);text-align:center;cursor:pointer;">↘ Rodapé dir.</div>
+          </div>
+        </div>
+
+        <!-- Tamanho da logo -->
+        <div>
+          <div style="font-size:10px;font-weight:600;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin-bottom:5px;">Tamanho</div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <input type="range" min="40" max="200" value="80" style="flex:1;accent-color:var(--teal);">
+            <span style="font-size:12px;color:var(--muted2);white-space:nowrap;">80px</span>
+          </div>
+        </div>
+      </div>
+
+      <button class="btn-regen">
+        <svg viewBox="0 0 14 14"><path d="M13 2v4H9M1 12v-4h4M13 6A6 6 0 0 0 2.3 4.3M1 8a6 6 0 0 0 10.7 1.7"/></svg>
+        Regenerar este slide
+      </button>
+
+    </div>
+
+    <!-- Export bar -->
+    <div class="export-bar">
+      <button class="btn btn-ghost" style="flex:1;justify-content:center;">Baixar PNG</button>
+      <button class="btn btn-orange" style="flex:1;justify-content:center;">Publicar</button>
+    </div>
+
+  </div>
+
+</div>
+
+</body>
+</html>

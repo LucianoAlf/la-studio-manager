@@ -25,137 +25,115 @@ export function CarouselDeckPanel({
   generatingSlideIndex,
   onSelectSlide,
   onAddSlide,
-  onRemoveSlide,
-  onDuplicateSlide,
-  onMoveSlide,
-  onApplyBrandingToAll,
   onRegenerateDeck,
-  onSetCoverSlide,
   onRegenerateSlide,
   onExportDeck,
 }: Props) {
-  return (
-    <div className="space-y-4">
-      <div className="rounded-[22px] border border-slate-800 bg-slate-950/65 p-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500">Deck</p>
-            <h3 className="mt-1 text-sm font-semibold text-slate-100">
-              {project.title || "Carrossel"}
-            </h3>
-            <p className="mt-1 text-xs text-slate-400">
-              {project.slideCount} slides · {project.kind === "educational" ? "Educacional" : "Foto-driven"}
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onApplyBrandingToAll}
-            className="rounded-lg border border-slate-700 px-3 py-1.5 text-[11px] text-cyan-300 transition-colors hover:bg-slate-800"
-          >
-            Resetar branding
-          </button>
-        </div>
+  const isGeneratingAny = generatingSlideIndex != null;
+  const generatedCount = isGeneratingAny
+    ? project.slides.filter((_, i) => i < (generatingSlideIndex ?? 0)).length
+    : project.slides.length;
+  const progressPct = isGeneratingAny
+    ? Math.round((generatedCount / project.slides.length) * 100)
+    : 100;
 
-        <div className="mt-4 flex gap-2">
-          <button
-            type="button"
-            onClick={onAddSlide}
-            disabled={project.slides.length >= 8}
-            className="rounded-xl border border-dashed border-slate-700 px-3 py-2 text-xs text-slate-300 transition-colors hover:border-cyan-500 hover:text-cyan-300 disabled:cursor-not-allowed disabled:opacity-45"
-          >
-            + Novo slide
-          </button>
+  return (
+    <div className="space-y-3">
+      {/* Header */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold text-slate-100">
+            {project.title || "Carrossel"}
+          </p>
+          <p className="text-xs text-slate-400">
+            {project.slides.length} slides &middot;{" "}
+            {project.kind === "educational" ? "Educacional" : "Foto-driven"}
+          </p>
+        </div>
+        <div className="flex gap-2">
           <button
             type="button"
             onClick={onRegenerateDeck}
-            className="rounded-xl border border-slate-700 px-3 py-2 text-xs text-slate-300 transition-colors hover:bg-slate-800"
+            className="rounded-lg border border-slate-700 px-3 py-1.5 text-[11px] text-slate-300 hover:bg-slate-800"
           >
             Regenerar deck
           </button>
           <button
             type="button"
             onClick={onExportDeck}
-            className="rounded-xl border border-slate-700 px-3 py-2 text-xs text-slate-300 transition-colors hover:bg-slate-800"
+            className="rounded-lg border border-slate-700 px-3 py-1.5 text-[11px] text-slate-300 hover:bg-slate-800"
           >
             Exportar tudo
           </button>
         </div>
-
-        <div className="mt-4 overflow-x-auto pb-2">
-          <div className="flex min-w-max gap-3">
-          {project.slides.map((slide, index) => (
-            <div key={slide.id} className="w-[230px] shrink-0 space-y-2">
-              <CarouselThumb
-                slide={slide}
-                active={activeSlideIndex === index}
-                onClick={() => onSelectSlide(index)}
-                isCover={project.coverSlideIndex === index}
-                isGenerating={generatingSlideIndex === index}
-                renderWidth={210}
-                className="w-full"
-              />
-              <div className="grid grid-cols-3 gap-1">
-                <ActionButton label="Capa" disabled={project.coverSlideIndex === index} onClick={() => onSetCoverSlide(index)} />
-                <ActionButton label="Regen" onClick={() => onRegenerateSlide(index)} />
-                <ActionButton label="Dup" onClick={() => onDuplicateSlide(index)} />
-              </div>
-              <div className="grid grid-cols-3 gap-1">
-                <ActionButton label="↑" disabled={index === 0} onClick={() => onMoveSlide(index, -1)} />
-                <ActionButton label="↓" disabled={index === project.slides.length - 1} onClick={() => onMoveSlide(index, 1)} />
-                <ActionButton label="Del" disabled={project.slides.length <= 4} onClick={() => onRemoveSlide(index)} danger />
-              </div>
-            </div>
-          ))}
-        </div>
-        </div>
       </div>
 
-      <div className="rounded-[22px] border border-slate-800 bg-slate-950/55 p-4">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500">Estrutura</p>
-        <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-          {project.slides.map((slide) => (
-            <div key={`${slide.id}-outline`} className="rounded-xl border border-slate-800 bg-slate-900/55 px-3 py-2">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                  {slide.role}
-                </span>
-                <span className="text-[10px] text-slate-500">{slide.layoutType}</span>
-              </div>
-              <p className="mt-1 text-xs text-slate-200">{slide.summary || slide.headline}</p>
-              {project.coverSlideIndex === slide.index && (
-                <p className="mt-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-300">Capa do deck</p>
-              )}
+      {/* Progress bar (visible during generation) */}
+      {isGeneratingAny && (
+        <>
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
+            <div
+              className="h-full rounded-full bg-cyan-500 transition-all duration-500"
+              style={{ width: `${progressPct}%` }}
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="h-3 w-3 animate-spin rounded-full border-2 border-cyan-500 border-t-transparent" />
+            <span className="text-[11px] text-slate-400">
+              Gerando slide {(generatingSlideIndex ?? 0) + 1} de {project.slides.length}...
+            </span>
+          </div>
+        </>
+      )}
+
+      {/* Slide grid */}
+      <div
+        className="grid gap-3"
+        style={{ gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))" }}
+      >
+        {project.slides.map((slide, index) => (
+          <div key={`${slide.id}-${slide.renderUrl || "pending"}`} className="space-y-1.5">
+            <CarouselThumb
+              slide={slide}
+              active={activeSlideIndex === index}
+              onClick={() => onSelectSlide(index)}
+              isCover={project.coverSlideIndex === index}
+              isGenerating={generatingSlideIndex === index}
+              className="w-full"
+            />
+            <div className="flex gap-1">
+              <button
+                type="button"
+                onClick={() => onSelectSlide(index)}
+                className="flex-1 rounded-lg border border-slate-700 px-2 py-1 text-[10px] text-slate-300 hover:bg-slate-800"
+              >
+                Editar
+              </button>
+              <button
+                type="button"
+                onClick={() => onRegenerateSlide(index)}
+                className="flex-1 rounded-lg border border-amber-800/50 px-2 py-1 text-[10px] text-amber-400 hover:bg-amber-900/20"
+              >
+                Regen
+              </button>
             </div>
-          ))}
-        </div>
+          </div>
+        ))}
+
+        {/* Add slide card */}
+        <button
+          type="button"
+          onClick={onAddSlide}
+          className="flex flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-slate-700 bg-slate-950/40 p-6 text-slate-500 transition-colors hover:border-cyan-500 hover:text-cyan-400"
+          style={{ minHeight: 200 }}
+        >
+          <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 8v8M8 12h8" />
+          </svg>
+          <span className="text-xs">Novo slide</span>
+        </button>
       </div>
     </div>
-  );
-}
-
-function ActionButton({
-  label,
-  onClick,
-  disabled = false,
-  danger = false,
-}: {
-  label: string;
-  onClick: () => void;
-  disabled?: boolean;
-  danger?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className={`rounded-lg border px-2 py-1.5 text-[11px] transition-colors disabled:cursor-not-allowed disabled:opacity-35 ${
-        danger
-          ? "border-red-900/60 text-red-300 hover:bg-red-500/10"
-          : "border-slate-700 text-slate-300 hover:bg-slate-800"
-      }`}
-    >
-      {label}
-    </button>
   );
 }

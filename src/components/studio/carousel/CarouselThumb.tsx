@@ -1,9 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
 import type { CarouselSlide } from "@/lib/carousel/types";
-import { ASPECT_RATIOS } from "@/lib/types/layer-composition";
-import { loadImage, renderComposition } from "@/lib/canvas/render-composition";
 
 interface Props {
   slide: CarouselSlide;
@@ -11,7 +8,6 @@ interface Props {
   onClick?: () => void;
   isCover?: boolean;
   isGenerating?: boolean;
-  renderWidth?: number;
   className?: string;
 }
 
@@ -21,67 +17,40 @@ export function CarouselThumb({
   onClick,
   isCover = false,
   isGenerating = false,
-  renderWidth = 220,
   className = "",
 }: Props) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [photo, setPhoto] = useState<HTMLImageElement | null>(null);
-  const [logo, setLogo] = useState<HTMLImageElement | null>(null);
+  let content: React.ReactNode;
 
-  useEffect(() => {
-    if (!slide.composition.background.photoUrl) {
-      setPhoto(null);
-      return;
-    }
-
-    loadImage(slide.composition.background.photoUrl)
-      .then(setPhoto)
-      .catch(() => setPhoto(null));
-  }, [slide.composition.background.photoUrl]);
-
-  useEffect(() => {
-    if (!slide.composition.logoLayer?.logoUrl) {
-      setLogo(null);
-      return;
-    }
-
-    loadImage(slide.composition.logoLayer.logoUrl)
-      .then(setLogo)
-      .catch(() => setLogo(null));
-  }, [slide.composition.logoLayer?.logoUrl]);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const dims = ASPECT_RATIOS.carousel;
-    const scale = renderWidth / dims.width;
-    canvas.width = renderWidth;
-    canvas.height = Math.round(dims.height * scale);
-
-    if (!photo) {
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-      ctx.fillStyle = "#0f172a";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      return;
-    }
-
-    const tempCanvas = document.createElement("canvas");
-    void renderComposition(tempCanvas, slide.composition, { photo, logo })
-      .then(() => {
-        const ctx = canvas.getContext("2d");
-        if (!ctx) return;
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(tempCanvas, 0, 0, canvas.width, canvas.height);
-      })
-      .catch(() => {
-        const ctx = canvas.getContext("2d");
-        if (!ctx) return;
-        ctx.fillStyle = "#0f172a";
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-      });
-  }, [logo, photo, renderWidth, slide.composition]);
+  if (slide.renderUrl) {
+    content = (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={slide.renderUrl}
+        alt={`Slide ${slide.index + 1}`}
+        className="block w-full object-cover"
+        style={{ aspectRatio: "4/5" }}
+      />
+    );
+  } else if (isGenerating) {
+    content = (
+      <div className="flex items-center justify-center bg-slate-950" style={{ aspectRatio: "4/5" }}>
+        <div className="flex flex-col items-center gap-2">
+          <div className="h-6 w-6 animate-spin rounded-full border-2 border-cyan-500 border-t-transparent" />
+          <span className="text-[10px] text-cyan-400">Gerando...</span>
+        </div>
+      </div>
+    );
+  } else {
+    content = (
+      <div
+        className="flex flex-col items-center justify-center bg-slate-950 text-slate-500"
+        style={{ aspectRatio: "4/5" }}
+      >
+        <span className="text-2xl font-bold text-slate-600">{slide.index + 1}</span>
+        <span className="mt-1 text-[10px] uppercase tracking-wider">{slide.role}</span>
+      </div>
+    );
+  }
 
   return (
     <button
@@ -93,19 +62,8 @@ export function CarouselThumb({
           : "border-slate-800 bg-slate-950/60 hover:border-slate-600 hover:bg-slate-900/70"
       } ${className}`}
     >
-      <div className="overflow-hidden rounded-xl border border-slate-800 bg-slate-950 relative">
-        {slide.renderUrl ? (
-          <img src={slide.renderUrl} alt={`Slide ${slide.index + 1}`} className="block w-full" style={{ aspectRatio: "4/5" }} />
-        ) : isGenerating ? (
-          <div className="flex items-center justify-center bg-slate-950" style={{ aspectRatio: "4/5" }}>
-            <div className="flex flex-col items-center gap-2">
-              <div className="h-6 w-6 animate-spin rounded-full border-2 border-cyan-500 border-t-transparent" />
-              <span className="text-[10px] text-cyan-400">Gerando...</span>
-            </div>
-          </div>
-        ) : (
-          <canvas ref={canvasRef} className="block w-full" />
-        )}
+      <div className="overflow-hidden rounded-xl border border-slate-800 bg-slate-950">
+        {content}
       </div>
       <div className="mt-2 space-y-1">
         <div className="flex items-center justify-between">

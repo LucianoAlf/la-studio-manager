@@ -3089,6 +3089,7 @@ export default function StudioPage() {
             body: s.body || "",
             cta: s.cta || "",
             photo_subject: s.summary || "",
+            originalIndex: si,
           };
 
           // Add style reference for slides after the first
@@ -3618,49 +3619,75 @@ export default function StudioPage() {
     });
   }, []);
 
-  const handleRegenerateCarouselSlide = useCallback((index: number) => {
-    setCarouselProject((current) => {
-      if (!current) return current;
-      const slide = current.slides[index];
-      if (!slide) return current;
+  const handleRegenerateCarouselSlide = useCallback(async (index: number, extras?: { text_layers?: unknown[]; logo_config?: unknown; hint_template?: string }) => {
+    if (!carouselProject) return;
+    const slide = carouselProject.slides[index];
+    if (!slide) return;
 
-      const photoPool = current.slides
-        .map((item) => item.photoUrl)
-        .filter((url, itemIndex, list): url is string => Boolean(url) && list.indexOf(url) === itemIndex);
-      const nextPhotoUrl = photoPool.length > 1
-        ? photoPool[(index + 1) % photoPool.length] || slide.photoUrl
-        : slide.photoUrl;
-
-      const refreshedComposition = applyCarouselLayoutToComposition(
-        {
-          ...slide.composition,
-          background: {
-            ...slide.composition.background,
-            photoUrl: nextPhotoUrl || slide.composition.background.photoUrl,
-          },
-        },
-        {
-          ...slide,
-        },
-        current.theme,
-        brandIdentity,
-      );
-
-      return {
-        ...current,
-        updatedAt: new Date().toISOString(),
-        slides: current.slides.map((item, itemIndex) => (
-          itemIndex === index
-            ? {
-                ...item,
-                photoUrl: nextPhotoUrl,
-                composition: refreshedComposition,
-              }
-            : item
-        )),
+    setGeneratingSlideIndex(index);
+    try {
+      const biColors = {
+        primary: brandIdentity?.color_primary || "#E8185A",
+        secondary: brandIdentity?.color_secondary || "#0E0E0E",
+        accent: brandIdentity?.color_accent || "#F5F2EE",
       };
-    });
-  }, [brandIdentity]);
+      const biPayload = {
+        brand_name: brandIdentity?.brand_name || (brand === "la_music_kids" ? "LA Music Kids" : "LA Music School"),
+        colors: biColors,
+        font_display: brandIdentity?.font_display || "Bebas Neue",
+        font_body: brandIdentity?.font_body || "DM Sans",
+      };
+      const logoUrlForSlides = brandIdentity?.logo_primary_url || brandIdentity?.logo_icon_url || null;
+
+      const slidePayload: Record<string, unknown> = {
+        role: slide.role,
+        layout_type: slide.layoutType,
+        headline: slide.headline || "",
+        body: slide.body || "",
+        cta: slide.cta || "",
+        photo_subject: slide.summary || "",
+        originalIndex: index,
+        ...(extras?.text_layers ? { text_layers: extras.text_layers } : {}),
+        ...(extras?.logo_config ? { logo_config: extras.logo_config } : {}),
+        ...(extras?.hint_template ? { hint_template: extras.hint_template } : {}),
+      };
+
+      const { data: slideData, error: slideErr } = await supabase.functions.invoke("nina-create-post", {
+        body: {
+          mode: "carousel_slides",
+          brand,
+          project_id: carouselProject.id,
+          engine: "claude",
+          brand_identity: biPayload,
+          logo_url: logoUrlForSlides,
+          photo_url: slide.photoUrl || null,
+          slides: [slidePayload],
+        },
+      });
+
+      if (!slideErr && slideData?.slides?.[0]?.render_url) {
+        const renderUrl = slideData.slides[0].render_url;
+        setCarouselProject((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            slides: prev.slides.map((ps, idx) =>
+              idx === index ? { ...ps, renderUrl } : ps
+            ),
+          };
+        });
+        toast.success(`Slide ${index + 1} regenerado!`);
+      } else {
+        console.error(`[STUDIO] Regen slide ${index} failed:`, slideErr, slideData);
+        toast.error(`Erro ao regenerar slide ${index + 1}`);
+      }
+    } catch (e) {
+      console.error(`[STUDIO] Regen slide ${index} error:`, e);
+      toast.error(`Erro ao regenerar slide ${index + 1}`);
+    } finally {
+      setGeneratingSlideIndex(null);
+    }
+  }, [brand, brandIdentity, carouselProject, supabase]);
 
   const handleExportCarouselDeck = async () => {
     if (!carouselProject) {

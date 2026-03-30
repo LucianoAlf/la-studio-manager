@@ -179,8 +179,9 @@ Deno.serve(async (req: Request) => {
 
       for (let i = 0; i < slidesDef.length; i++) {
         const slide = slidesDef[i]
+        const slideIndex = slide.originalIndex ?? slide.slideIndex ?? slide.index ?? i
         const { role, headline, body: bodyText, cta, layout_type } = slide
-        console.log(`[NINA] Slide ${i + 1}/${slidesDef.length}: ${role} (${useClaude ? 'claude' : 'gemini'})`)
+        console.log(`[NINA] Slide ${slideIndex + 1}/${slidesDef.length}: ${role} (${useClaude ? 'claude' : 'gemini'})`)
 
         try {
           let imageBytes: Uint8Array | null = null
@@ -312,7 +313,7 @@ body{width:1080px;height:1350px;background:#0E0E0E;font-family:'DM Sans',sans-se
               if (!bRes.ok) {
                 const err = await bRes.text()
                 console.error(`[NINA] Slide ${i} cover Browserless error:`, bRes.status, err)
-                results.push({ index: i, render_url: null, role, error: `Browserless ${bRes.status}` })
+                results.push({ index: slideIndex, render_url: null, role, error: `Browserless ${bRes.status}` })
                 continue
               }
 
@@ -326,6 +327,21 @@ body{width:1080px;height:1350px;background:#0E0E0E;font-family:'DM Sans',sans-se
             // ── Non-cover slides: Claude generates HTML ──
             const bi = brand_identity || {}
             const colors = bi.colors || {}
+
+            // Layout-specific instructions
+            const LAYOUT_INSTRUCTIONS: Record<string, string> = {
+              'cover-hero': `Dark background #0E0E0E. Pink diagonal stripe on RIGHT (clip-path polygon). Ghost text (big number, opacity 0.05) behind everything. Small tag top-left (letter-spacing 6px, color rgba(255,255,255,0.3)). Big Bebas Neue headline bottom-left (font-size 140px, right:460px to avoid stripe). Pink label above headline. Subtitle below. Arrow button bottom-right.`,
+              'headline-body': `Light background #F5F2EE. Pink triangle corner top-right (clip-path). Slide number top-left. Pink label + Bebas headline. Horizontal divider. Body text below (DM Sans 300, color #555). Dark card at bottom with pink dot + tip text.`,
+              'checklist': `Light background #F5F2EE. Pink triangle corner top-right. Label + Bebas headline. Divider line. 3 items in white cards (border-radius 24px), each with: colored icon box (40x40px, border-radius 10px), bold title + light subtitle. LA Music School footer with pink dot.`,
+              'stat-highlight': `Dark background #0E0E0E. Radial pink glow left side. Ghost word (opacity 0.04, huge, centered). Big number with vertical gradient fade (white to transparent, font-size 120px Bebas). Pink unit label below number. Body text 300 weight. Progress bar + brand name at bottom.`,
+              'quote-proof': `Very dark #0A0A0A. Top-left pink line (3px gradient). Grid pattern top-right with radial mask. Large quote mark (Bebas, 80px, pink opacity 0.7). Quote text with vertical gradient fade (Bebas 44px white to transparent). Pink divider bar. Subtext below. 2-3 pills with SVG icons at bottom.`,
+              'cta-end': `Solid pink ${colors.primary || '#E8185A'} background. Ghost word bottom-left (opacity 0.1). Decorative circles top-right (border 1px rgba(255,255,255,0.1)). Eyebrow label (letter-spacing 6px, white 40% opacity). Big white Bebas headline (3 lines, 140px). White pill button with pink arrow circle. LA badge bottom-right (dark background, LA logo + brand name).`,
+              'cover-split': `Light background #F5F2EE. Photo RIGHT 52% width. Soft gradient mask between text and photo. Tag pill with border. Pre-label + big Bebas headline + pink accent word. Pink divider bar. Subtitle text. Dark card with icon + tip. Footer: brand name left, swipe right.`,
+              'photo-overlay': `Dark background. Photo as background (opacity 0.35, grayscale 20%). Heavy dark overlay gradient. Top row: slide number + pink LA badge. Pink label + big Bebas headline with outline effect on last word. Body text. Glass-morphism card at bottom (backdrop-filter blur).`,
+              'photo-dark-split': `Dark background #0E0E0E. Photo LEFT 46% + 3px pink right border. Text RIGHT: slide number top. Pink label + Bebas headline 44px. Body text 300 weight. Divider + rule text at bottom.`,
+            }
+
+            const layoutInstr = LAYOUT_INSTRUCTIONS[layout_type || ''] || LAYOUT_INSTRUCTIONS['headline-body']
 
             const claudePrompt = `Generate a single Instagram carousel slide as complete self-contained HTML/CSS.
 Page dimensions: exactly 1080x1350px.
@@ -346,17 +362,19 @@ ${cta ? `CTA: "${cta}"` : ''}
 ${logo_url ? `LOGO URL (use as <img> bottom of slide): ${logo_url}` : ''}
 ${layoutInstruction || ''}
 
-DESIGN RULES:
-- Alternate backgrounds: odd slides use #0E0E0E (dark), even slides use #F5F2EE (light)
-- Slide 1 (cover): dark bg + pink diagonal stripe (clip-path) + giant Bebas headline
-- Content slides: clean layout, large bold headline, readable body text
-- CTA slide: solid pink (${colors.primary || '#E8185A'}) background, white text, white pill button
+LAYOUT INSTRUCTIONS FOR THIS SLIDE (follow EXACTLY):
+${layoutInstr}
+${slide.hint_template ? `\nTEMPLATE REFERENCE: "${slide.hint_template}"\nUse this template style as visual reference for this slide.` : ''}
+
+CRITICAL RULES:
+- Follow the layout instructions above EXACTLY. Each slide must look completely different.
 - NO random abstract icons. NO lorem ipsum. Portuguese text only.
-- Geometric shapes only (rectangles, lines, circles) as decorative elements
-- Bebas Neue for all headlines (huge, dominant). DM Sans for body (light weight).
-- Logo small at bottom-left or bottom-right
+- Geometric shapes only (rectangles, lines, circles) as decorative elements.
+- Bebas Neue for all headlines (huge, dominant). DM Sans for body (light weight 300).
 - Style: editorial magazine, premium, minimal. Like a design agency made it.
-${style_reference_html ? `\nSTYLE REFERENCE — match this slide's visual identity exactly:\n--- REFERENCE HTML (first 2000 chars) ---\n${String(style_reference_html).substring(0, 2000)}\n---\nKeep: same fonts, same weights, same colors, same geometric decoration style, same padding/spacing.\nVary ONLY: background color (alternate dark/light), layout, and content.` : ''}`
+${slide.text_layers && Array.isArray(slide.text_layers) && slide.text_layers.length > 0 ? `\nADDITIONAL TEXT LAYERS (include these in the HTML):\n${slide.text_layers.map((tl: any, ti: number) => `Layer ${ti + 1}: "${tl.text || tl.content || ''}" — font: ${tl.font || 'DM Sans'}, weight: ${tl.weight || '400'}, color: ${tl.color || '#FFFFFF'}, position: ${tl.position || 'bottom'}, size: ${tl.size || 32}px`).join('\n')}` : ''}
+${slide.logo_config ? `\nLOGO CONFIG: include ${(slide.logo_config as any).variant || 'icon'} variant at ${(slide.logo_config as any).position || 'bottom-left'}, size ${(slide.logo_config as any).size || 80}px` : ''}
+${style_reference_html ? `\nSTYLE REFERENCE — match this visual identity:\n--- REFERENCE HTML ---\n${String(style_reference_html).substring(0, 2000)}\n---\nKeep: same fonts, weights, colors, decoration style, spacing. Vary ONLY: background, layout, content.` : ''}`
 
             const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
               method: 'POST',
@@ -375,7 +393,7 @@ ${style_reference_html ? `\nSTYLE REFERENCE — match this slide's visual identi
             if (!claudeRes.ok) {
               const err = await claudeRes.text()
               console.error(`[NINA] Slide ${i} Claude error:`, claudeRes.status, err)
-              results.push({ index: i, render_url: null, role, error: `Claude ${claudeRes.status}` })
+              results.push({ index: slideIndex, render_url: null, role, error: `Claude ${claudeRes.status}` })
               continue
             }
 
@@ -387,7 +405,7 @@ ${style_reference_html ? `\nSTYLE REFERENCE — match this slide's visual identi
 
             if (!slideHtml.includes('<!DOCTYPE') && !slideHtml.includes('<html')) {
               console.error(`[NINA] Slide ${i}: Claude did not return valid HTML`)
-              results.push({ index: i, render_url: null, role, error: 'Invalid HTML from Claude' })
+              results.push({ index: slideIndex, render_url: null, role, error: 'Invalid HTML from Claude' })
               continue
             }
 
@@ -409,7 +427,7 @@ ${style_reference_html ? `\nSTYLE REFERENCE — match this slide's visual identi
             if (!browserlessRes.ok) {
               const err = await browserlessRes.text()
               console.error(`[NINA] Slide ${i} Browserless error:`, browserlessRes.status, err)
-              results.push({ index: i, render_url: null, role, error: `Browserless ${browserlessRes.status}` })
+              results.push({ index: slideIndex, render_url: null, role, error: `Browserless ${browserlessRes.status}` })
               continue
             }
 
@@ -446,7 +464,7 @@ ${style_reference_html ? `\nSTYLE REFERENCE — match this slide's visual identi
             if (!imgRes.ok) {
               const err = await imgRes.text()
               console.error(`[NINA] Slide ${i} Gemini error:`, imgRes.status, err)
-              results.push({ index: i, render_url: null, role, error: `Gemini ${imgRes.status}` })
+              results.push({ index: slideIndex, render_url: null, role, error: `Gemini ${imgRes.status}` })
               continue
             }
 
@@ -458,7 +476,7 @@ ${style_reference_html ? `\nSTYLE REFERENCE — match this slide's visual identi
             }
 
             if (!base64) {
-              results.push({ index: i, render_url: null, role, error: 'No image from Gemini' })
+              results.push({ index: slideIndex, render_url: null, role, error: 'No image from Gemini' })
               continue
             }
 
@@ -468,27 +486,27 @@ ${style_reference_html ? `\nSTYLE REFERENCE — match this slide's visual identi
 
           // ── Upload to storage ──
           if (!imageBytes) {
-            results.push({ index: i, render_url: null, role, error: 'No image data' })
+            results.push({ index: slideIndex, render_url: null, role, error: 'No image data' })
             continue
           }
 
           const ext = imgContentType.includes('png') ? 'png' : 'jpg'
-          const fileName = `carousel/${brand}/${project_id || Date.now()}/slide-${i}.${ext}`
+          const fileName = `carousel/${brand}/${project_id || Date.now()}/slide-${slideIndex}.${ext}`
 
           const { error: upErr } = await supabase.storage.from('posts').upload(fileName, imageBytes, { contentType: imgContentType, upsert: true })
           if (upErr) {
             console.error(`[NINA] Slide ${i} upload error:`, upErr.message)
-            results.push({ index: i, render_url: null, role, error: upErr.message })
+            results.push({ index: slideIndex, render_url: null, role, error: upErr.message })
             continue
           }
 
           const { data: urlData } = supabase.storage.from('posts').getPublicUrl(fileName)
           console.log(`[NINA] Slide ${i} done: ${urlData.publicUrl}`)
-          results.push({ index: i, render_url: urlData.publicUrl, role, ...(generatedHtml ? { html: generatedHtml } : {}) })
+          results.push({ index: slideIndex, render_url: urlData.publicUrl, role, ...(generatedHtml ? { html: generatedHtml } : {}) })
 
         } catch (e) {
           console.error(`[NINA] Slide ${i} failed:`, e)
-          results.push({ index: i, render_url: null, role, error: String(e) })
+          results.push({ index: slideIndex, render_url: null, role, error: String(e) })
         }
       }
 
