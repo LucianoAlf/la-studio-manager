@@ -877,6 +877,13 @@ export default function StudioPage() {
   const [selectedEventPhotoForNina, setSelectedEventPhotoForNina] = useState<PhotoAsset | null>(null);
   const [loadingEventPhotosForNina, setLoadingEventPhotosForNina] = useState(false);
 
+  // Quick upload from Criar tab
+  const [showQuickUploadModal, setShowQuickUploadModal] = useState(false);
+  const [quickUploadFiles, setQuickUploadFiles] = useState<File[]>([]);
+  const [quickUploadEventName, setQuickUploadEventName] = useState("");
+  const [isQuickUploading, setIsQuickUploading] = useState(false);
+  const [quickUploadProgress, setQuickUploadProgress] = useState(0);
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [uploadingAssetId, setUploadingAssetId] = useState<string | null>(null);
@@ -3783,6 +3790,99 @@ export default function StudioPage() {
     setSelectedEventPhotoForNina(eventPhotosForNina[randomIndex]);
   }, [eventPhotosForNina]);
 
+  // Quick upload from Criar tab
+  const handleQuickUpload = useCallback(async () => {
+    if (quickUploadFiles.length === 0) return;
+
+    setIsQuickUploading(true);
+    setQuickUploadProgress(0);
+
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      toast.error("Você precisa estar logado para fazer upload.");
+      setIsQuickUploading(false);
+      return;
+    }
+
+    // Use event name if provided, otherwise generate from brief or use "Fotos gerais"
+    const eventLabel = quickUploadEventName.trim()
+      || (postBrief.trim() ? postBrief.trim().substring(0, 60) : "Fotos gerais");
+    const slug = eventLabel
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "");
+
+    const uploadSingleFile = async (file: File, index: number) => {
+      const blob = await compressImage(file);
+      const ext = file.name.split(".").pop()?.toLowerCase() || "jpg";
+      const timestamp = Date.now();
+      const storagePath = `events/${slug}/${timestamp}-${index}.${ext}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from("posts")
+        .upload(storagePath, blob, { contentType: "image/jpeg", upsert: false });
+      if (uploadError) throw new Error(uploadError.message);
+
+      const { data: urlData } = supabase.storage.from("posts").getPublicUrl(storagePath);
+
+      const { data: insertedData, error: insertError } = await supabase
+        .from("assets")
+        .insert({
+          file_name: file.name,
+          file_url: urlData.publicUrl,
+          file_size: blob.size,
+          mime_type: "image/jpeg",
+          asset_type: "image",
+          source: "upload",
+          storage_path: storagePath,
+          storage_provider: "supabase",
+          event_name: eventLabel,
+          event_date: postDate,
+          brand,
+          is_approved: true,
+          uploaded_by: user.id,
+        } as never)
+        .select("id, file_url, event_name, event_date, brand, person_name, source, metadata, birth_date")
+        .single();
+
+      if (insertError) throw new Error(insertError.message);
+      return insertedData;
+    };
+
+    try {
+      let uploaded = 0;
+      let firstPhoto: PhotoAsset | null = null;
+
+      for (const [index, file] of quickUploadFiles.entries()) {
+        const result = await uploadSingleFile(file, index);
+        if (result && !firstPhoto) {
+          firstPhoto = result as unknown as PhotoAsset;
+        }
+        uploaded++;
+        setQuickUploadProgress(Math.round((uploaded / quickUploadFiles.length) * 100));
+      }
+
+      toast.success(`${uploaded} foto(s) enviada(s)!`);
+
+      // Refresh event photos and auto-select the first one
+      await loadEventPhotosForNina();
+      if (firstPhoto) {
+        setSelectedEventPhotoForNina(firstPhoto);
+      }
+    } catch (err) {
+      console.error(err);
+      toast.error(err instanceof Error ? err.message : "Erro ao fazer upload");
+    } finally {
+      setIsQuickUploading(false);
+      setShowQuickUploadModal(false);
+      setQuickUploadFiles([]);
+      setQuickUploadEventName("");
+      setQuickUploadProgress(0);
+    }
+  }, [quickUploadFiles, quickUploadEventName, postBrief, postDate, brand, compressImage, supabase, loadEventPhotosForNina]);
+
   // Generate birthday post client-side with Canvas API
   const handleGenerateBirthdayPost = useCallback(async (asset: PhotoAsset) => {
     if (!asset.id) return;
@@ -3956,15 +4056,25 @@ export default function StudioPage() {
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <label className="block text-xs text-slate-400">Foto do evento</label>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleSelectRandomEventPhoto}
-              disabled={eventPhotosForNina.length === 0}
-              className="h-6 px-2 text-[11px]"
-            >
-              <Sparkle size={12} /> Aleatória
-            </Button>
+            <div className="flex items-center gap-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowQuickUploadModal(true)}
+                className="h-6 px-2 text-[11px]"
+              >
+                <Upload size={12} /> Upload
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleSelectRandomEventPhoto}
+                disabled={eventPhotosForNina.length === 0}
+                className="h-6 px-2 text-[11px]"
+              >
+                <Sparkle size={12} /> Aleatória
+              </Button>
+            </div>
           </div>
           {loadingEventPhotosForNina ? (
             <div className="flex h-24 items-center justify-center">
@@ -3999,7 +4109,26 @@ export default function StudioPage() {
               ))}
             </div>
           ) : (
-            <p className="text-xs text-slate-500">Nenhuma foto de evento disponível. Faça upload na aba Banco de Fotos.</p>
+            <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-700 bg-slate-800/30 py-6 transition-colors hover:border-cyan-500/50 hover:bg-slate-800/50">
+              <Upload size={24} className="text-slate-400" />
+              <span className="text-xs text-slate-400">Clique para subir fotos</span>
+              <input
+                type="file"
+                accept="image/*"
+                multiple
+                onChange={(e) => {
+                  if (e.target.files) {
+                    const files = Array.from(e.target.files).filter((f) => f.type.startsWith("image/"));
+                    if (files.length > 0) {
+                      setQuickUploadFiles(files);
+                      setShowQuickUploadModal(true);
+                    }
+                  }
+                  e.target.value = "";
+                }}
+                className="hidden"
+              />
+            </label>
           )}
           {selectedEventPhotoForNina && (
             <div className="flex items-center gap-2 rounded-lg border border-teal-500/30 bg-teal-500/10 p-2">
@@ -4191,6 +4320,153 @@ export default function StudioPage() {
           {ninaPreviewUrl ? "Arte pronta para publicar ou agendar." : "Gere uma arte com a Nina primeiro."}
         </p>
       </Card>
+
+      {/* Quick Upload Modal */}
+      {showQuickUploadModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+          onClick={() => {
+            if (!isQuickUploading) {
+              setShowQuickUploadModal(false);
+              setQuickUploadFiles([]);
+              setQuickUploadEventName("");
+            }
+          }}
+        >
+          <div
+            className="w-full max-w-lg rounded-2xl border border-slate-700 bg-slate-900 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-slate-800 px-5 py-3">
+              <h3 className="text-base font-semibold text-slate-100">Upload rápido de fotos</h3>
+              <button
+                onClick={() => {
+                  if (!isQuickUploading) {
+                    setShowQuickUploadModal(false);
+                    setQuickUploadFiles([]);
+                    setQuickUploadEventName("");
+                  }
+                }}
+                className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-slate-200"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="space-y-4 p-5">
+              {/* File selector */}
+              <label className="flex cursor-pointer flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed border-slate-700 bg-slate-800/50 py-6 transition-colors hover:border-cyan-500/50">
+                <Upload size={32} className="text-slate-400" />
+                <span className="text-sm text-slate-300">
+                  {quickUploadFiles.length > 0
+                    ? `${quickUploadFiles.length} foto(s) selecionada(s) — clique para trocar`
+                    : "Clique para selecionar fotos"}
+                </span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={(e) => {
+                    if (e.target.files) {
+                      const files = Array.from(e.target.files).filter((f) => f.type.startsWith("image/"));
+                      if (files.length > 0) setQuickUploadFiles(files);
+                    }
+                    e.target.value = "";
+                  }}
+                  className="hidden"
+                />
+              </label>
+
+              {/* Preview grid */}
+              {quickUploadFiles.length > 0 && (
+                <div className="grid grid-cols-6 gap-2 max-h-32 overflow-y-auto">
+                  {quickUploadFiles.slice(0, 12).map((file, idx) => (
+                    <div key={idx} className="aspect-square rounded-md bg-slate-800 overflow-hidden relative group">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={URL.createObjectURL(file)}
+                        alt=""
+                        className="h-full w-full object-cover"
+                      />
+                      <button
+                        onClick={() => setQuickUploadFiles((prev) => prev.filter((_, i) => i !== idx))}
+                        className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity"
+                      >
+                        <X size={14} className="text-white" />
+                      </button>
+                    </div>
+                  ))}
+                  {quickUploadFiles.length > 12 && (
+                    <div className="aspect-square rounded-md bg-slate-700 flex items-center justify-center">
+                      <span className="text-xs text-slate-300">+{quickUploadFiles.length - 12}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Event name */}
+              <div className="space-y-1">
+                <label className="text-xs text-slate-400">Nome do álbum / evento <span className="text-slate-600">(opcional)</span></label>
+                <input
+                  value={quickUploadEventName}
+                  onChange={(e) => setQuickUploadEventName(e.target.value)}
+                  placeholder={postBrief.trim() ? postBrief.trim().substring(0, 60) : "Ex: Dia do Violinista 2026"}
+                  className="h-10 w-full rounded-lg border border-slate-700 bg-slate-900/70 px-3 text-sm text-slate-100"
+                />
+                <p className="text-[10px] text-slate-500">
+                  Se vazio, usará o brief ou &quot;Fotos gerais&quot;. As fotos ficam salvas no Banco de Fotos.
+                </p>
+              </div>
+
+              {/* Progress */}
+              {isQuickUploading && (
+                <div className="space-y-2">
+                  <div className="h-2 rounded-full bg-slate-700 overflow-hidden">
+                    <div
+                      className="h-full bg-cyan-500 transition-all"
+                      style={{ width: `${quickUploadProgress}%` }}
+                    />
+                  </div>
+                  <p className="text-xs text-slate-400 text-center">{quickUploadProgress}% concluído</p>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-between border-t border-slate-800 px-5 py-3">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setShowQuickUploadModal(false);
+                  setQuickUploadFiles([]);
+                  setQuickUploadEventName("");
+                }}
+                disabled={isQuickUploading}
+              >
+                Cancelar
+              </Button>
+              <Button
+                variant="accent"
+                size="sm"
+                disabled={isQuickUploading || quickUploadFiles.length === 0}
+                onClick={() => void handleQuickUpload()}
+              >
+                {isQuickUploading ? (
+                  <>
+                    <SpinnerGap size={14} className="animate-spin" />
+                    Enviando...
+                  </>
+                ) : (
+                  <>
+                    <Upload size={14} />
+                    {`Enviar ${quickUploadFiles.length} foto(s)`}
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 
