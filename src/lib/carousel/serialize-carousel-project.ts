@@ -8,7 +8,7 @@ export function serializeCarouselProject(project: CarouselProject): CarouselProj
     slides: project.slides.map((slide, index) => ({
       ...slide,
       index,
-      composition: deserializeComposition(slide.composition),
+      composition: slide.composition ? deserializeComposition(slide.composition) : null,
     })),
   };
 }

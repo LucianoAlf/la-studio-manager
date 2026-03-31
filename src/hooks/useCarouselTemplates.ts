@@ -4,7 +4,7 @@ import { createClient } from "@/lib/supabase/client";
 export interface CarouselTemplate {
   id: string;
   name: string;
-  type: "typographic" | "photo" | "cta";
+  type: string;
   brand_key: string;
   description: string | null;
   html_template: string | null;

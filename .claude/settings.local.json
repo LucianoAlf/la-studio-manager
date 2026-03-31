@@ -15,7 +15,9 @@
       "Bash(SUPABASE_ACCESS_TOKEN=\"sbp_2d5604396bfe74ec139d0564d4fab5652e60b30\" npx supabase functions deploy nina-create-post --project-ref rhxqwraqpabgecgojytj --no-verify-jwt)",
       "Bash(SUPABASE_ACCESS_TOKEN=\"sbp_2d5604396bfe74ec139d0564d4fab5652e60b30f\" npx supabase functions deploy nina-create-post --project-ref rhxqwraqpabgecgojytj --no-verify-jwt)",
       "Bash(xargs grep:*)",
-      "Bash(grep -r \"CLAUDE\\\\|claude_api\\\\|ANTHROPIC\" /d/2026/la-studio-manager-NEW/.env*)"
+      "Bash(grep -r \"CLAUDE\\\\|claude_api\\\\|ANTHROPIC\" /d/2026/la-studio-manager-NEW/.env*)",
+      "Bash(supabase functions:*)",
+      "Bash(supabase login:*)"
     ]
   }
 }

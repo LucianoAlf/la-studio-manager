@@ -4,6 +4,7 @@ import type { BrandIdentity } from "@/types/brand";
 import type { PhotoAsset, StudioBrand } from "@/lib/queries/studio";
 import type { CarouselKind, CarouselProject, CarouselSlide, CarouselTheme } from "@/lib/carousel/types";
 import { CarouselBriefPanel } from "./CarouselBriefPanel";
+import { CarouselBrandingPanel } from "./CarouselBrandingPanel";
 import { CarouselDeckPanel } from "./CarouselDeckPanel";
 import { CarouselSlideEditor } from "./CarouselSlideEditor";
 
@@ -38,6 +39,10 @@ interface Props {
   onGenerate: () => void;
   isGenerating: boolean;
   generatingSlideIndex?: number | null;
+  engine: "claude" | "gemini";
+  onEngineChange: (engine: "claude" | "gemini") => void;
+  includePhotos: boolean;
+  onIncludePhotosChange: (value: boolean) => void;
   onProjectChange: (project: CarouselProject | null) => void;
   onThemeChange: (themePatch: Partial<CarouselTheme>) => void;
   onApplyBrandingToAll: () => void;
@@ -89,8 +94,12 @@ export function CarouselStudio({
   onGenerate,
   isGenerating,
   generatingSlideIndex,
+  engine,
+  onEngineChange,
+  includePhotos,
+  onIncludePhotosChange,
   onProjectChange,
-  onThemeChange: _onThemeChange,
+  onThemeChange,
   onApplyBrandingToAll,
   onRegenerateDeck,
   onDuplicatePreviousStyle,
@@ -152,6 +161,10 @@ export function CarouselStudio({
           onPostTimeChange={onPostTimeChange}
           isGenerating={isGenerating}
           onGenerate={onGenerate}
+          engine={engine}
+          onEngineChange={onEngineChange}
+          includePhotos={includePhotos}
+          onIncludePhotosChange={onIncludePhotosChange}
         />
       </div>
 
@@ -221,41 +234,31 @@ export function CarouselStudio({
       </div>
 
       {/* Col 3: Slide editor */}
-      <div className="overflow-y-auto rounded-[22px] border border-slate-800 bg-slate-950/65 p-4">
+      <div className="space-y-4 overflow-y-auto rounded-[22px] border border-slate-800 bg-slate-950/65 p-4">
         {project && activeSlide ? (
-          <CarouselSlideEditor
-            project={project}
-            slide={activeSlide}
-            brandIdentity={brandIdentity}
-            onChangeComposition={(composition) => {
-              onProjectChange({
-                ...project,
-                updatedAt: new Date().toISOString(),
-                slides: project.slides.map((item) =>
-                  item.id === activeSlide.id
-                    ? {
-                        ...item,
-                        composition,
-                        headline: composition.textLayers[0]?.content || item.headline,
-                        body: composition.textLayers[1]?.content || item.body,
-                        cta: composition.textLayers[2]?.content || item.cta,
-                      }
-                    : item
-                ),
-              });
-            }}
-            onChangeMeta={(updates) => handleChangeSlideMeta(activeSlide, updates)}
-            onLayoutChange={onLayoutChange}
-            onDuplicatePreviousStyle={onDuplicatePreviousStyle}
-            onSetCoverSlide={() => onSetCoverSlide(activeSlideIndex)}
-            onRegenerateSlide={(extras) => onRegenerateSlide(activeSlideIndex, extras)}
-            isCoverSlide={project.coverSlideIndex === activeSlideIndex}
-          />
+          <>
+            <CarouselBrandingPanel
+              project={project}
+              onThemeChange={onThemeChange}
+              onResetBranding={onApplyBrandingToAll}
+            />
+            <CarouselSlideEditor
+              project={project}
+              slide={activeSlide}
+              brandIdentity={brandIdentity}
+              eventPhotos={eventPhotos}
+              onChangeMeta={(updates) => handleChangeSlideMeta(activeSlide, updates)}
+              onLayoutChange={onLayoutChange}
+              onSetCoverSlide={() => onSetCoverSlide(activeSlideIndex)}
+              onRegenerateSlide={(extras) => onRegenerateSlide(activeSlideIndex, extras)}
+              isCoverSlide={project.coverSlideIndex === activeSlideIndex}
+            />
+          </>
         ) : (
           <div className="flex h-full flex-col items-center justify-center text-center">
             <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500">Editor</p>
             <p className="mt-2 text-sm text-slate-400">
-              Selecione um slide para editar seus campos, layout e camadas de texto.
+              Selecione um slide para editar conteúdo, template e foto.
             </p>
           </div>
         )}

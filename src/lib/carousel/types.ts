@@ -3,14 +3,19 @@ import type { LayerComposition, LogoVariant, OverlayPresetId } from "@/lib/types
 export type CarouselKind = "educational" | "photo_story";
 export type CarouselProjectStatus = "draft" | "generated" | "approved" | "scheduled" | "published";
 export type CarouselSlideRole = "cover" | "hook" | "content" | "proof" | "cta";
+export type CarouselPhotoMode = "none" | "asset" | "generated";
 
 export interface CarouselOutlineSlide {
   role: CarouselSlideRole;
   layoutType: string;
+  templateId?: string;
+  templateName?: string;
   headline?: string;
   body?: string;
   cta?: string;
   summary?: string;
+  photoMode?: CarouselPhotoMode;
+  photoPrompt?: string;
 }
 
 export interface CarouselTheme {
@@ -28,14 +33,22 @@ export interface CarouselSlide {
   index: number;
   role: CarouselSlideRole;
   layoutType: string;
+  templateId?: string;
+  templateName?: string;
+  templatePreviewUrl?: string;
   headline?: string;
   body?: string;
   cta?: string;
   summary?: string;
-  photoUrl?: string;
-  photoAssetId?: string;
-  composition: LayerComposition;
-  renderUrl?: string;
+  photoMode: CarouselPhotoMode;
+  photoUrl?: string | null;
+  photoAssetId?: string | null;
+  photoPrompt?: string | null;
+  composition?: LayerComposition | null;
+  renderUrl?: string | null;
+  previewUrl?: string | null;
+  html?: string | null;
+  placeholderValues?: Record<string, string> | null;
 }
 
 export interface CarouselProject {
@@ -49,6 +62,10 @@ export interface CarouselProject {
   theme: CarouselTheme;
   status: CarouselProjectStatus;
   coverSlideIndex: number;
+  slideUrls?: string[];
+  coverUrl?: string | null;
+  renderedAt?: string;
+  references?: Array<{ id: string; url: string; label?: string }>;
   title?: string;
   brief?: string;
   caption?: string;

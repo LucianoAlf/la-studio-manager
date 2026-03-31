@@ -1,12 +1,156 @@
 /**
- * process-nina-request v25
- * Gemini 3 Flash Preview para texto + Gemini 3.1 Flash Image Preview para imagem
- * Gera imagem SEMPRE (com ou sem foto do aluno)
+ * process-nina-request v26
+ * Claude preenche placeholders com inteligência + Gemini gera fotos
+ * Templates HTML + Browserless para render pixel-perfect
  */
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 // @ts-ignore - import remoto resolvido pelo runtime Deno/Supabase
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
+import { SLIDE_TEMPLATES } from "./slide-templates.ts";
+
+// ── Fallback burro (usado se Claude falhar) ──
+function preencherTemplateFallback(html: string, d: { headline?: string; body?: string; cta?: string; originalIndex: number; total: number; primary: string }): string {
+  const words = (d.headline || '').toUpperCase().split(' ')
+  const mid = Math.ceil(words.length / 2)
+  const sentences = (d.body || '').split('. ')
+  return html
+    .replace(/\{\{PRIMARY\}\}/g, d.primary || '#E8185A')
+    .replace(/\{\{BRAND_NAME\}\}/g, 'LA Music School')
+    .replace('{{SLIDE_NUM}}', `${d.originalIndex + 1} / ${d.total}`)
+    .replace('{{SLIDE_LABEL}}', 'CONTEÚDO')
+    .replace('{{TIP_LABEL}}', `DICA ${String(d.originalIndex + 1).padStart(2, '0')}`)
+    .replace('{{TIP_TITLE}}', (d.headline || '').toUpperCase())
+    .replace('{{HEADLINE}}', (d.headline || '').toUpperCase())
+    .replace('{{HEADLINE_L1}}', words.slice(0, mid).join(' '))
+    .replace('{{HEADLINE_L2}}', words.slice(mid).join(' '))
+    .replace('{{H1_L1}}', words[0] || '')
+    .replace('{{H1_L2}}', words[1] || '')
+    .replace('{{H1_L3}}', words.slice(2).join(' ') || '')
+    .replace('{{BODY_TEXT}}', d.body || '')
+    .replace('{{SUBTEXT}}', d.body || '')
+    .replace('{{CARD_TITLE}}', sentences[0]?.substring(0, 50) || '')
+    .replace('{{CARD_TEXT}}', sentences.slice(1).join('. ').substring(0, 100) || d.body || '')
+    .replace('{{ITEM1_TITLE}}', sentences[0]?.split(' ').slice(0, 4).join(' ') || 'Ponto 1')
+    .replace('{{ITEM1_SUB}}', sentences[0]?.substring(0, 80) || '')
+    .replace('{{ITEM2_TITLE}}', sentences[1]?.split(' ').slice(0, 4).join(' ') || 'Ponto 2')
+    .replace('{{ITEM2_SUB}}', sentences[1]?.substring(0, 80) || '')
+    .replace('{{ITEM3_TITLE}}', sentences[2]?.split(' ').slice(0, 4).join(' ') || 'Ponto 3')
+    .replace('{{ITEM3_SUB}}', sentences[2]?.substring(0, 80) || '')
+    .replace('{{BIG_NUMBER}}', (d.headline || '').match(/\d+/)?.[0] || '3')
+    .replace('{{UNIT_LABEL}}', words.slice(-2).join(' '))
+    .replace('{{GHOST_WORD}}', words[0] || 'LA')
+    .replace('{{DESCRIPTION}}', (d.body || '').substring(0, 100))
+    .replace('{{HIGHLIGHT}}', words.slice(-2).join(' '))
+    .replace('{{QUOTE_L1}}', words.slice(0, 3).join(' '))
+    .replace('{{QUOTE_L2}}', words.slice(3, 6).join(' ') || '')
+    .replace('{{QUOTE_L3}}', words.slice(6).join(' ') || '')
+    .replace('{{PILL1}}', words[0] || 'Técnica')
+    .replace('{{PILL2}}', words[1] || 'Resultado')
+    .replace('{{EYEBROW}}', 'PRÓXIMO PASSO')
+    .replace('{{CTA_TEXT}}', d.cta || 'Agende uma aula')
+    .replace('{{GHOST}}', words[0] || 'LA')
+    .replace(/\{\{PHOTO_URL\}\}/g, '')
+}
+
+// ── Claude preenche os placeholders com inteligência ──
+async function generatePlaceholderValues(
+  apiKey: string,
+  d: { headline?: string; body?: string; cta?: string; originalIndex: number; total: number; layout_type: string; role: string; brandName: string }
+): Promise<Record<string, string> | null> {
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 800,
+        messages: [{
+          role: 'user',
+          content: `Você é a diretora criativa da ${d.brandName}. Preencha os placeholders deste slide de carrossel de Instagram.
+
+CONTEÚDO DO SLIDE:
+- Headline: "${d.headline || ''}"
+- Body: "${d.body || ''}"
+- CTA: "${d.cta || ''}"
+- Layout: "${d.layout_type}"
+- Role: "${d.role}"
+- Posição: slide ${d.originalIndex + 1} de ${d.total}
+
+REGRAS:
+- Texto em português do Brasil, tom profissional mas próximo
+- Headlines SEMPRE em MAIÚSCULAS
+- Quebre as headlines de forma que faça sentido semântico (não corte palavras no meio de ideias)
+- HEADLINE_L1 e HEADLINE_L2: divida a headline em 2 linhas balanceadas visualmente
+- Para checklist (ITEM1/2/3): extraia 3 pontos-chave distintos do body, cada um com título curto e explicação
+- Para stat-highlight (BIG_NUMBER): escolha o número mais impactante ou crie um relevante
+- Para quote-proof (QUOTE_L1/L2/L3): reformule a headline como frase de impacto em 3 linhas
+- GHOST_WORD: escolha a palavra mais forte e visual da headline
+- PILL1 e PILL2: dois conceitos-chave de 1-2 palavras
+- CARD_TITLE: insight principal em no máximo 4 palavras
+- CARD_TEXT: dica prática derivada do body, máximo 80 caracteres
+- SLIDE_LABEL: categoria do conteúdo (ex: TÉCNICA, CONCEITO, PRÁTICA, BENEFÍCIO)
+- TIP_LABEL: "DICA ${String(d.originalIndex + 1).padStart(2, '0')}" ou variação criativa
+- CTA_TEXT: "${d.cta || 'Agende uma aula experimental'}"
+
+Retorne SOMENTE um JSON válido com estes campos (todos strings):
+{
+  "HEADLINE_L1": "", "HEADLINE_L2": "",
+  "TIP_LABEL": "", "TIP_TITLE": "",
+  "SLIDE_LABEL": "",
+  "BODY_TEXT": "", "SUBTEXT": "",
+  "CARD_TITLE": "", "CARD_TEXT": "",
+  "ITEM1_TITLE": "", "ITEM1_SUB": "",
+  "ITEM2_TITLE": "", "ITEM2_SUB": "",
+  "ITEM3_TITLE": "", "ITEM3_SUB": "",
+  "BIG_NUMBER": "", "UNIT_LABEL": "",
+  "GHOST_WORD": "", "GHOST": "",
+  "DESCRIPTION": "", "HIGHLIGHT": "",
+  "QUOTE_L1": "", "QUOTE_L2": "", "QUOTE_L3": "",
+  "PILL1": "", "PILL2": "",
+  "H1_L1": "", "H1_L2": "", "H1_L3": "",
+  "EYEBROW": "", "CTA_TEXT": "",
+  "HEADLINE": ""
+}`
+        }]
+      })
+    })
+
+    if (!res.ok) {
+      console.error(`[NINA] Claude placeholder error: ${res.status}`)
+      return null
+    }
+
+    const data = await res.json()
+    const text = data.content?.[0]?.text || ''
+    const cleaned = text.replace(/```json|```/g, '').trim()
+    return JSON.parse(cleaned)
+  } catch (e) {
+    console.error('[NINA] Claude placeholder parse error:', e)
+    return null
+  }
+}
+
+// ── Aplica valores do Claude (ou fallback) no template HTML ──
+function applyPlaceholders(html: string, values: Record<string, string>, d: { originalIndex: number; total: number; primary: string; brandName: string; photoUrl?: string }): string {
+  let result = html
+    .replace(/\{\{PRIMARY\}\}/g, d.primary || '#E8185A')
+    .replace(/\{\{BRAND_NAME\}\}/g, d.brandName || 'LA Music School')
+    .replace(/\{\{SLIDE_NUM\}\}/g, `${d.originalIndex + 1} / ${d.total}`)
+    .replace(/\{\{PHOTO_URL\}\}/g, d.photoUrl || '')
+
+  for (const [key, val] of Object.entries(values)) {
+    result = result.replace(new RegExp(`\\{\\{${key}\\}\\}`, 'g'), String(val || ''))
+  }
+
+  // Limpa placeholders restantes que não foram preenchidos
+  result = result.replace(/\{\{[A-Z0-9_]+\}\}/g, '')
+  return result
+}
 
 declare const Deno: {
   env: { get: (key: string) => string | undefined };
@@ -167,7 +311,7 @@ Deno.serve(async (req: Request) => {
 
       console.log(`[NINA] Generating ${slidesDef.length} carousel slides via ${useClaude ? 'Claude+Browserless' : 'Gemini'}...`)
 
-      const results: Array<{ index: number; render_url: string | null; role: string; html?: string; error?: string }> = []
+      const results: Array<{ index: number; render_url: string | null; role: string; layout_used?: string; html?: string; error?: string }> = []
 
       // For Gemini engine: preload photo/logo as base64
       let photoB64: { data: string; mime: string } | null = null
@@ -188,229 +332,63 @@ Deno.serve(async (req: Request) => {
           let imgContentType = 'image/jpeg'
           let generatedHtml = ''
 
-          if (useClaude) {
-            // ── Detect if slide needs a Gemini-generated photo ──
-            const PHOTO_LAYOUTS = ['cover-split', 'photo-overlay', 'photo-dark-split']
-            const needsPhoto = PHOTO_LAYOUTS.includes(layout_type || '')
-            let slidePhotoUrl: string | null = photo_url || null
-
-            if (needsPhoto && !slidePhotoUrl) {
-              // Generate cinematic photo via Gemini
-              console.log(`[NINA] Slide ${i}: generating photo via Gemini for ${layout_type}`)
-              const photoSubject = slide.photo_subject || 'young musician playing instrument, cinematic, dramatic lighting'
-              const geminiPhotoPrompt = `Cinematic photograph for an Instagram carousel slide.
-Style: editorial, dramatic lighting, shallow depth of field, 85mm lens, f/1.8.
-Subject: ${photoSubject}
-NO text. NO logos. NO UI elements. NO watermarks. Pure photographic image.
-Aspect ratio: 4:5 (1080x1350). Professional photography quality.`
-
-              try {
-                const gemPhotoRes = await fetch(
-                  `https://generativelanguage.googleapis.com/v1beta/models/${IMAGE_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
-                  {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      contents: [{ parts: [{ text: geminiPhotoPrompt }] }],
-                      generationConfig: { responseModalities: ['IMAGE', 'TEXT'] },
-                    }),
-                  }
-                )
-                if (gemPhotoRes.ok) {
-                  const gemPhotoData = await gemPhotoRes.json()
-                  let photoB64Data: string | null = null
-                  let photoMime = 'image/jpeg'
-                  for (const part of (gemPhotoData.candidates?.[0]?.content?.parts || [])) {
-                    if (part.inlineData?.data) { photoB64Data = part.inlineData.data; photoMime = part.inlineData.mimeType || 'image/jpeg'; break }
-                  }
-                  if (photoB64Data) {
-                    const photoBytes = Uint8Array.from(atob(photoB64Data), c => c.charCodeAt(0))
-                    const photoExt = photoMime.includes('png') ? 'png' : 'jpg'
-                    const photoPath = `carousel/${brand}/${project_id || Date.now()}/photo-${i}.${photoExt}`
-                    const { error: photoUpErr } = await supabase.storage.from('posts').upload(photoPath, photoBytes, { contentType: photoMime, upsert: true })
-                    if (!photoUpErr) {
-                      const { data: photoUrlData } = supabase.storage.from('posts').getPublicUrl(photoPath)
-                      slidePhotoUrl = photoUrlData.publicUrl
-                      console.log(`[NINA] Slide ${i} photo generated: ${slidePhotoUrl}`)
-                    }
-                  }
-                }
-              } catch (e) {
-                console.error(`[NINA] Slide ${i} Gemini photo failed:`, e)
-              }
-            }
-
-            // ── Build layout instructions based on layout_type ──
-            let layoutInstruction = ''
-            if (needsPhoto && slidePhotoUrl) {
-              if (layout_type === 'cover-split') {
-                layoutInstruction = `PHOTO URL (use as <img>): ${slidePhotoUrl}
-LAYOUT: Split layout. Photo occupies RIGHT half (50-55%). LEFT half has off-white (#F5F2EE) background with text.
-Photo must be full-height, object-fit: cover. Soft gradient mask at border between text and photo.
-Decorative color accent at bottom corners.`
-              } else if (layout_type === 'photo-overlay') {
-                layoutInstruction = `PHOTO URL (use as background-image): ${slidePhotoUrl}
-LAYOUT: Photo as full background with dark overlay (rgba(0,0,0,0.6)).
-White text on top. Optional glass-morphism card at bottom for key info.`
-              } else if (layout_type === 'photo-dark-split') {
-                layoutInstruction = `PHOTO URL (use as <img>): ${slidePhotoUrl}
-LAYOUT: Dark (#0E0E0E) background. Photo on LEFT 46% with pink right border (4px solid ${(brand_identity?.colors?.primary) || '#E8185A'}).
-Text on RIGHT side: tip label in pink, big Bebas headline, body text below.`
-              }
-            }
-
-            // ── Cover slide: use fixed template (skip Claude) ──
-            if (role === 'cover' && (layout_type === 'cover-hero' || !layout_type)) {
-              console.log(`[NINA] Slide ${i}: using fixed cover template`)
-              const bi = brand_identity || {}
-              const primaryColor = bi.colors?.primary || '#E8185A'
-              // Split headline into lines: one word per line, max 3 lines
-              const words = (headline || 'TÍTULO').split(/\s+/)
-              const headlineHtml = words.map((w: string) => w.toUpperCase()).join('<br>')
-              const preText = (bodyText || '').toUpperCase().substring(0, 40)
-              const subText = bodyText || ''
-              const slideCount = slidesDef.length
-
-              const coverHtml = `<!DOCTYPE html>
-<html><head>
-<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{width:1080px;height:1350px;background:#0E0E0E;font-family:'DM Sans',sans-serif;position:relative;overflow:hidden}
-.stripe{position:absolute;top:0;right:0;width:420px;height:100%;background:${primaryColor};clip-path:polygon(30% 0,100% 0,100% 100%,0% 100%)}
-.bg-num{position:absolute;top:-40px;right:60px;font-family:'Bebas Neue',sans-serif;font-size:520px;line-height:1;color:rgba(255,255,255,0.05);z-index:1;user-select:none}
-.tag{position:absolute;top:64px;left:64px;font-size:22px;font-weight:500;letter-spacing:6px;text-transform:uppercase;color:rgba(255,255,255,0.35);z-index:2}
-.headline{position:absolute;bottom:200px;left:64px;right:460px;z-index:2}
-.headline .pre{font-size:28px;font-weight:500;letter-spacing:2px;color:${primaryColor};text-transform:uppercase;margin-bottom:8px}
-.headline h1{font-family:'Bebas Neue',sans-serif;font-size:140px;line-height:0.88;color:white;letter-spacing:2px;word-break:keep-all;overflow-wrap:normal}
-.sub{position:absolute;bottom:120px;left:64px;font-size:24px;color:rgba(255,255,255,0.45);font-weight:300;z-index:2}
-.arrow{position:absolute;bottom:100px;right:80px;width:72px;height:72px;border:2px solid rgba(255,255,255,0.25);border-radius:50%;z-index:2;display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,0.4);font-size:28px}
-</style></head>
-<body>
-  <div class="stripe"></div>
-  <div class="bg-num">${slideCount}</div>
-  <div class="tag">DICAS DE TÉCNICA</div>
-  <div class="headline">
-    <div class="pre">${preText}</div>
-    <h1>${headlineHtml}</h1>
-  </div>
-  <div class="sub">${subText}</div>
-  <div class="arrow">→</div>
-</body></html>`
-
-              // Render via Browserless
-              const BROWSERLESS_KEY_COVER = Deno.env.get('BROWSERLESS_API_KEY') || ''
-              const bRes = await fetch(`https://chrome.browserless.io/screenshot?token=${BROWSERLESS_KEY_COVER}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  html: coverHtml,
-                  options: { type: 'jpeg', quality: 92, fullPage: false },
-                  viewport: { width: 1080, height: 1350, deviceScaleFactor: 1 },
-                }),
-              })
-
-              if (!bRes.ok) {
-                const err = await bRes.text()
-                console.error(`[NINA] Slide ${i} cover Browserless error:`, bRes.status, err)
-                results.push({ index: slideIndex, render_url: null, role, error: `Browserless ${bRes.status}` })
-                continue
-              }
-
-              const coverBuf = await bRes.arrayBuffer()
-              imageBytes = new Uint8Array(coverBuf)
-              imgContentType = 'image/jpeg'
-              generatedHtml = coverHtml
-              console.log(`[NINA] Slide ${i} cover rendered (${imageBytes.length} bytes)`)
-
-            } else {
-            // ── Non-cover slides: Claude generates HTML ──
+          if (engine !== 'gemini') {
+            // ── Claude preenche placeholders + Browserless renderiza ──
             const bi = brand_identity || {}
-            const colors = bi.colors || {}
+            const primaryColor = bi.colors?.primary || '#E8185A'
+            const bName = bi.brand_name || brandName
+            const hasPhoto = !!photo_url
 
-            // Layout-specific instructions
-            const LAYOUT_INSTRUCTIONS: Record<string, string> = {
-              'cover-hero': `Dark background #0E0E0E. Pink diagonal stripe on RIGHT (clip-path polygon). Ghost text (big number, opacity 0.05) behind everything. Small tag top-left (letter-spacing 6px, color rgba(255,255,255,0.3)). Big Bebas Neue headline bottom-left (font-size 140px, right:460px to avoid stripe). Pink label above headline. Subtitle below. Arrow button bottom-right.`,
-              'headline-body': `Light background #F5F2EE. Pink triangle corner top-right (clip-path). Slide number top-left. Pink label + Bebas headline. Horizontal divider. Body text below (DM Sans 300, color #555). Dark card at bottom with pink dot + tip text.`,
-              'checklist': `Light background #F5F2EE. Pink triangle corner top-right. Label + Bebas headline. Divider line. 3 items in white cards (border-radius 24px), each with: colored icon box (40x40px, border-radius 10px), bold title + light subtitle. LA Music School footer with pink dot.`,
-              'stat-highlight': `Dark background #0E0E0E. Radial pink glow left side. Ghost word (opacity 0.04, huge, centered). Big number with vertical gradient fade (white to transparent, font-size 120px Bebas). Pink unit label below number. Body text 300 weight. Progress bar + brand name at bottom.`,
-              'quote-proof': `Very dark #0A0A0A. Top-left pink line (3px gradient). Grid pattern top-right with radial mask. Large quote mark (Bebas, 80px, pink opacity 0.7). Quote text with vertical gradient fade (Bebas 44px white to transparent). Pink divider bar. Subtext below. 2-3 pills with SVG icons at bottom.`,
-              'cta-end': `Solid pink ${colors.primary || '#E8185A'} background. Ghost word bottom-left (opacity 0.1). Decorative circles top-right (border 1px rgba(255,255,255,0.1)). Eyebrow label (letter-spacing 6px, white 40% opacity). Big white Bebas headline (3 lines, 140px). White pill button with pink arrow circle. LA badge bottom-right (dark background, LA logo + brand name).`,
-              'cover-split': `Light background #F5F2EE. Photo RIGHT 52% width. Soft gradient mask between text and photo. Tag pill with border. Pre-label + big Bebas headline + pink accent word. Pink divider bar. Subtitle text. Dark card with icon + tip. Footer: brand name left, swipe right.`,
-              'photo-overlay': `Dark background. Photo as background (opacity 0.35, grayscale 20%). Heavy dark overlay gradient. Top row: slide number + pink LA badge. Pink label + big Bebas headline with outline effect on last word. Body text. Glass-morphism card at bottom (backdrop-filter blur).`,
-              'photo-dark-split': `Dark background #0E0E0E. Photo LEFT 46% + 3px pink right border. Text RIGHT: slide number top. Pink label + Bebas headline 44px. Body text 300 weight. Divider + rule text at bottom.`,
+            // Selecionar template — com upgrade para foto quando disponível
+            let resolvedLayout = layout_type || 'headline-body'
+
+            // Se tem foto, promover para template com foto quando possível
+            if (hasPhoto) {
+              const photoUpgrades: Record<string, string> = {
+                'cover-hero': 'cover-split',
+                'headline-body': 'split-photo-copy',
+                'quote-proof': 'photo-quote',
+                'cta-end': 'cta-photo-end',
+              }
+              if (photoUpgrades[resolvedLayout]) {
+                resolvedLayout = photoUpgrades[resolvedLayout]
+                console.log(`[NINA] Slide ${slideIndex}: upgraded to "${resolvedLayout}" (has photo)`)
+              }
             }
 
-            const layoutInstr = LAYOUT_INSTRUCTIONS[layout_type || ''] || LAYOUT_INSTRUCTIONS['headline-body']
+            const templateHtml = SLIDE_TEMPLATES[resolvedLayout] || SLIDE_TEMPLATES['headline-body']
 
-            const claudePrompt = `Generate a single Instagram carousel slide as complete self-contained HTML/CSS.
-Page dimensions: exactly 1080x1350px.
-Import Google Fonts at top: Bebas Neue (headlines) and DM Sans (body).
-${needsPhoto && slidePhotoUrl ? 'External images allowed ONLY for the provided photo URL.' : 'No external images or JS.'} No markdown. Output ONLY raw HTML starting with <!DOCTYPE html>.
+            // Tentar preencher via Claude (inteligente)
+            let slideHtml: string
+            const claudeValues = ANTHROPIC_KEY
+              ? await generatePlaceholderValues(ANTHROPIC_KEY, {
+                  headline, body: bodyText, cta,
+                  originalIndex: slideIndex, total: slidesDef.length,
+                  layout_type: resolvedLayout,
+                  role: role || 'content',
+                  brandName: bName,
+                })
+              : null
 
-BRAND: ${bi.brand_name || 'LA Music School'}
-PRIMARY COLOR: ${colors.primary || '#E8185A'}
-DARK: #0E0E0E
-OFF-WHITE: #F5F2EE
-HEADLINE FONT: Bebas Neue
-BODY FONT: DM Sans
-
-SLIDE ${i + 1} of ${slidesDef.length} — ROLE: ${role} — LAYOUT: ${layout_type}
-HEADLINE: "${headline || ''}"
-${bodyText ? `BODY: "${bodyText}"` : ''}
-${cta ? `CTA: "${cta}"` : ''}
-${logo_url ? `LOGO URL (use as <img> bottom of slide): ${logo_url}` : ''}
-${layoutInstruction || ''}
-
-LAYOUT INSTRUCTIONS FOR THIS SLIDE (follow EXACTLY):
-${layoutInstr}
-${slide.hint_template ? `\nTEMPLATE REFERENCE: "${slide.hint_template}"\nUse this template style as visual reference for this slide.` : ''}
-
-CRITICAL RULES:
-- Follow the layout instructions above EXACTLY. Each slide must look completely different.
-- NO random abstract icons. NO lorem ipsum. Portuguese text only.
-- Geometric shapes only (rectangles, lines, circles) as decorative elements.
-- Bebas Neue for all headlines (huge, dominant). DM Sans for body (light weight 300).
-- Style: editorial magazine, premium, minimal. Like a design agency made it.
-${slide.text_layers && Array.isArray(slide.text_layers) && slide.text_layers.length > 0 ? `\nADDITIONAL TEXT LAYERS (include these in the HTML):\n${slide.text_layers.map((tl: any, ti: number) => `Layer ${ti + 1}: "${tl.text || tl.content || ''}" — font: ${tl.font || 'DM Sans'}, weight: ${tl.weight || '400'}, color: ${tl.color || '#FFFFFF'}, position: ${tl.position || 'bottom'}, size: ${tl.size || 32}px`).join('\n')}` : ''}
-${slide.logo_config ? `\nLOGO CONFIG: include ${(slide.logo_config as any).variant || 'icon'} variant at ${(slide.logo_config as any).position || 'bottom-left'}, size ${(slide.logo_config as any).size || 80}px` : ''}
-${style_reference_html ? `\nSTYLE REFERENCE — match this visual identity:\n--- REFERENCE HTML ---\n${String(style_reference_html).substring(0, 2000)}\n---\nKeep: same fonts, weights, colors, decoration style, spacing. Vary ONLY: background, layout, content.` : ''}`
-
-            const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
-              method: 'POST',
-              headers: {
-                'x-api-key': ANTHROPIC_KEY!,
-                'anthropic-version': '2023-06-01',
-                'content-type': 'application/json',
-              },
-              body: JSON.stringify({
-                model: 'claude-sonnet-4-6',
-                max_tokens: 4096,
-                messages: [{ role: 'user', content: claudePrompt }],
-              }),
-            })
-
-            if (!claudeRes.ok) {
-              const err = await claudeRes.text()
-              console.error(`[NINA] Slide ${i} Claude error:`, claudeRes.status, err)
-              results.push({ index: slideIndex, render_url: null, role, error: `Claude ${claudeRes.status}` })
-              continue
-            }
-
-            const claudeData = await claudeRes.json()
-            let slideHtml = claudeData.content?.[0]?.text || ''
-
-            // Strip markdown fences if present
-            slideHtml = slideHtml.replace(/^```html?\n?/i, '').replace(/\n?```$/i, '').trim()
-
-            if (!slideHtml.includes('<!DOCTYPE') && !slideHtml.includes('<html')) {
-              console.error(`[NINA] Slide ${i}: Claude did not return valid HTML`)
-              results.push({ index: slideIndex, render_url: null, role, error: 'Invalid HTML from Claude' })
-              continue
+            if (claudeValues) {
+              slideHtml = applyPlaceholders(templateHtml, claudeValues, {
+                originalIndex: slideIndex, total: slidesDef.length,
+                primary: primaryColor, brandName: bName,
+                photoUrl: photo_url || '',
+              })
+              console.log(`[NINA] Slide ${slideIndex}: Claude filled "${layout_type}" (${Object.keys(claudeValues).length} keys)`)
+            } else {
+              // Fallback: preenchimento mecânico
+              slideHtml = preencherTemplateFallback(templateHtml, {
+                headline, body: bodyText, cta,
+                originalIndex: slideIndex, total: slidesDef.length,
+                primary: primaryColor,
+              })
+              console.log(`[NINA] Slide ${slideIndex}: fallback filled "${layout_type}"`)
             }
 
             generatedHtml = slideHtml
-            console.log(`[NINA] Slide ${i} HTML generated (${slideHtml.length} chars)`)
+            console.log(`[NINA] Slide ${slideIndex}: template "${layout_type}" ready (${slideHtml.length} chars)`)
 
             // ── Browserless renders HTML → JPEG ──
             const BROWSERLESS_KEY = Deno.env.get('BROWSERLESS_API_KEY') || ''
@@ -426,7 +404,7 @@ ${style_reference_html ? `\nSTYLE REFERENCE — match this visual identity:\n---
 
             if (!browserlessRes.ok) {
               const err = await browserlessRes.text()
-              console.error(`[NINA] Slide ${i} Browserless error:`, browserlessRes.status, err)
+              console.error(`[NINA] Slide ${slideIndex} Browserless error:`, browserlessRes.status, err)
               results.push({ index: slideIndex, render_url: null, role, error: `Browserless ${browserlessRes.status}` })
               continue
             }
@@ -434,9 +412,7 @@ ${style_reference_html ? `\nSTYLE REFERENCE — match this visual identity:\n---
             const imgBuf = await browserlessRes.arrayBuffer()
             imageBytes = new Uint8Array(imgBuf)
             imgContentType = 'image/jpeg'
-            console.log(`[NINA] Slide ${i} screenshot done (${imageBytes.length} bytes)`)
-
-            } // end of else (non-cover Claude slides)
+            console.log(`[NINA] Slide ${slideIndex} rendered (${imageBytes.length} bytes)`)
 
           } else {
             // ── Gemini generates image directly ──
@@ -502,7 +478,7 @@ ${style_reference_html ? `\nSTYLE REFERENCE — match this visual identity:\n---
 
           const { data: urlData } = supabase.storage.from('posts').getPublicUrl(fileName)
           console.log(`[NINA] Slide ${i} done: ${urlData.publicUrl}`)
-          results.push({ index: slideIndex, render_url: urlData.publicUrl, role, ...(generatedHtml ? { html: generatedHtml } : {}) })
+          results.push({ index: slideIndex, render_url: urlData.publicUrl, role, layout_used: layout_type || 'cover-hero', ...(generatedHtml ? { html: generatedHtml } : {}) })
 
         } catch (e) {
           console.error(`[NINA] Slide ${i} failed:`, e)
@@ -776,7 +752,7 @@ A legenda deve celebrar esta data, conectar com a escola e inspirar os seguidore
 function resolveCarouselSlideCount(kind: string, requested?: number): number {
   const fallback = kind === 'photo_story' ? 5 : 6
   if (typeof requested !== 'number' || Number.isNaN(requested)) return fallback
-  return Math.max(4, Math.min(8, Math.round(requested)))
+  return Math.max(4, Math.min(12, Math.round(requested)))
 }
 
 function sanitizeCarouselTopic(input: string | undefined, fallback = 'musica em movimento'): string {
@@ -805,9 +781,9 @@ function sanitizeCarouselCopy(input: unknown, fallback = ''): string {
 
 function shortCarouselHeadline(input: string, fallback: string): string {
   const cleaned = sanitizeCarouselCopy(input, fallback)
-  if (cleaned.length <= 30) return cleaned
+  if (cleaned.length <= 50) return cleaned
   const words = cleaned.split(/\s+/).filter(Boolean)
-  return words.slice(0, 5).join(' ').slice(0, 30).trim() || fallback
+  return words.slice(0, 8).join(' ').slice(0, 50).trim() || fallback
 }
 
 function buildCarouselOutlinePrompt(p: any): string {
@@ -830,15 +806,16 @@ Tema central real: ${topic}
 Regras:
 - O deck deve nascer completo, coeso e pronto para edição.
 - Slide 1 precisa funcionar como capa forte.
-- Slides do meio entregam narrativa, benefício ou prova.
+- Slides do meio entregam narrativa, benefício ou prova. VARIE os layouts — não repita o mesmo layout em slides consecutivos.
 - Último slide precisa fechar com CTA.
 - O usuário pode escrever o pedido como instrução. NÃO copie a instrução. Reescreva em linguagem de conteúdo.
 - NÃO use nas headlines palavras como "carrossel", "slide", "lâmina", "4:5", "proporção", "instagram".
-- Headlines curtas: 2 a 6 palavras.
-- Body curto: no máximo 18 palavras.
+- Headlines: 2 a 8 palavras, expressivas e diretas.
+- Body: no máximo 25 palavras, informativo.
 - Use layouts compatíveis com este sistema:
   educacional: cover-hero, headline-body, stat-highlight, checklist, quote-proof, cta-end
-  foto-driven: photo-hero, photo-caption, split-photo-copy, photo-quote, cta-photo-end
+  foto-driven: cover-split, photo-overlay, split-photo-copy, photo-quote, cta-photo-end
+- Para tipo educacional, VARIE entre headline-body, checklist, stat-highlight e quote-proof nos slides do meio. Não use headline-body em todos.
 - Responda somente JSON válido.
 
 Formato exato:
@@ -861,7 +838,7 @@ Formato exato:
 function normalizeCarouselOutlineSlides(input: unknown, kind: string, requestedCount?: number): Array<Record<string, unknown>> {
   const count = resolveCarouselSlideCount(kind, requestedCount)
   const fallbackLayouts = kind === 'photo_story'
-    ? ['photo-hero', 'photo-caption', 'split-photo-copy', 'photo-quote', 'cta-photo-end']
+    ? ['cover-split', 'photo-overlay', 'split-photo-copy', 'photo-quote', 'cta-photo-end']
     : ['cover-hero', 'headline-body', 'stat-highlight', 'checklist', 'quote-proof', 'cta-end']
 
   if (!Array.isArray(input)) return []
@@ -886,7 +863,7 @@ function buildFallbackCarouselOutline(p: any): { slides: Array<Record<string, un
   const context = sanitizeCarouselTopic(brief || event_name, `destaque da ${brandName}`)
   const shortTopic = shortCarouselHeadline(context, `Destaque da ${brandName}`)
   const educationalLayouts = ['cover-hero', 'headline-body', 'stat-highlight', 'checklist', 'quote-proof', 'cta-end']
-  const photoLayouts = ['photo-hero', 'photo-caption', 'split-photo-copy', 'photo-quote', 'cta-photo-end']
+  const photoLayouts = ['cover-split', 'photo-overlay', 'split-photo-copy', 'photo-quote', 'cta-photo-end']
 
   const slides = Array.from({ length: count }, (_, index) => {
     if (carousel_kind === 'photo_story') {

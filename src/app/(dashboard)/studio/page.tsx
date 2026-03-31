@@ -105,12 +105,16 @@ import { applyPresetToComposition, selectDefaultPresetId } from "@/lib/canvas/te
 import type { CarouselKind, CarouselProject, CarouselSlide, CarouselTheme } from "@/lib/carousel/types";
 import {
   applyBrandingToCarouselProject,
-  applyCarouselLayoutToComposition,
   applyThemeToCarouselProject,
   createCarouselProject,
 } from "@/lib/carousel/create-carousel-project";
 import { deserializeCarouselProject } from "@/lib/carousel/deserialize-carousel-project";
 import { serializeCarouselProject } from "@/lib/carousel/serialize-carousel-project";
+import {
+  invokeGenerateCarousel,
+  type GenerateCarouselOutlineResponse,
+  type GenerateCarouselRenderResponse,
+} from "@/lib/carousel/generate-carousel-client";
 
 type StudioTab = "calendario" | "criar" | "carousel" | "banco" | "video" | "automacoes" | "performance" | "conexoes";
 type AutomationTab = "aniversarios" | "datas";
@@ -201,6 +205,33 @@ const CONTENT_PRESETS = {
 } as const;
 
 type ContentPresetKey = keyof typeof CONTENT_PRESETS;
+
+function getSupabaseProjectRef(url?: string | null): string | null {
+  if (!url) return null;
+  try {
+    return url.replace("https://", "").replace(".supabase.co", "").trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  if (error && typeof error === "object" && "message" in error && typeof (error as { message?: unknown }).message === "string") {
+    return (error as { message: string }).message;
+  }
+  return "";
+}
+
+function getGenerateCarouselErrorMessage(error: unknown, fallback: string): string {
+  const raw = getErrorMessage(error);
+  const projectRef = getSupabaseProjectRef(process.env.NEXT_PUBLIC_SUPABASE_URL);
+  if (/(failed to fetch|fetch failed|networkerror|err_failed|cors|functionsfetcherror)/i.test(raw.replace(/\s+/g, " "))) {
+    return `A edge function generate-carousel nao esta acessivel no projeto ${projectRef || "atual"}. Publique a function nesse mesmo projeto Supabase e recarregue o Studio.`;
+  }
+  return fallback;
+}
 
 type SubmagicConfig = {
   // Fase 1: Magic Clips
@@ -557,7 +588,7 @@ const TABS: { id: StudioTab; label: string; icon: Icon }[] = [
   { id: "calendario", label: "Calendário", icon: CalendarDots },
   { id: "criar", label: "Criar", icon: Sparkle },
   { id: "banco", label: "Banco de Fotos", icon: Images },
-  { id: "carousel", label: "Carrossel", icon: Images },
+  // { id: "carousel", label: "Carrossel", icon: Images }, // temporariamente desativado
   { id: "video", label: "Vídeo", icon: VideoCamera },
   { id: "automacoes", label: "Automações", icon: Lightning },
   { id: "performance", label: "Performance", icon: ChartBar },
@@ -832,6 +863,8 @@ export default function StudioPage() {
   const [carouselCta, setCarouselCta] = useState("Agende uma aula experimental");
   const [activeCarouselSlideIndex, setActiveCarouselSlideIndex] = useState(0);
   const [generatingSlideIndex, setGeneratingSlideIndex] = useState<number | null>(null);
+  const [carouselEngine, setCarouselEngine] = useState<"claude" | "gemini">("claude");
+  const [carouselIncludePhotos, setCarouselIncludePhotos] = useState(true);
   const [captionVariations, setCaptionVariations] = useState<Array<{ tone: string; phrase: string; caption: string; hashtags: string[] }>>([]);
   const [selectedCaptionIdx, setSelectedCaptionIdx] = useState(-1);
   const [layerComposition, setLayerComposition] = useState<import("@/lib/types/layer-composition").LayerComposition | null>(null);
@@ -2878,52 +2911,20 @@ export default function StudioPage() {
     return (admin as { user_id: string } | null)?.user_id ?? null;
   }, [supabase]);
 
-  const uploadCompositionImage = useCallback(async (
-    composition: import("@/lib/types/layer-composition").LayerComposition,
-    prefix: string,
-  ) => {
-    const { exportCompositionToBlob, loadImage } = await import("@/lib/canvas/render-composition");
-    const photo = await loadImage(composition.background.photoUrl);
-    let logo: HTMLImageElement | null = null;
-    if (composition.logoLayer?.logoUrl) {
-      logo = await loadImage(composition.logoLayer.logoUrl).catch(() => null);
-    }
-
-    const blob = await exportCompositionToBlob(composition, { photo, logo });
-    const path = `nina/${prefix}-${brand}-${Date.now()}.jpg`;
-    const { error: uploadError } = await supabase.storage.from("posts").upload(path, blob, {
-      contentType: "image/jpeg",
-      upsert: true,
-    });
-    if (uploadError) throw uploadError;
-
-    const { data } = supabase.storage.from("posts").getPublicUrl(path);
-    return data.publicUrl;
-  }, [brand, supabase]);
-
   const exportCarouselAssets = useCallback(async (project: CarouselProject, prefix: string) => {
-    const slideUrls: string[] = [];
+    const slideUrls: string[] = project.slides
+      .map((slide) => slide.renderUrl || slide.previewUrl || null)
+      .filter((url): url is string => Boolean(url));
 
-    for (let index = 0; index < project.slides.length; index += 1) {
-      const slide = project.slides[index];
-      try {
-        const url = await uploadCompositionImage(slide.composition, `${prefix}-${project.id}-${index + 1}`);
-        slideUrls.push(url);
-      } catch (error) {
-        console.error("[STUDIO][CAROUSEL] export slide failed", error);
-        if (slide.photoUrl) {
-          slideUrls.push(slide.photoUrl);
-        } else {
-          throw error;
-        }
-      }
+    if (slideUrls.length < project.slides.length) {
+      throw new Error(`Deck incompleto para ${prefix}. Gere ou regenere os slides pendentes antes de exportar/publicar.`);
     }
 
     const coverIndex = Math.min(project.coverSlideIndex, Math.max(0, slideUrls.length - 1));
     const coverUrl = slideUrls[coverIndex] || slideUrls[0] || null;
     const coverComposition = project.slides[coverIndex]?.composition || project.slides[0]?.composition || null;
     return { slideUrls, coverUrl, coverComposition };
-  }, [uploadCompositionImage]);
+  }, []);
 
   const buildCarouselMetadata = useCallback((
     project: CarouselProject,
@@ -2933,6 +2934,9 @@ export default function StudioPage() {
   ) => {
     const serializedProject = serializeCarouselProject({
       ...project,
+      slideUrls,
+      coverUrl,
+      renderedAt: new Date().toISOString(),
       slides: project.slides.map((slide, index) => ({
         ...slide,
         index,
@@ -2955,36 +2959,34 @@ export default function StudioPage() {
 
   const handleGenerateCarouselDeck = async () => {
     setIsGeneratingWithNina(true);
+    setGeneratingSlideIndex(null);
     try {
-      const [outlineResult, photoResult] = await Promise.all([
-        supabase.functions.invoke<NinaGenerationResponse>("nina-create-post", {
-          body: {
-            mode: "carousel_outline",
-            brand,
-            brief: postBrief,
-            carousel_kind: carouselKind,
-            slide_count: carouselSlideCount,
-            tones: [carouselTone],
-            event_name: selectedEventPhotoForNina?.event_name ?? null,
-          },
-        }),
-        supabase.functions.invoke<NinaGenerationResponse>("nina-create-post", {
-          body: {
-            mode: "brief",
-            brand,
-            brief: postBrief,
-            post_type: "feed",
-            generation_mode: "photo_only",
-            tones: [carouselTone],
-            event_asset_id: selectedEventPhotoForNina?.id ?? null,
-            reference_image_url: selectedEventPhotoForNina?.file_url ?? null,
-            event_name: selectedEventPhotoForNina?.event_name ?? null,
-          },
-        }),
-      ]);
+      const selectedPhotoAssets = [
+        selectedEventPhotoForNina,
+        ...eventPhotosForNina.slice(0, 3),
+      ]
+        .filter((item, index, list): item is PhotoAsset => Boolean(item) && list.findIndex((candidate) => candidate?.id === item?.id) === index)
+        .map((item) => ({
+          id: item.id,
+          url: item.file_url,
+          label: item.event_name || item.person_name || item.id,
+        }));
 
-      if (outlineResult.error && photoResult.error) {
-        toast.error("Não foi possível gerar o deck do carrossel agora.");
+      const { data: outlineData, error: outlineError } = await invokeGenerateCarousel<GenerateCarouselOutlineResponse>(supabase, {
+        action: "outline",
+        brand,
+        brief: postBrief,
+        kind: carouselKind,
+        tone: carouselTone,
+        slide_count: carouselSlideCount,
+        cta: carouselCta,
+        selected_photo_assets: selectedPhotoAssets,
+      });
+
+      if (outlineError || !outlineData?.success) {
+        toast.error(
+          outlineData?.error || getGenerateCarouselErrorMessage(outlineError, "Não foi possível gerar o outline do carrossel."),
+        );
         return;
       }
 
@@ -2996,152 +2998,86 @@ export default function StudioPage() {
             : []
       );
 
-      const outlineData = outlineResult.data;
-      const photoData = photoResult.data;
-      const hashtags = Array.from(new Set([
-        ...parseHashtags(outlineData?.hashtags),
-        ...parseHashtags(photoData?.hashtags),
-      ]));
-
-      const photoUrl = photoData?.photo_url || photoData?.image_url || selectedEventPhotoForNina?.file_url || null;
-      const photoPool = [
-        selectedEventPhotoForNina?.file_url,
-        photoUrl,
-        ...eventPhotosForNina.map((photo) => photo.file_url),
-      ].filter((url, index, list): url is string => Boolean(url) && list.indexOf(url) === index);
-
-      const photoAssetIds = [
-        selectedEventPhotoForNina?.id,
-        ...eventPhotosForNina.map((photo) => photo.id),
-      ];
+      const hashtags = Array.from(new Set(parseHashtags(outlineData?.hashtags)));
+      const photoPool = selectedPhotoAssets.map((photo) => photo.url).filter(Boolean);
+      const photoAssetIds = selectedPhotoAssets.map((photo) => photo.id);
 
       const outlineSlides = Array.isArray(outlineData?.slides)
-        ? outlineData.slides
-            .map((slide) => ({
-              role: (
-                slide.role === "hook" || slide.role === "content" || slide.role === "proof" || slide.role === "cta"
-                  ? slide.role
-                  : "cover"
-              ) as CarouselSlide["role"],
-              layoutType: slide.layout_type || "cover-hero",
-              headline: slide.headline || undefined,
-              body: slide.body || undefined,
-              cta: slide.cta || undefined,
-              summary: slide.summary || undefined,
-            }))
-            .slice(0, carouselSlideCount)
+        ? outlineData.slides.map((slide) => ({
+            role: (
+              slide.role === "hook" || slide.role === "content" || slide.role === "proof" || slide.role === "cta"
+                ? slide.role
+                : "cover"
+            ) as CarouselSlide["role"],
+            layoutType: slide.layout_type || (slide.role === "cta" ? "cta-end" : slide.role === "proof" ? "quote-proof" : slide.role === "cover" ? "cover-hero" : "headline-body"),
+            templateId: slide.template_id || undefined,
+            templateName: slide.template_name || undefined,
+            headline: slide.headline || undefined,
+            body: slide.body || undefined,
+            cta: slide.cta || undefined,
+            summary: slide.summary || undefined,
+            photoMode: slide.photo_mode || (carouselIncludePhotos && photoPool.length > 0 ? "asset" : "none"),
+            photoPrompt: slide.photo_prompt || undefined,
+            placeholderValues: slide.placeholder_values || undefined,
+          }))
         : [];
 
       const generatedCaption = [
-        outlineData?.caption?.trim() || photoData?.caption?.trim(),
+        outlineData?.caption?.trim(),
         hashtags.join(" "),
       ].filter(Boolean).join("\n\n");
       if (generatedCaption) {
         setPostCaption(generatedCaption);
       }
 
-      const project = createCarouselProject({
-        brandId: brand,
-        kind: carouselKind,
-        tone: carouselTone,
-        brief: postBrief,
-        caption: outlineData?.caption || photoData?.caption || postCaption,
-        cta: carouselCta,
-        brandIdentity,
-        photoUrls: photoPool,
-        photoAssetIds,
-        slideCount: carouselSlideCount,
-        outlineSlides,
-      });
+      const draftProject: CarouselProject = {
+        ...createCarouselProject({
+          brandId: brand,
+          kind: carouselKind,
+          tone: carouselTone,
+          brief: postBrief,
+          caption: outlineData?.caption || postCaption,
+          cta: carouselCta,
+          brandIdentity,
+          photoUrls: photoPool,
+          photoAssetIds,
+          slideCount: carouselSlideCount,
+          outlineSlides,
+        }),
+        references: selectedPhotoAssets,
+      };
 
-      setCarouselProject(project);
+      setCarouselProject(draftProject);
       setActiveCarouselSlideIndex(0);
       setLayerComposition(null);
-      setNinaPreviewUrl(photoUrl);
+      setNinaPreviewUrl(selectedPhotoAssets[0]?.url || null);
       setNinaHashtags(hashtags);
-      setNinaGenerationMethod(outlineSlides.length > 0 ? "carousel_outline" : "carousel_project");
-      toast.success("Outline gerado! Gerando imagens dos slides...");
+      setNinaGenerationMethod("generate-carousel");
+      toast.success("Outline gerado. Renderizando deck...");
 
-      // ── Generate slide images one by one via Claude + Browserless ──
-      const biColors = {
-        primary: brandIdentity?.color_primary || "#E8185A",
-        secondary: brandIdentity?.color_secondary || "#0E0E0E",
-        accent: brandIdentity?.color_accent || "#F5F2EE",
-      };
-      const biPayload = {
-        brand_name: brandIdentity?.brand_name || (brand === "la_music_kids" ? "LA Music Kids" : "LA Music School"),
-        colors: biColors,
-        font_display: brandIdentity?.font_display || "Bebas Neue",
-        font_body: brandIdentity?.font_body || "DM Sans",
-      };
-      const logoUrlForSlides = brandIdentity?.logo_primary_url || brandIdentity?.logo_icon_url || null;
+      const { data: renderData, error: renderError } = await invokeGenerateCarousel<GenerateCarouselRenderResponse>(supabase, {
+        action: "render_deck",
+        brand,
+        project: draftProject,
+        engine: carouselEngine,
+      });
 
-      let styleReferenceHtml = "";
-
-      for (let si = 0; si < project.slides.length; si++) {
-        setGeneratingSlideIndex(si);
-        const s = project.slides[si];
-        try {
-          const slidePayload: Record<string, unknown> = {
-            role: s.role,
-            layout_type: s.layoutType,
-            headline: s.headline || "",
-            body: s.body || "",
-            cta: s.cta || "",
-            photo_subject: s.summary || "",
-            originalIndex: si,
-          };
-
-          // Add style reference for slides after the first
-          const extraBody: Record<string, unknown> = {};
-          if (si > 0 && styleReferenceHtml) {
-            extraBody.style_reference_html = styleReferenceHtml.substring(0, 2000);
-          }
-
-          const { data: slideData, error: slideErr } = await supabase.functions.invoke("nina-create-post", {
-            body: {
-              mode: "carousel_slides",
-              brand,
-              project_id: project.id,
-              engine: "claude",
-              brand_identity: biPayload,
-              logo_url: logoUrlForSlides,
-              photo_url: s.photoUrl || photoUrl || null,
-              slides: [slidePayload],
-              ...extraBody,
-            },
-          });
-
-          if (!slideErr && slideData?.slides?.[0]?.render_url) {
-            const renderUrl = slideData.slides[0].render_url;
-            // Save first slide HTML for style reference (from Claude response if available)
-            if (si === 0 && slideData.slides[0].html) {
-              styleReferenceHtml = slideData.slides[0].html;
-            }
-            setCarouselProject((prev) => {
-              if (!prev) return prev;
-              return {
-                ...prev,
-                slides: prev.slides.map((ps, idx) =>
-                  idx === si ? { ...ps, renderUrl } : ps
-                ),
-              };
-            });
-            console.log(`[STUDIO] Slide ${si + 1} rendered: ${renderUrl}`);
-          } else {
-            console.error(`[STUDIO] Slide ${si} failed:`, slideErr, slideData);
-          }
-        } catch (e) {
-          console.error(`[STUDIO] Slide ${si} error:`, e);
-        }
+      if (renderError || !renderData?.success || !renderData.project) {
+        toast.error(
+          renderData?.error || getGenerateCarouselErrorMessage(renderError, "Falha ao renderizar o carrossel."),
+        );
+        return;
       }
-      setGeneratingSlideIndex(null);
+
+      setCarouselProject(renderData.project);
+      setNinaPreviewUrl(renderData.project.coverUrl || selectedPhotoAssets[0]?.url || null);
       toast.success("Carrossel gerado com sucesso!");
     } catch (error) {
       console.error("[STUDIO][CAROUSEL] generate error:", error);
-      toast.error("Falha ao gerar o carrossel.");
+      toast.error(getGenerateCarouselErrorMessage(error, "Falha ao gerar o carrossel."));
     } finally {
       setIsGeneratingWithNina(false);
+      setGeneratingSlideIndex(null);
     }
   };
 
@@ -3417,13 +3353,22 @@ export default function StudioPage() {
 
   const handleApplyBrandingToCarousel = useCallback(() => {
     if (!carouselProject) return;
-    setCarouselProject(applyBrandingToCarouselProject(carouselProject, brandIdentity));
+    const next = applyBrandingToCarouselProject(carouselProject, brandIdentity);
+    setCarouselProject({
+      ...next,
+      slides: next.slides.map((slide) => ({ ...slide, renderUrl: null, html: null })),
+    });
   }, [brandIdentity, carouselProject]);
 
   const handleApplyCarouselTheme = useCallback((themePatch: Partial<CarouselTheme>) => {
-    setCarouselProject((current) => (
-      current ? applyThemeToCarouselProject(current, themePatch, brandIdentity) : current
-    ));
+    setCarouselProject((current) => {
+      if (!current) return current;
+      const next = applyThemeToCarouselProject(current, themePatch, brandIdentity);
+      return {
+        ...next,
+        slides: next.slides.map((slide) => ({ ...slide, renderUrl: null, html: null })),
+      };
+    });
   }, [brandIdentity]);
 
   const handleRegenerateCarouselDeck = () => {
@@ -3448,15 +3393,13 @@ export default function StudioPage() {
           return {
             ...slide,
             layoutType: previous.layoutType,
-            composition: {
-              ...previous.composition,
-              background: slide.composition.background,
-              textLayers: previous.composition.textLayers.map((layer, layerIndex) => ({
-                ...layer,
-                id: `${layer.id}-${Date.now()}-${layerIndex}`,
-                content: slide.composition.textLayers[layerIndex]?.content || slide.headline || layer.content,
-              })),
-            },
+            templateId: previous.templateId,
+            templateName: previous.templateName,
+            templatePreviewUrl: previous.templatePreviewUrl,
+            photoMode: previous.photoMode,
+            renderUrl: null,
+            previewUrl: previous.previewUrl || null,
+            html: null,
           };
         }),
       };
@@ -3471,30 +3414,17 @@ export default function StudioPage() {
       const slide = current.slides[activeCarouselSlideIndex];
       if (!slide) return current;
 
-      const composition = applyCarouselLayoutToComposition(
-        {
-          ...slide.composition,
-          background: {
-            ...slide.composition.background,
-            photoUrl: slide.photoUrl || slide.composition.background.photoUrl,
-          },
-        },
-        { ...slide, layoutType },
-        current.theme,
-        brandIdentity,
-      );
-
       return {
         ...current,
         updatedAt: new Date().toISOString(),
         slides: current.slides.map((item, index) => (
           index === activeCarouselSlideIndex
-            ? { ...item, layoutType, composition }
+            ? { ...item, layoutType, renderUrl: null, html: null }
             : item
         )),
       };
     });
-  }, [activeCarouselSlideIndex, brandIdentity, carouselProject]);
+  }, [activeCarouselSlideIndex, carouselProject]);
 
   const handleAddCarouselSlide = useCallback(() => {
     setCarouselProject((current) => {
@@ -3507,13 +3437,8 @@ export default function StudioPage() {
         index: current.slides.length,
         role: source.role === "cta" ? "content" : source.role,
         summary: "Novo slide",
-        composition: {
-          ...source.composition,
-          textLayers: source.composition.textLayers.map((layer, layerIndex) => ({
-            ...layer,
-            id: `${layer.id}-new-${Date.now()}-${layerIndex}`,
-          })),
-        },
+        renderUrl: null,
+        html: null,
       };
 
       const next = {
@@ -3558,13 +3483,8 @@ export default function StudioPage() {
         ...source,
         id: `${source.id}-copy-${Date.now()}`,
         summary: `${source.summary || source.headline || "Slide"} (cópia)`,
-        composition: {
-          ...source.composition,
-          textLayers: source.composition.textLayers.map((layer, layerIndex) => ({
-            ...layer,
-            id: `${layer.id}-copy-${Date.now()}-${layerIndex}`,
-          })),
-        },
+        renderUrl: null,
+        html: null,
       };
 
       const slides = [...current.slides];
@@ -3626,68 +3546,43 @@ export default function StudioPage() {
 
     setGeneratingSlideIndex(index);
     try {
-      const biColors = {
-        primary: brandIdentity?.color_primary || "#E8185A",
-        secondary: brandIdentity?.color_secondary || "#0E0E0E",
-        accent: brandIdentity?.color_accent || "#F5F2EE",
-      };
-      const biPayload = {
-        brand_name: brandIdentity?.brand_name || (brand === "la_music_kids" ? "LA Music Kids" : "LA Music School"),
-        colors: biColors,
-        font_display: brandIdentity?.font_display || "Bebas Neue",
-        font_body: brandIdentity?.font_body || "DM Sans",
-      };
-      const logoUrlForSlides = brandIdentity?.logo_primary_url || brandIdentity?.logo_icon_url || null;
-
-      const slidePayload: Record<string, unknown> = {
-        role: slide.role,
-        layout_type: slide.layoutType,
-        headline: slide.headline || "",
-        body: slide.body || "",
-        cta: slide.cta || "",
-        photo_subject: slide.summary || "",
-        originalIndex: index,
-        ...(extras?.text_layers ? { text_layers: extras.text_layers } : {}),
-        ...(extras?.logo_config ? { logo_config: extras.logo_config } : {}),
-        ...(extras?.hint_template ? { hint_template: extras.hint_template } : {}),
-      };
-
-      const { data: slideData, error: slideErr } = await supabase.functions.invoke("nina-create-post", {
-        body: {
-          mode: "carousel_slides",
-          brand,
-          project_id: carouselProject.id,
-          engine: "claude",
-          brand_identity: biPayload,
-          logo_url: logoUrlForSlides,
-          photo_url: slide.photoUrl || null,
-          slides: [slidePayload],
+      const { data: slideData, error: slideErr } = await invokeGenerateCarousel<GenerateCarouselRenderResponse>(supabase, {
+        action: "render_slide",
+        brand,
+        projectId: carouselProject.id,
+        slide: {
+          ...slide,
+          templateName: extras?.hint_template || slide.templateName,
         },
+        engine: carouselEngine,
       });
 
-      if (!slideErr && slideData?.slides?.[0]?.render_url) {
-        const renderUrl = slideData.slides[0].render_url;
+      const nextSlide = (slideData as { slide?: CarouselSlide } | null)?.slide;
+      if (!slideErr && slideData?.success && nextSlide?.renderUrl) {
         setCarouselProject((prev) => {
           if (!prev) return prev;
           return {
             ...prev,
+            updatedAt: new Date().toISOString(),
             slides: prev.slides.map((ps, idx) =>
-              idx === index ? { ...ps, renderUrl } : ps
+              idx === index ? { ...ps, ...nextSlide } : ps
             ),
           };
         });
         toast.success(`Slide ${index + 1} regenerado!`);
       } else {
         console.error(`[STUDIO] Regen slide ${index} failed:`, slideErr, slideData);
-        toast.error(`Erro ao regenerar slide ${index + 1}`);
+        toast.error(
+          slideData?.error || getGenerateCarouselErrorMessage(slideErr, `Erro ao regenerar slide ${index + 1}`),
+        );
       }
     } catch (e) {
       console.error(`[STUDIO] Regen slide ${index} error:`, e);
-      toast.error(`Erro ao regenerar slide ${index + 1}`);
+      toast.error(getGenerateCarouselErrorMessage(e, `Erro ao regenerar slide ${index + 1}`));
     } finally {
       setGeneratingSlideIndex(null);
     }
-  }, [brand, brandIdentity, carouselProject, supabase]);
+  }, [brand, brandIdentity, carouselEngine, carouselProject, supabase]);
 
   const handleExportCarouselDeck = async () => {
     if (!carouselProject) {
@@ -3696,23 +3591,18 @@ export default function StudioPage() {
     }
 
     try {
-      const { exportCompositionToBlob, loadImage } = await import("../../../lib/canvas/render-composition");
-
       for (let index = 0; index < carouselProject.slides.length; index += 1) {
         const slide = carouselProject.slides[index];
-        const photo = await loadImage(slide.composition.background.photoUrl);
-        const logo = slide.composition.logoLayer?.logoUrl
-          ? await loadImage(slide.composition.logoLayer.logoUrl).catch(() => null)
-          : null;
-        const blob = await exportCompositionToBlob(slide.composition, { photo, logo });
-        const downloadUrl = URL.createObjectURL(blob);
+        const downloadUrl = slide.renderUrl || slide.previewUrl;
+        if (!downloadUrl) {
+          throw new Error(`Slide ${index + 1} ainda não possui render final.`);
+        }
         const anchor = document.createElement("a");
         anchor.href = downloadUrl;
         anchor.download = `${(carouselProject.title || "carousel").toLowerCase().replace(/[^a-z0-9]+/gi, "-")}-slide-${index + 1}.jpg`;
         document.body.appendChild(anchor);
         anchor.click();
         anchor.remove();
-        window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
       }
 
       toast.success("Slides exportados.");
@@ -4048,7 +3938,7 @@ export default function StudioPage() {
             value={postPlatform}
             onValueChange={(value) => {
               if (value === "carousel") {
-                setActiveTab("carousel");
+                // Carrossel desativado temporariamente
                 setPostPlatform("story");
                 return;
               }
@@ -4345,6 +4235,10 @@ export default function StudioPage() {
         onGenerate={() => void handleGenerateCarouselDeck()}
         isGenerating={isGeneratingWithNina}
         generatingSlideIndex={generatingSlideIndex}
+        engine={carouselEngine}
+        onEngineChange={setCarouselEngine}
+        includePhotos={carouselIncludePhotos}
+        onIncludePhotosChange={setCarouselIncludePhotos}
         onProjectChange={setCarouselProject}
         onThemeChange={handleApplyCarouselTheme}
         onApplyBrandingToAll={handleApplyBrandingToCarousel}
@@ -6017,37 +5911,7 @@ export default function StudioPage() {
               }}>
                 Regenerar com IA
               </Button>
-              {selectedPost.post_type === "carousel" && selectedPost.metadata?.carousel_project ? (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  className="w-full"
-                  onClick={() => {
-                    const project = deserializeCarouselProject(selectedPost.metadata?.carousel_project);
-                    if (!project) {
-                      toast.error("Não foi possível reabrir este carrossel.");
-                      return;
-                    }
-                    setBrand(selectedPost.brand);
-                    setPostBrief(selectedPost.title || "");
-                    setPostCaption(selectedPost.caption || "");
-                    setPostDate(selectedPost.scheduled_for?.substring(0, 10) || brazilNow.date);
-                    setPostTime(selectedPost.scheduled_for?.substring(11, 16) || brazilNow.time);
-                    setCarouselProject({ ...project, brandId: selectedPost.brand });
-                    setCarouselKind(project.kind);
-                    setCarouselTone(project.tone);
-                    setCarouselSlideCount(project.slideCount);
-                    setCarouselCta(project.cta || carouselCta);
-                    setActiveCarouselSlideIndex(project.coverSlideIndex || 0);
-                    setPostModalOpen(false);
-                    setSelectedPost(null);
-                    setActiveTab("carousel");
-                  }}
-                >
-                  Editar no Studio Carousel
-                </Button>
-              ) : null}
+              {/* Botão "Editar no Studio Carousel" temporariamente desativado */}
 
               {/* Status */}
               <div className="flex items-center gap-2">

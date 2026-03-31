@@ -30,7 +30,10 @@ interface CreateCarouselProjectOptions {
   outlineSlides?: CarouselOutlineSlide[];
 }
 
-type SlideDraft = Pick<CarouselSlide, "role" | "layoutType" | "headline" | "body" | "cta" | "summary" | "photoUrl" | "photoAssetId">;
+type SlideDraft = Pick<
+  CarouselSlide,
+  "role" | "layoutType" | "templateId" | "templateName" | "headline" | "body" | "cta" | "summary" | "photoMode" | "photoUrl" | "photoAssetId" | "photoPrompt"
+>;
 
 function createId(prefix: string): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -145,16 +148,26 @@ function buildOutlineSlides(
   cta: string,
   slideCount: number,
 ): SlideDraft[] {
-  return outlineSlides.slice(0, slideCount).map((slide, index) => ({
-    role: slide.role,
-    layoutType: slide.layoutType,
-    headline: trimCopy(shortCarouselHeadline(slide.headline, `Slide ${index + 1}`), `Slide ${index + 1}`, 30),
-    body: trimCopy(cleanupCarouselCopy(slide.body, ""), "", 92),
-    cta: trimCopy(cleanupCarouselCopy(slide.cta, cta), cta, 44),
-    summary: trimCopy(cleanupCarouselCopy(slide.summary, slide.headline || `Slide ${index + 1}`), slide.headline || `Slide ${index + 1}`, 40),
-    photoUrl: photoUrls[index % Math.max(1, photoUrls.length)],
-    photoAssetId: photoAssetIds[index % Math.max(1, photoAssetIds.length)] || undefined,
-  }));
+  return outlineSlides.slice(0, slideCount).map((slide, index) => {
+    const resolvedPhotoUrl = photoUrls[index % Math.max(1, photoUrls.length)];
+    const resolvedPhotoAssetId = photoAssetIds[index % Math.max(1, photoAssetIds.length)] || undefined;
+    const resolvedPhotoMode = slide.photoMode || (resolvedPhotoUrl ? "asset" : "none");
+
+    return {
+      role: slide.role,
+      layoutType: slide.layoutType,
+      templateId: slide.templateId,
+      templateName: slide.templateName,
+      headline: trimCopy(shortCarouselHeadline(slide.headline, `Slide ${index + 1}`), `Slide ${index + 1}`, 30),
+      body: trimCopy(cleanupCarouselCopy(slide.body, ""), "", 92),
+      cta: trimCopy(cleanupCarouselCopy(slide.cta, cta), cta, 44),
+      summary: trimCopy(cleanupCarouselCopy(slide.summary, slide.headline || `Slide ${index + 1}`), slide.headline || `Slide ${index + 1}`, 40),
+      photoMode: resolvedPhotoMode,
+      photoUrl: resolvedPhotoMode === "asset" ? resolvedPhotoUrl : undefined,
+      photoAssetId: resolvedPhotoMode === "asset" ? resolvedPhotoAssetId : undefined,
+      photoPrompt: slide.photoPrompt,
+    };
+  });
 }
 
 function createShapeLayer(
@@ -271,6 +284,7 @@ function buildEducationalSlides(
         body: trimCopy(intro, intro, 74),
         summary: "Capa com gancho principal",
         cta,
+        photoMode: photoUrl ? "asset" : "none",
         photoUrl,
         photoAssetId,
       };
@@ -284,6 +298,7 @@ function buildEducationalSlides(
         body: trimCopy(detailOne, detailOne, 92),
         summary: "Gancho e contexto",
         cta,
+        photoMode: photoUrl ? "asset" : "none",
         photoUrl,
         photoAssetId,
       };
@@ -297,6 +312,7 @@ function buildEducationalSlides(
         body: trimCopy(detailOne, detailOne, 96),
         summary: "Primeiro desenvolvimento",
         cta,
+        photoMode: photoUrl ? "asset" : "none",
         photoUrl,
         photoAssetId,
       };
@@ -310,6 +326,7 @@ function buildEducationalSlides(
         body: trimCopy(detailTwo, detailTwo, 92),
         summary: "Segundo desenvolvimento",
         cta,
+        photoMode: photoUrl ? "asset" : "none",
         photoUrl,
         photoAssetId,
       };
@@ -323,6 +340,7 @@ function buildEducationalSlides(
         body: trimCopy(proof, proof, 92),
         summary: "Prova, beneficio ou bastidor",
         cta,
+        photoMode: photoUrl ? "asset" : "none",
         photoUrl,
         photoAssetId,
       };
@@ -335,6 +353,7 @@ function buildEducationalSlides(
       body: trimCopy(cta, cta || "Agende uma aula experimental e veja a musica ganhar forma.", 84),
       summary: "Fechamento com CTA",
       cta,
+      photoMode: "none",
       photoUrl,
       photoAssetId,
     };
@@ -373,6 +392,7 @@ function buildPhotoStorySlides(
         body: emotionalLine,
         summary: "Capa emocional",
         cta,
+        photoMode: photoUrl ? "asset" : "none",
         photoUrl,
         photoAssetId,
       };
@@ -386,6 +406,7 @@ function buildPhotoStorySlides(
         body: sceneOne,
         summary: "Primeira cena",
         cta,
+        photoMode: photoUrl ? "asset" : "none",
         photoUrl,
         photoAssetId,
       };
@@ -399,6 +420,7 @@ function buildPhotoStorySlides(
         body: sceneTwo,
         summary: "Segunda cena",
         cta,
+        photoMode: photoUrl ? "asset" : "none",
         photoUrl,
         photoAssetId,
       };
@@ -412,6 +434,7 @@ function buildPhotoStorySlides(
         body: sceneThree,
         summary: "Prova social ou bastidor",
         cta,
+        photoMode: photoUrl ? "asset" : "none",
         photoUrl,
         photoAssetId,
       };
@@ -424,6 +447,7 @@ function buildPhotoStorySlides(
       body: trimCopy(cta, cta || "Agende uma aula experimental.", 72),
       summary: "CTA final",
       cta,
+      photoMode: "none",
       photoUrl,
       photoAssetId,
     };
@@ -813,13 +837,20 @@ export function createCarouselProject(options: CreateCarouselProjectOptions): Ca
       index,
       role: draft.role,
       layoutType: draft.layoutType,
+      templateId: draft.templateId,
+      templateName: draft.templateName,
       headline: draft.headline,
       body: draft.body,
       cta: draft.cta,
       summary: draft.summary,
+      photoMode: draft.photoMode || (draft.photoUrl ? "asset" : "none"),
       photoUrl: draft.photoUrl || fallbackPhoto,
       photoAssetId: draft.photoAssetId,
+      photoPrompt: draft.photoPrompt,
       composition,
+      renderUrl: null,
+      previewUrl: null,
+      html: null,
     };
   });
 
@@ -870,13 +901,13 @@ export function applyThemeToCarouselProject(
       ...slide,
       index,
       composition: applyCarouselLayoutToComposition(
-        {
-          ...slide.composition,
-          background: {
-            ...slide.composition.background,
-            photoUrl: slide.photoUrl || slide.composition.background.photoUrl,
-          },
-        },
+        slide.composition || createDefaultComposition({
+          photoUrl: slide.photoUrl || "",
+          mainText: slide.headline || slide.summary || `Slide ${index + 1}`,
+          aspectRatio: "carousel",
+          brandIdentity,
+          platform: "carousel",
+        }),
         slide,
         theme,
         brandIdentity,

@@ -25,7 +25,12 @@ export function CarouselDeckPanel({
   generatingSlideIndex,
   onSelectSlide,
   onAddSlide,
+  onRemoveSlide,
+  onDuplicateSlide,
+  onMoveSlide,
+  onApplyBrandingToAll,
   onRegenerateDeck,
+  onSetCoverSlide,
   onRegenerateSlide,
   onExportDeck,
 }: Props) {
@@ -51,6 +56,13 @@ export function CarouselDeckPanel({
           </p>
         </div>
         <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={onApplyBrandingToAll}
+            className="rounded-lg border border-slate-700 px-3 py-1.5 text-[11px] text-slate-300 hover:bg-slate-800"
+          >
+            Aplicar branding
+          </button>
           <button
             type="button"
             onClick={onRegenerateDeck}
@@ -117,6 +129,46 @@ export function CarouselDeckPanel({
                 Regen
               </button>
             </div>
+            <div className="grid grid-cols-2 gap-1">
+              <button
+                type="button"
+                onClick={() => onSetCoverSlide(index)}
+                className="rounded-lg border border-slate-700 px-2 py-1 text-[10px] text-slate-300 hover:bg-slate-800"
+              >
+                {project.coverSlideIndex === index ? "Capa" : "Definir capa"}
+              </button>
+              <button
+                type="button"
+                onClick={() => onDuplicateSlide(index)}
+                className="rounded-lg border border-slate-700 px-2 py-1 text-[10px] text-slate-300 hover:bg-slate-800"
+              >
+                Duplicar
+              </button>
+              <button
+                type="button"
+                onClick={() => onMoveSlide(index, -1)}
+                disabled={index === 0}
+                className="rounded-lg border border-slate-700 px-2 py-1 text-[10px] text-slate-300 disabled:opacity-40 hover:bg-slate-800"
+              >
+                Subir
+              </button>
+              <button
+                type="button"
+                onClick={() => onMoveSlide(index, 1)}
+                disabled={index === project.slides.length - 1}
+                className="rounded-lg border border-slate-700 px-2 py-1 text-[10px] text-slate-300 disabled:opacity-40 hover:bg-slate-800"
+              >
+                Descer
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => onRemoveSlide(index)}
+              disabled={project.slides.length <= 4}
+              className="w-full rounded-lg border border-rose-900/50 px-2 py-1 text-[10px] text-rose-400 disabled:opacity-40 hover:bg-rose-950/20"
+            >
+              Remover
+            </button>
           </div>
         ))}
 

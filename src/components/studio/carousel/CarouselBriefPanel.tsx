@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import type { PhotoAsset, StudioBrand } from "@/lib/queries/studio";
 import type { CarouselKind } from "@/lib/carousel/types";
 import { Button } from "@/components/ui";
@@ -41,6 +40,10 @@ interface Props {
   onPostTimeChange: (value: string) => void;
   isGenerating: boolean;
   onGenerate: () => void;
+  engine: "claude" | "gemini";
+  onEngineChange: (engine: "claude" | "gemini") => void;
+  includePhotos: boolean;
+  onIncludePhotosChange: (value: boolean) => void;
 }
 
 export function CarouselBriefPanel({
@@ -69,9 +72,11 @@ export function CarouselBriefPanel({
   onPostTimeChange,
   isGenerating,
   onGenerate,
+  engine,
+  onEngineChange,
+  includePhotos,
+  onIncludePhotosChange,
 }: Props) {
-  const [engine, setEngine] = useState<"claude" | "gemini">("claude");
-  const [includePhotos, setIncludePhotos] = useState(true);
 
   return (
     <div className="space-y-3 overflow-y-auto">
@@ -194,7 +199,7 @@ export function CarouselBriefPanel({
         <div className="mt-3 grid grid-cols-2 gap-2">
           <button
             type="button"
-            onClick={() => setEngine("claude")}
+            onClick={() => onEngineChange("claude")}
             className={cn(
               "rounded-xl border px-3 py-2.5 text-left transition-colors",
               engine === "claude"
@@ -205,11 +210,11 @@ export function CarouselBriefPanel({
             <p className={cn("text-sm font-semibold", engine === "claude" ? "text-cyan-300" : "text-slate-300")}>
               Claude
             </p>
-            <p className="mt-0.5 text-[10px] text-slate-500">Tipografia, icones, cards</p>
+            <p className="mt-0.5 text-[10px] text-slate-500">Templates editoriais e hierarquia tipográfica</p>
           </button>
           <button
             type="button"
-            onClick={() => setEngine("gemini")}
+            onClick={() => onEngineChange("gemini")}
             className={cn(
               "rounded-xl border px-3 py-2.5 text-left transition-colors",
               engine === "gemini"
@@ -220,7 +225,7 @@ export function CarouselBriefPanel({
             <p className={cn("text-sm font-semibold", engine === "gemini" ? "text-cyan-300" : "text-slate-300")}>
               Gemini
             </p>
-            <p className="mt-0.5 text-[10px] text-slate-500">Fotos, ilustracoes</p>
+            <p className="mt-0.5 text-[10px] text-slate-500">Geração de foto de apoio por slide</p>
           </button>
         </div>
 
@@ -228,11 +233,11 @@ export function CarouselBriefPanel({
         <div className="mt-3 flex items-center justify-between rounded-xl border border-slate-700 bg-slate-900/40 px-3 py-2.5">
           <div>
             <p className="text-xs font-medium text-slate-200">Incluir fotos (Gemini)</p>
-            <p className="mt-0.5 text-[10px] text-slate-500">Gera foto para slides com layout split/overlay</p>
+            <p className="mt-0.5 text-[10px] text-slate-500">Usa assets do banco ou prompts de foto nos slides compatíveis</p>
           </div>
           <button
             type="button"
-            onClick={() => setIncludePhotos(!includePhotos)}
+            onClick={() => onIncludePhotosChange(!includePhotos)}
             className={cn(
               "h-5 w-9 rounded-full transition-colors",
               includePhotos ? "bg-teal-500" : "bg-slate-700"
