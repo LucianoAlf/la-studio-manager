@@ -81,6 +81,7 @@ import * as tus from "tus-js-client";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { DatePicker, TimePicker } from "@/components/ui/date-time-picker";
+import { generateBirthdayCanvasPost } from "@/lib/utils/birthday-canvas";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -771,10 +772,15 @@ export default function StudioPage() {
   const [allBirthdayAssets, setAllBirthdayAssets] = useState<PhotoAsset[]>([]);
   const [birthdayHistory, setBirthdayHistory] = useState<Array<{ id: string; student_name: string; brand: string; approval_status: string; image_url?: string | null; asset_id?: string | null; created_at: string }>>([]);
   const [birthdayGenerating, setBirthdayGenerating] = useState<Record<string, boolean>>({});
-  const [birthdayPreview, setBirthdayPreview] = useState<{ assetId: string; imageUrl: string; studentName: string } | null>(null);
+  const [birthdayPreview, setBirthdayPreview] = useState<{ assetId: string; imageUrl: string; studentName: string; birthDate?: string | null } | null>(null);
   const [birthdayPublishing, setBirthdayPublishing] = useState(false);
   const [birthdayUploadingPhoto, setBirthdayUploadingPhoto] = useState(false);
   const birthdayPhotoInputRef = useRef<HTMLInputElement>(null);
+  const [birthdayScheduling, setBirthdayScheduling] = useState(false);
+  const [showBirthdaySchedule, setShowBirthdaySchedule] = useState(false);
+  const [birthdayScheduleDate, setBirthdayScheduleDate] = useState("");
+  const [birthdayScheduleHour, setBirthdayScheduleHour] = useState("10");
+  const [birthdayScheduleMin, setBirthdayScheduleMin] = useState("00");
   const [commemorativeDates, setCommemorativeDates] = useState<CommemorativeDateItem[]>([]);
   const [commDateEditing, setCommDateEditing] = useState<CommemorativeDateItem | null>(null);
   const [commDateModalOpen, setCommDateModalOpen] = useState(false);
@@ -3883,7 +3889,72 @@ export default function StudioPage() {
     }
   }, [quickUploadFiles, quickUploadEventName, postBrief, postDate, brand, compressImage, supabase, loadEventPhotosForNina]);
 
-  // Generate birthday post client-side with Canvas API
+  // Pre-fill schedule date when birthday preview opens
+  useEffect(() => {
+    if (birthdayPreview?.birthDate) {
+      const bd = new Date(birthdayPreview.birthDate + "T00:00:00");
+      const now = new Date();
+      const thisYear = now.getFullYear();
+      // Birthday this year
+      let nextBday = new Date(thisYear, bd.getMonth(), bd.getDate());
+      // If already passed, use next year
+      if (nextBday < new Date(now.getFullYear(), now.getMonth(), now.getDate())) {
+        nextBday = new Date(thisYear + 1, bd.getMonth(), bd.getDate());
+      }
+      const yyyy = nextBday.getFullYear();
+      const mm = String(nextBday.getMonth() + 1).padStart(2, "0");
+      const dd = String(nextBday.getDate()).padStart(2, "0");
+      setBirthdayScheduleDate(`${yyyy}-${mm}-${dd}`);
+    }
+  }, [birthdayPreview]);
+
+  // Schedule birthday post
+  const handleScheduleBirthday = useCallback(async () => {
+    if (!birthdayPreview || !birthdayScheduleDate) return;
+
+    setBirthdayScheduling(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        toast.error("Você precisa estar logado.");
+        setBirthdayScheduling(false);
+        return;
+      }
+
+      // Convert to São Paulo time → UTC
+      const spDatetime = `${birthdayScheduleDate}T${birthdayScheduleHour.padStart(2, "0")}:${birthdayScheduleMin.padStart(2, "0")}:00`;
+      // São Paulo is UTC-3
+      const spDate = new Date(spDatetime + "-03:00");
+
+      const { error } = await supabase
+        .from("posts")
+        .insert({
+          title: `Aniversário - ${birthdayPreview.studentName}`,
+          caption: `Feliz Aniversário, ${birthdayPreview.studentName.split(" ")[0]}! 🎂🎉`,
+          post_type: "story",
+          status: "scheduled",
+          brand,
+          scheduled_for: spDate.toISOString(),
+          created_by: user.id,
+          created_by_ai: true,
+          ai_agent_name: "nina",
+          metadata: { image_url: birthdayPreview.imageUrl, birthday_asset_id: birthdayPreview.assetId },
+        } as never);
+
+      if (error) throw new Error(error.message);
+
+      toast.success(`Agendado para ${birthdayScheduleDate} às ${birthdayScheduleHour}:${birthdayScheduleMin} (SP)!`);
+      setBirthdayPreview(null);
+      setShowBirthdaySchedule(false);
+    } catch (err) {
+      console.error("[SCHEDULE_BIRTHDAY]", err);
+      toast.error(err instanceof Error ? err.message : "Erro ao agendar");
+    } finally {
+      setBirthdayScheduling(false);
+    }
+  }, [birthdayPreview, birthdayScheduleDate, birthdayScheduleHour, birthdayScheduleMin, brand, supabase]);
+
+  // Generate birthday post client-side with Canvas API (foto EXATA)
   const handleGenerateBirthdayPost = useCallback(async (asset: PhotoAsset) => {
     if (!asset.id) return;
 
@@ -3893,26 +3964,50 @@ export default function StudioPage() {
       toast.info(`Gerando post de aniversário para ${asset.person_name}...`);
 
       const studentName = asset.person_name || "Aluno";
-      const nameParts = studentName.split(" ");
-      const firstName = nameParts[0];
-      const lastName = nameParts.length > 1 ? nameParts[nameParts.length - 1] : "";
+      const firstName = studentName.split(" ")[0];
       const hasRealPhoto = !!(asset.metadata as Record<string, unknown>)?.has_real_photo;
-      const photoUrl = hasRealPhoto ? asset.file_url : null;
+      const photoUrl = hasRealPhoto && asset.file_url ? asset.file_url : null;
 
-      // Call Edge Function that uses Gemini to generate birthday image
-      const result = await generateBirthdayPost(asset.id, brand);
+      // Get brand logo
+      const { data: bi } = await supabase
+        .from("brand_identity" as never)
+        .select("logo_primary_url, logo_icon_url")
+        .eq("brand_key", brand)
+        .single();
+      const biData = bi as { logo_primary_url?: string; logo_icon_url?: string } | null;
+      const logoUrl = biData?.logo_primary_url || biData?.logo_icon_url || null;
 
-      if (!result.success || !result.image_url) {
-        throw new Error(result.error || "Falha ao gerar post");
-      }
+      // Canvas-based generation — uses the EXACT photo pixels
+      const imageBlob = await generateBirthdayCanvasPost(photoUrl, firstName, brand, logoUrl);
 
-      const imageUrl = result.image_url;
+      // Upload to storage
+      const storagePath = `birthday-posts/${brand}/${asset.id}-${Date.now()}.png`;
+      const { error: uploadError } = await supabase.storage
+        .from("posts")
+        .upload(storagePath, imageBlob, { contentType: "image/png", upsert: true });
+      if (uploadError) throw new Error(uploadError.message);
+
+      const { data: urlData } = supabase.storage.from("posts").getPublicUrl(storagePath);
+      const finalImageUrl = urlData.publicUrl;
+
+      // Log
+      await supabase.from("birthday_automation_log" as never).insert({
+        student_id: String(asset.id),
+        asset_id: asset.id,
+        student_name: asset.person_name,
+        brand,
+        image_url: finalImageUrl,
+        approval_status: "pending",
+        metadata: { method: "canvas_local", photo_used: !!photoUrl, generated_at: new Date().toISOString() },
+      } as never);
 
       setBirthdayPreview({
         assetId: asset.id,
-        imageUrl,
+        imageUrl: finalImageUrl,
         studentName,
+        birthDate: asset.birth_date,
       });
+      setShowBirthdaySchedule(false);
       toast.success("Post gerado com sucesso!");
 
       // Refresh birthday history
@@ -3926,7 +4021,7 @@ export default function StudioPage() {
     } finally {
       setBirthdayGenerating((prev) => ({ ...prev, [asset.id]: false }));
     }
-  }, [brand]);
+  }, [brand, supabase]);
 
   const renderCalendarTab = () => (
     <div className="space-y-4">
@@ -5094,6 +5189,18 @@ export default function StudioPage() {
               birthdayHistory.some(h => h.student_name === item.person_name) ? "Regenerar" : "Gerar post"
             )}
           </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={async () => {
+              // Gerar e já abrir com agendamento
+              await handleGenerateBirthdayPost(item);
+              setShowBirthdaySchedule(true);
+            }}
+            disabled={birthdayGenerating[item.id]}
+          >
+            <Clock size={14} /> Agendar
+          </Button>
           {!birthdayHistory.some(h => h.student_name === item.person_name) && (
             <Button variant="outline" size="sm">Pular</Button>
           )}
@@ -5933,6 +6040,65 @@ export default function StudioPage() {
               <p className="text-xs text-slate-400">
                 Stories: @{brand === "la_music_kids" ? "lamusickids" : "lamusicschool"}
               </p>
+
+              {/* Schedule section */}
+              {showBirthdaySchedule && (
+                <div className="space-y-2.5 rounded-lg border border-cyan-500/30 bg-cyan-500/5 p-3">
+                  <p className="text-xs font-medium text-cyan-400">Agendar publicação</p>
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1">
+                      <DatePicker
+                        value={birthdayScheduleDate}
+                        onChange={setBirthdayScheduleDate}
+                        placeholder="Data"
+                        className="h-8 border-slate-700 bg-slate-800 text-xs"
+                      />
+                    </div>
+                    <Select value={birthdayScheduleHour} onValueChange={setBirthdayScheduleHour}>
+                      <SelectTrigger className="w-[60px] h-8 border-slate-700 bg-slate-800 text-xs text-slate-200">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="max-h-48">
+                        {Array.from({ length: 24 }, (_, i) => {
+                          const v = String(i).padStart(2, "0");
+                          return <SelectItem key={v} value={v}>{v}</SelectItem>;
+                        })}
+                      </SelectContent>
+                    </Select>
+                    <span className="text-xs text-slate-500">:</span>
+                    <Select value={birthdayScheduleMin} onValueChange={setBirthdayScheduleMin}>
+                      <SelectTrigger className="w-[60px] h-8 border-slate-700 bg-slate-800 text-xs text-slate-200">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {["00", "15", "30", "45"].map((m) => (
+                          <SelectItem key={m} value={m}>{m}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <p className="text-[10px] text-slate-500">Horário de São Paulo (UTC-3)</p>
+                  <Button
+                    variant="accent"
+                    size="sm"
+                    className="w-full"
+                    disabled={birthdayScheduling || !birthdayScheduleDate}
+                    onClick={() => void handleScheduleBirthday()}
+                  >
+                    {birthdayScheduling ? (
+                      <>
+                        <SpinnerGap size={14} className="animate-spin mr-1" />
+                        Agendando...
+                      </>
+                    ) : (
+                      <>
+                        <Clock size={14} />
+                        Confirmar agendamento
+                      </>
+                    )}
+                  </Button>
+                </div>
+              )}
             </div>
           )}
 
@@ -5940,15 +6106,27 @@ export default function StudioPage() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => setBirthdayPreview(null)}
-              disabled={birthdayPublishing}
+              onClick={() => {
+                setBirthdayPreview(null);
+                setShowBirthdaySchedule(false);
+              }}
+              disabled={birthdayPublishing || birthdayScheduling}
             >
               Descartar
             </Button>
             <Button
+              variant="outline"
+              size="sm"
+              disabled={birthdayPublishing || birthdayScheduling}
+              onClick={() => setShowBirthdaySchedule((v) => !v)}
+            >
+              <Clock size={14} />
+              {showBirthdaySchedule ? "Cancelar" : "Agendar"}
+            </Button>
+            <Button
               variant="accent"
               size="sm"
-              disabled={birthdayPublishing}
+              disabled={birthdayPublishing || birthdayScheduling}
               onClick={async () => {
                 if (!birthdayPreview) return;
 
@@ -5965,6 +6143,7 @@ export default function StudioPage() {
                   if (result.success) {
                     toast.success(`Story publicado! @${brand === "la_music_kids" ? "lamusickids" : "lamusicschool"}`);
                     setBirthdayPreview(null);
+                    setShowBirthdaySchedule(false);
 
                     // Refresh birthday history
                     const birthdaysRes = await getBirthdaysOverview(brand);
