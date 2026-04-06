@@ -91,42 +91,84 @@ const MESES = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julh
 
 /**
  * Converte KanbanCards para formato CalendarItem para exibição no calendário global.
- * Usa data_gravacao ou data_edicao ou due_date como start_time.
+ * Gera entries separadas: gravação (creation), edição (task), entrega (delivery).
+ * Status publicado/agendado → completed (verde); prazo passou sem publicar → pending (vermelho).
  */
 function convertKanbanCardsToCalendarItems(cards: KanbanCard[]): CalendarItem[] {
-  return cards
-    .filter((card) => card.data_gravacao || card.data_edicao || card.due_date)
-    .map((card) => {
-      const startTime = card.data_gravacao || card.data_edicao || card.due_date!;
-      const endTime = card.due_date && card.due_date !== startTime ? card.due_date : null;
-      
-      return {
-        id: `kanban-${card.id}`,
+  const items: CalendarItem[] = [];
+  const publishedSlugs = ["published", "approved", "archived"];
+
+  cards.forEach((card) => {
+    const isPublished = card.column?.slug ? publishedSlugs.includes(card.column.slug) : false;
+    const cardStatus: CalendarItem["status"] = isPublished ? "completed" : card.completed_at ? "completed" : "pending";
+
+    const base = {
+      all_day: true,
+      created_by: card.created_by,
+      responsible_user_id: card.responsible_user_id,
+      content_type: card.content_type,
+      platforms: card.platforms || [],
+      color: null,
+      location: null,
+      kanban_card_id: card.id,
+      post_id: null,
+      metadata: {
+        is_kanban_card: true,
+        kanban_column_id: card.column_id,
+        priority: card.priority,
+        card_type: card.card_type,
+        brand: card.metadata?.brand,
+      },
+      description: card.description,
+    };
+
+    // Gravação → tipo "creation"
+    if (card.data_gravacao) {
+      items.push({
+        ...base,
+        id: `kanban-${card.id}-grav`,
         title: card.title,
-        type: "task" as CalendarItem["type"],
-        status: card.completed_at ? "completed" : "pending",
-        start_time: startTime,
-        end_time: endTime,
-        all_day: true, // Cards do kanban são tratados como eventos de dia todo
-        created_by: card.created_by,
-        responsible_user_id: card.responsible_user_id,
-        content_type: card.content_type,
-        platforms: card.platforms || [],
-        color: null,
-        location: null,
-        kanban_card_id: card.id,
-        post_id: null,
-        metadata: {
-          is_kanban_card: true,
-          kanban_column_id: card.column_id,
-          priority: card.priority,
-          card_type: card.card_type,
-        },
-        created_at: startTime,
-        updated_at: startTime,
-        description: card.description,
-      } as CalendarItem;
-    });
+        type: "creation",
+        status: cardStatus,
+        start_time: card.data_gravacao,
+        end_time: null,
+        created_at: card.data_gravacao,
+        updated_at: card.data_gravacao,
+      } as CalendarItem);
+    }
+
+    // Edição → tipo "task"
+    if (card.data_edicao) {
+      items.push({
+        ...base,
+        id: `kanban-${card.id}-edit`,
+        title: card.title,
+        type: "task",
+        status: cardStatus,
+        start_time: card.data_edicao,
+        end_time: null,
+        created_at: card.data_edicao,
+        updated_at: card.data_edicao,
+      } as CalendarItem);
+    }
+
+    // Entrega → tipo "delivery"
+    if (card.due_date) {
+      items.push({
+        ...base,
+        id: `kanban-${card.id}-del`,
+        title: card.title,
+        type: "delivery",
+        status: cardStatus,
+        start_time: card.due_date,
+        end_time: null,
+        created_at: card.due_date,
+        updated_at: card.due_date,
+      } as CalendarItem);
+    }
+  });
+
+  return items;
 }
 
 // ============================================================

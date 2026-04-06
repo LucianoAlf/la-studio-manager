@@ -1244,13 +1244,15 @@ function CalendarioTab({ cards, columns, onEditCard }: CalendarioTabProps) {
 // --- Card chip reutilizável ---
 function CalCardChip({ entry, columns, onClick }: { entry: CalendarEntry; columns: KanbanColumnType[]; onClick: () => void }) {
   const { card, entryType } = entry;
-  const status = getStatusFromColumn(card.column ?? columns.find((c) => c.id === card.column_id));
+  const col = card.column ?? columns.find((c) => c.id === card.column_id);
+  const status = getStatusFromColumn(col);
   const priority = getPriorityDisplay(card.priority);
-  const overdue = entryType === "delivery" && card.due_date ? isOverdueHelper(card.due_date) : false;
+  const colSlug = (col as KanbanColumnType | undefined)?.slug ?? "";
+  const isPublished = ["published", "approved", "archived"].includes(colSlug);
+  const overdue = !isPublished && entryType === "delivery" && card.due_date ? isOverdueHelper(card.due_date) : false;
   const isGravacao = entryType === "gravacao";
   const isEdicao = entryType === "edicao";
   const brand = getCardBrand(card);
-  const isProductionType = isGravacao || isEdicao;
   const entryEmoji = isGravacao ? "🎬" : isEdicao ? "✂️" : "📦";
   const entryLabel = isGravacao ? "Gravação" : isEdicao ? "Edição" : status.label;
 
@@ -1259,6 +1261,7 @@ function CalCardChip({ entry, columns, onClick }: { entry: CalendarEntry; column
       onClick={onClick}
       className={cn(
         "group w-full text-left rounded-lg p-2.5 transition-all hover:brightness-125 cursor-pointer",
+        isPublished ? "bg-green-500/10 border border-green-500/20 hover:border-green-500/40" :
         overdue ? "bg-red-500/10 border border-red-500/20" :
         isGravacao ? "bg-blue-500/10 border border-blue-500/20 hover:border-blue-500/40" :
         isEdicao ? "bg-purple-500/10 border border-purple-500/20 hover:border-purple-500/40" :
@@ -1482,7 +1485,11 @@ function CalMesView({ date, entries, columns, onEditCard, now }: { date: Date; e
             const isToday = isSameDayUtil(day, now);
             const key = `${day.getFullYear()}-${day.getMonth()}-${day.getDate()}`;
             const dayEntries = entriesByDate.get(key) ?? [];
-            const hasOverdue = dayEntries.some((e) => e.entryType === "delivery" && e.card.due_date && isOverdueHelper(e.card.due_date));
+            const hasOverdue = dayEntries.some((e) => {
+              const s = (e.card.column ?? columns.find((c) => c.id === e.card.column_id)) as KanbanColumnType | undefined;
+              const pub = ["published", "approved", "archived"].includes(s?.slug ?? "");
+              return !pub && e.entryType === "delivery" && e.card.due_date && isOverdueHelper(e.card.due_date);
+            });
 
             return (
               <div
@@ -1515,12 +1522,15 @@ function CalMesView({ date, entries, columns, onEditCard, now }: { date: Date; e
                 <div className="space-y-0.5">
                   {dayEntries.slice(0, 3).map((entry) => {
                     const { card, entryType } = entry;
-                    const status = getStatusFromColumn(card.column ?? columns.find((c) => c.id === card.column_id));
+                    const col = card.column ?? columns.find((c) => c.id === card.column_id);
+                    const status = getStatusFromColumn(col);
+                    const colSlug = (col as KanbanColumnType | undefined)?.slug ?? "";
+                    const chipPublished = ["published", "approved", "archived"].includes(colSlug);
                     const isGrav = entryType === "gravacao";
                     const isEdit = entryType === "edicao";
                     const chipEmoji = isGrav ? "🎬" : isEdit ? "✂️" : "📦";
-                    const chipColor = isGrav ? "#3B82F6" : isEdit ? "#A855F7" : status.color;
-                    const entryOverdue = entryType === "delivery" && card.due_date ? isOverdueHelper(card.due_date) : false;
+                    const chipColor = chipPublished ? "#22C55E" : isGrav ? "#3B82F6" : isEdit ? "#A855F7" : status.color;
+                    const entryOverdue = !chipPublished && entryType === "delivery" && card.due_date ? isOverdueHelper(card.due_date) : false;
                     return (
                       <button
                         key={entry.key}

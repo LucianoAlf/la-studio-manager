@@ -93,5 +93,5 @@ O "Calendario Geral" parece estar em outro modulo/app (possivelmente o `LAperfor
 | 4 | Categoria EVENTO | Resolvivel via config no app (sem codigo) |
 | 5 | Data Gravacao + Data Edicao | **Resolvido** — campos separados data_gravacao e data_edicao (opcionais) |
 | 6 | Etiqueta Kids/LA no calendario | **Resolvido** — badge de marca nos chips do calendario |
-| 7 | Verde/Vermelho por status publicacao | Nao resolvido — logica de cor precisa mudar |
-| 8 | Projetos no Calendario Geral como Entregas | Precisa verificar no outro app |
+| 7 | Verde/Vermelho por status publicacao | **Resolvido** — verde se publicado/aprovado, vermelho se atrasado e nao publicado |
+| 8 | Projetos no Calendario Geral como Entregas | **Resolvido** — cards geram entries separadas: gravacao (creation), edicao (task), entrega (delivery) |
