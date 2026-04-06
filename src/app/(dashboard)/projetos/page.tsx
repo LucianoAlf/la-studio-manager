@@ -996,6 +996,7 @@ function KanbanCardItem({
   const tags = card.tags ?? [];
   const progress = getProgressFromColumn(card.column, totalColumns);
   const overdue = card.due_date && isOverdueHelper(card.due_date) && card.column?.slug !== "published";
+  const brand = getCardBrand(card);
 
   return (
     <div
@@ -1012,7 +1013,21 @@ function KanbanCardItem({
         if (onClick) onClick();
       }}
     >
-      <p className="text-sm font-medium text-slate-100">{card.title}</p>
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-sm font-medium text-slate-100 truncate">{card.title}</p>
+        <span
+          className={cn(
+            "shrink-0 rounded px-1.5 py-0.5 text-[9px] font-bold uppercase",
+            brand === "la_music_kids"
+              ? "bg-orange-500/20 text-orange-400"
+              : brand === "colab_kids_la"
+              ? "bg-purple-500/20 text-purple-400"
+              : "bg-teal-500/20 text-teal-400"
+          )}
+        >
+          {brand === "la_music_kids" ? "Kids" : brand === "colab_kids_la" ? "Colab" : "School"}
+        </span>
+      </div>
 
       {/* Tags */}
       {tags.length > 0 && (
@@ -1088,7 +1103,7 @@ interface CalendarioTabProps {
 
 function CalendarioTab({ cards, columns, onEditCard }: CalendarioTabProps) {
   const [offset, setOffset] = useState(0);
-  const [view, setView] = useState<"dia" | "semana" | "mes">("semana");
+  const [view, setView] = useState<"dia" | "semana" | "mes">("mes");
   const [calendarFilter, setCalendarFilter] = useState<"all" | "gravacao" | "edicao" | "delivery">("all");
 
   const now = useMemo(() => new Date(), []);
@@ -1234,6 +1249,7 @@ function CalCardChip({ entry, columns, onClick }: { entry: CalendarEntry; column
   const overdue = entryType === "delivery" && card.due_date ? isOverdueHelper(card.due_date) : false;
   const isGravacao = entryType === "gravacao";
   const isEdicao = entryType === "edicao";
+  const brand = getCardBrand(card);
   const isProductionType = isGravacao || isEdicao;
   const entryEmoji = isGravacao ? "🎬" : isEdicao ? "✂️" : "📦";
   const entryLabel = isGravacao ? "Gravação" : isEdicao ? "Edição" : status.label;
@@ -1258,6 +1274,11 @@ function CalCardChip({ entry, columns, onClick }: { entry: CalendarEntry; column
           <div className="mt-1 flex items-center gap-1.5 flex-wrap">
             <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full", isGravacao ? "bg-blue-500/20 text-blue-300" : isEdicao ? "bg-purple-500/20 text-purple-300" : status.bgClass)}>
               {entryLabel}
+            </span>
+            <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full",
+              brand === "la_music_kids" ? "bg-orange-500/20 text-orange-300" : brand === "colab_kids_la" ? "bg-purple-500/20 text-purple-300" : "bg-teal-500/20 text-teal-300"
+            )}>
+              {brand === "la_music_kids" ? "Kids" : brand === "colab_kids_la" ? "Colab" : "School"}
             </span>
             {priority && (
               <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full", priority.bgClass)}>{priority.label}</span>
