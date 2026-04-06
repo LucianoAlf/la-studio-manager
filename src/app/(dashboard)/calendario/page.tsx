@@ -91,15 +91,14 @@ const MESES = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julh
 
 /**
  * Converte KanbanCards para formato CalendarItem para exibição no calendário global.
- * Usa start_date ou due_date como start_time (priorizando start_date).
+ * Usa data_gravacao ou data_edicao ou due_date como start_time.
  */
 function convertKanbanCardsToCalendarItems(cards: KanbanCard[]): CalendarItem[] {
   return cards
-    .filter((card) => card.start_date || card.due_date) // Só cards com data
+    .filter((card) => card.data_gravacao || card.data_edicao || card.due_date)
     .map((card) => {
-      const startTime = card.start_date || card.due_date!;
-      // Se tiver due_date e for diferente de start_date, usar como end_time
-      const endTime = card.due_date && card.due_date !== card.start_date ? card.due_date : null;
+      const startTime = card.data_gravacao || card.data_edicao || card.due_date!;
+      const endTime = card.due_date && card.due_date !== startTime ? card.due_date : null;
       
       return {
         id: `kanban-${card.id}`,

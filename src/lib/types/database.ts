@@ -93,6 +93,8 @@ export interface KanbanCard {
   created_by: string;
   responsible_user_id: string | null;
   start_date: string | null;
+  data_gravacao: string | null;
+  data_edicao: string | null;
   due_date: string | null;
   completed_at: string | null;
   priority: CardPriority | null;

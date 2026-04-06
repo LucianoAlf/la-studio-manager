@@ -231,7 +231,7 @@ export async function getDeliveryMarkers(startDate: string, endDate: string): Pr
 
   const { data: cards, error: cardsErr } = await supabase
     .from("kanban_cards")
-    .select("id, title, due_date, start_date")
+    .select("id, title, due_date, data_gravacao, data_edicao")
     .in("id", cardIds);
 
   if (cardsErr || !cards) return [];

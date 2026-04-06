@@ -3,7 +3,28 @@
     "allow": [
       "Bash(curl -s -H \"Authorization: Bearer sbp_2d5604396bfe74ec139d0564d4fab5652e60b30f\" \"https://api.supabase.com/v1/projects/rhxqwraqpabgecgojytj/functions/process-whatsapp-message/body\")",
       "Bash(curl:*)",
-      "mcp__claude_ai_Supabase__execute_sql",
+      "mcp__claude_ai_Supabase__list_projects",
+      "Bash(claude mcp add --transport stdio supabase-local -- cmd /c npx -y @supabase/mcp-server-supabase@latest --access-token sbp_8937dfaada449c74acff8e9f8f81dc2aa3cee99b)",
+      "Bash(claude mcp remove:*)",
+      "Bash(claude mcp add-json supabase-local \"{\"\"type\"\":\"\"stdio\"\",\"\"command\"\":\"\"cmd\"\",\"\"args\"\":[\"\"/c\"\",\"\"npx\"\",\"\"-y\"\",\"\"@supabase/mcp-server-supabase@latest\"\",\"\"--access-token\"\",\"\"sbp_8937dfaada449c74acff8e9f8f81dc2aa3cee99b\"\"]}\")",
+      "mcp__supabase-local__list_projects",
+      "mcp__supabase-local__list_edge_functions",
+      "mcp__supabase-local__get_logs",
+      "mcp__supabase-local__execute_sql",
+      "Bash(claude mcp add-json n8n-mcp '{\"\"type\"\":\"\"stdio\"\",\"\"command\"\":\"\"npx\"\",\"\"args\"\":[\"\"-y\"\",\"\"n8n-mcp\"\"],\"\"env\"\":{\"\"MCP_MODE\"\":\"\"stdio\"\",\"\"LOG_LEVEL\"\":\"\"error\"\",\"\"DISABLE_CONSOLE_OUTPUT\"\":\"\"true\"\",\"\"N8N_API_URL\"\":\"\"https://workla.latecnology.com.br\"\",\"\"N8N_API_KEY\"\":\"\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI2NjA2YjVhMS1hMmQxLTQyOTUtOTllMi05ZjM3OTkzOWUxODIiLCJpc3MiOiJuOG4iLCJhdWQiOiJwdWJsaWMtYXBpIiwiaWF0IjoxNzY2MTgwMjMwfQ.rd8nGWj7TcU2KfUSovNq-mJGHVqRmj_QJK6uCAfH-uM\"\"}}' --scope project)",
+      "mcp__n8n-mcp__n8n_get_workflow",
+      "mcp__n8n-mcp__n8n_list_workflows",
+      "Bash(powershell -Command \"\\(Get-Content ''C:\\\\Users\\\\hugog\\\\.claude\\\\projects\\\\c--Users-hugog-OneDrive-Desktop-Projects-LA-Music-la-studio-manager\\\\04465389-eb16-48e6-9304-f628e304c720\\\\tool-results\\\\mcp-n8n-mcp-n8n_get_workflow-1774622169673.txt'' -Raw\\) -replace ''.*?dadosPrincipais\"\"'' | Select-String -Pattern ''\"\"assignments\"\":\\\\{\"\"assignments\"\":\\\\[.*?\\\\]\\\\}'' -AllMatches | ForEach-Object { $_Matches[0].Value }\")",
+      "Bash(Select-Object -First 50)",
+      "Bash(powershell -Command \"$content = Get-Content ''C:\\\\Users\\\\hugog\\\\.claude\\\\projects\\\\c--Users-hugog-OneDrive-Desktop-Projects-LA-Music-la-studio-manager\\\\04465389-eb16-48e6-9304-f628e304c720\\\\tool-results\\\\mcp-n8n-mcp-n8n_get_workflow-1774622169673.txt'' -Raw; $json = $content | ConvertFrom-Json; $node = \\($json[0].text | ConvertFrom-Json\\).data.nodes | Where-Object { $_name -eq ''dadosPrincipais'' }; $node.parameters.assignments.assignments | ForEach-Object { $_name + '' = '' + $_value }\")",
+      "Bash(powershell -Command \"$c = Get-Content ''C:\\\\Users\\\\hugog\\\\.claude\\\\projects\\\\c--Users-hugog-OneDrive-Desktop-Projects-LA-Music-la-studio-manager\\\\04465389-eb16-48e6-9304-f628e304c720\\\\tool-results\\\\mcp-n8n-mcp-n8n_get_workflow-1774622169673.txt'' -Raw; $matches = [regex]::Matches\\($c, ''\"\"name\"\":\\\\s*\"\"dadosPrincipais\"\".*?\"\"assignments\"\":\\\\s*\\\\{\"\"assignments\"\":\\\\s*\\\\[\\(.*?\\)\\\\]\\\\}''\\); $matches[0].Groups[1].Value.Substring\\(0, 2000\\)\")",
+      "Bash(node:*)",
+      "mcp__supabase-local__list_tables",
+      "mcp__n8n-mcp__n8n_update_partial_workflow",
+      "mcp__n8n-mcp__n8n_executions",
+      "Bash(grep:*)",
+      "Bash(git reset:*)",
+      "Bash(git checkout:*)",
       "WebFetch(domain:docs.submagic.co)",
       "Bash(npm run:*)",
       "Bash(npx tsc:*)",
@@ -17,7 +38,9 @@
       "Bash(xargs grep:*)",
       "Bash(grep -r \"CLAUDE\\\\|claude_api\\\\|ANTHROPIC\" /d/2026/la-studio-manager-NEW/.env*)",
       "Bash(supabase functions:*)",
-      "Bash(supabase login:*)"
+      "Bash(supabase login:*)",
+      "Bash(npm install:*)",
+      "Bash(python -c:*)"
     ]
   }
 }

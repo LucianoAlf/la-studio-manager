@@ -161,7 +161,7 @@ export function CalendarItemModal({
         const supabase = createClient();
         const { data } = await supabase
           .from("kanban_cards")
-          .select("title, due_date, start_date")
+          .select("title, due_date, data_gravacao, data_edicao")
           .eq("id", item!.kanban_card_id!)
           .single();
         if (data) {

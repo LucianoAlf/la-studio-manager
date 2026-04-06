@@ -77,11 +77,13 @@ const CONTENT_TYPES = [
   { value: "reels", label: "🎥 Reels" },
   { value: "story", label: "📱 Story" },
   { value: "newsletter", label: "📰 Newsletter" },
+  { value: "evento", label: "🎉 Evento" },
 ];
 
 const BRANDS = [
   { value: "la_music_school", label: "LA Music School" },
   { value: "la_music_kids", label: "LA Music Kids" },
+  { value: "colab_kids_la", label: "Colab Kids/LA" },
 ];
 
 interface KanbanCardModalProps {
@@ -107,7 +109,8 @@ export function KanbanCardModal({
   const [selectedColumnId, setSelectedColumnId] = useState("");
   const [selectedPriority, setSelectedPriority] = useState("medium");
   const [selectedUser, setSelectedUser] = useState("");
-  const [startDate, setStartDate] = useState("");
+  const [dataGravacao, setDataGravacao] = useState("");
+  const [dataEdicao, setDataEdicao] = useState("");
   const [dueDate, setDueDate] = useState("");
   const [contentType, setContentType] = useState("");
   const [selectedBrand, setSelectedBrand] = useState("la_music_school");
@@ -138,7 +141,8 @@ export function KanbanCardModal({
       setSelectedColumnId(card.column_id);
       setSelectedPriority(card.priority || "medium");
       setSelectedUser(card.responsible_user_id || "");
-      setStartDate(card.start_date ? card.start_date.split("T")[0] : "");
+      setDataGravacao(card.data_gravacao ? card.data_gravacao.split("T")[0] : "");
+      setDataEdicao(card.data_edicao ? card.data_edicao.split("T")[0] : "");
       setDueDate(card.due_date ? card.due_date.split("T")[0] : "");
       setContentType(card.content_type || "");
       setSelectedBrand((card.metadata?.brand as string) || "la_music_school");
@@ -158,7 +162,8 @@ export function KanbanCardModal({
     setSelectedColumnId(columns[0]?.id || "");
     setSelectedPriority("medium");
     setSelectedUser("");
-    setStartDate("");
+    setDataGravacao("");
+    setDataEdicao("");
     setDueDate("");
     setContentType("");
     setSelectedBrand("la_music_school");
@@ -188,7 +193,8 @@ export function KanbanCardModal({
         description: description || null,
         column_id: selectedColumnId,
         responsible_user_id: selectedUser && selectedUser !== "none" ? selectedUser : null,
-        start_date: startDate ? localDateToUTCISO(startDate) : null,
+        data_gravacao: dataGravacao ? localDateToUTCISO(dataGravacao) : null,
+        data_edicao: dataEdicao ? localDateToUTCISO(dataEdicao) : null,
         due_date: dueDate ? localDateToUTCISO(dueDate) : null,
         priority: selectedPriority || null,
         content_type: contentType || null,
@@ -315,20 +321,22 @@ export function KanbanCardModal({
             </FormField>
           </div>
 
-          {/* Linha 3b — Data de Produção + Aviso */}
+          {/* Linha 3b — Data de Gravação + Data de Edição */}
           <div className="grid grid-cols-2 gap-4">
-            <FormField label="Data de Produção">
+            <FormField label="Data de Gravação">
               <DatePicker
-                value={startDate}
-                onChange={setStartDate}
-                placeholder="Quando produz/grava"
+                value={dataGravacao}
+                onChange={setDataGravacao}
+                placeholder="Quando grava"
               />
             </FormField>
-            <div className="flex items-end pb-1">
-              {startDate && dueDate && new Date(startDate) > new Date(dueDate) && (
-                <p className="text-xs text-amber-400">⚠️ Produção após a entrega</p>
-              )}
-            </div>
+            <FormField label="Data de Edição">
+              <DatePicker
+                value={dataEdicao}
+                onChange={setDataEdicao}
+                placeholder="Quando edita"
+              />
+            </FormField>
           </div>
 
           {/* Linha 4 — Tipo de Conteúdo + Marca */}

@@ -37,4 +37,7 @@ next-env.d.ts
 # supabase
 supabase/.temp/
 
-certificatestmp-e2e/
+certificates
+
+# agent config (contains tokens)
+.agent/mcp_config.json

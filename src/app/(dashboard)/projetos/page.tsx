@@ -355,6 +355,7 @@ export default function ProjetosPage() {
                 <ShadSelectItem value="__all__">Todas</ShadSelectItem>
                 <ShadSelectItem value="la_music">LA Music</ShadSelectItem>
                 <ShadSelectItem value="la_kids">LA Kids</ShadSelectItem>
+                <ShadSelectItem value="colab_kids_la">Colab Kids/LA</ShadSelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -633,7 +634,8 @@ function ListaTab({ cards, columns, onEditCard }: { cards: KanbanCardType[]; col
             <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">Responsável</th>
             <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">Status</th>
             <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">Prioridade</th>
-            <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 whitespace-nowrap">🎬 Produção</th>
+            <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 whitespace-nowrap">🎬 Gravação</th>
+            <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 whitespace-nowrap">✂️ Edição</th>
             <th
               className="cursor-pointer select-none px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 hover:text-slate-200 whitespace-nowrap"
               onClick={() => setSortAsc(!sortAsc)}
@@ -715,12 +717,14 @@ function ListaTab({ cards, columns, onEditCard }: { cards: KanbanCardType[]; col
                   <span
                     className={cn(
                       "inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-bold uppercase",
-                      brand === "la_kids"
+                      brand === "la_music_kids"
                         ? "bg-orange-500/20 text-orange-400"
+                        : brand === "colab_kids_la"
+                        ? "bg-purple-500/20 text-purple-400"
                         : "bg-teal-500/20 text-teal-400"
                     )}
                   >
-                    {brand === "la_kids" ? "Kids" : "School"}
+                    {brand === "la_music_kids" ? "Kids" : brand === "colab_kids_la" ? "Colab" : "School"}
                   </span>
                 </td>
 
@@ -760,10 +764,19 @@ function ListaTab({ cards, columns, onEditCard }: { cards: KanbanCardType[]; col
                   )}
                 </td>
 
-                {/* 🎬 PRODUÇÃO */}
+                {/* 🎬 GRAVAÇÃO */}
                 <td className="px-4 py-3.5 whitespace-nowrap">
-                  {card.start_date ? (
-                    <span className="text-sm text-slate-300">{formatDateHelper(card.start_date)}</span>
+                  {card.data_gravacao ? (
+                    <span className="text-sm text-slate-300">{formatDateHelper(card.data_gravacao)}</span>
+                  ) : (
+                    <span className="text-xs text-slate-600">—</span>
+                  )}
+                </td>
+
+                {/* ✂️ EDIÇÃO */}
+                <td className="px-4 py-3.5 whitespace-nowrap">
+                  {card.data_edicao ? (
+                    <span className="text-sm text-slate-300">{formatDateHelper(card.data_edicao)}</span>
                   ) : (
                     <span className="text-xs text-slate-600">—</span>
                   )}
@@ -1025,16 +1038,19 @@ function KanbanCardItem({
           <span className="text-xs text-slate-500">{display.name}</span>
         </div>
         <div className="flex items-center gap-2 text-xs">
-          {card.start_date && (
-            <span className="text-slate-500" title="Produção">🎬 {formatDateHelper(card.start_date)}</span>
+          {card.data_gravacao && (
+            <span className="text-slate-500" title="Gravação">🎬 {formatDateHelper(card.data_gravacao)}</span>
           )}
-          {card.start_date && card.due_date && <span className="text-slate-700">→</span>}
+          {card.data_edicao && (
+            <span className="text-slate-500" title="Edição">✂️ {formatDateHelper(card.data_edicao)}</span>
+          )}
+          {(card.data_gravacao || card.data_edicao) && card.due_date && <span className="text-slate-700">→</span>}
           {card.due_date && (
             <span className={cn(overdue ? "font-semibold text-red-400" : "text-slate-500")} title="Entrega">
               📦 {formatDateHelper(card.due_date)}
             </span>
           )}
-          {!card.start_date && !card.due_date && <span className="text-slate-500">—</span>}
+          {!card.data_gravacao && !card.data_edicao && !card.due_date && <span className="text-slate-500">—</span>}
         </div>
       </div>
     </div>
@@ -1042,7 +1058,7 @@ function KanbanCardItem({
 }
 
 // ============================================================
-// TAB: CALENDÁRIO (Prazos dos Projetos — kanban_cards.due_date + start_date)
+// TAB: CALENDÁRIO (Prazos dos Projetos — kanban_cards.due_date + data_gravacao + data_edicao)
 // ============================================================
 
 const CAL_DIAS_SEMANA = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
@@ -1060,7 +1076,7 @@ function isSameDayUtil(d1: Date, d2: Date) {
 interface CalendarEntry {
   card: KanbanCardType;
   date: Date;
-  entryType: "production" | "delivery";
+  entryType: "gravacao" | "edicao" | "delivery";
   key: string;
 }
 
@@ -1073,7 +1089,7 @@ interface CalendarioTabProps {
 function CalendarioTab({ cards, columns, onEditCard }: CalendarioTabProps) {
   const [offset, setOffset] = useState(0);
   const [view, setView] = useState<"dia" | "semana" | "mes">("semana");
-  const [calendarFilter, setCalendarFilter] = useState<"all" | "production" | "delivery">("all");
+  const [calendarFilter, setCalendarFilter] = useState<"all" | "gravacao" | "edicao" | "delivery">("all");
 
   const now = useMemo(() => new Date(), []);
 
@@ -1081,8 +1097,11 @@ function CalendarioTab({ cards, columns, onEditCard }: CalendarioTabProps) {
   const calEntries = useMemo(() => {
     const entries: CalendarEntry[] = [];
     cards.forEach((card) => {
-      if (card.start_date) {
-        entries.push({ card, date: new Date(card.start_date), entryType: "production", key: `${card.id}-prod` });
+      if (card.data_gravacao) {
+        entries.push({ card, date: new Date(card.data_gravacao), entryType: "gravacao", key: `${card.id}-grav` });
+      }
+      if (card.data_edicao) {
+        entries.push({ card, date: new Date(card.data_edicao), entryType: "edicao", key: `${card.id}-edit` });
       }
       if (card.due_date) {
         entries.push({ card, date: new Date(card.due_date), entryType: "delivery", key: `${card.id}-del` });
@@ -1132,7 +1151,7 @@ function CalendarioTab({ cards, columns, onEditCard }: CalendarioTabProps) {
   }, [currentDate, view]);
 
   // Contagem de cards sem nenhuma data
-  const noDateCount = cards.filter((c) => !c.due_date && !c.start_date).length;
+  const noDateCount = cards.filter((c) => !c.due_date && !c.data_gravacao && !c.data_edicao).length;
 
   return (
     <div className="space-y-4">
@@ -1157,9 +1176,9 @@ function CalendarioTab({ cards, columns, onEditCard }: CalendarioTabProps) {
           {noDateCount > 0 && (
             <span className="text-xs text-slate-500">{noDateCount} sem data</span>
           )}
-          {/* Filtro Produção / Entrega */}
+          {/* Filtro Gravação / Edição / Entrega */}
           <div className="flex rounded-lg border border-slate-700 overflow-hidden">
-            {(["all", "production", "delivery"] as const).map((f) => (
+            {(["all", "gravacao", "edicao", "delivery"] as const).map((f) => (
               <button
                 key={f}
                 onClick={() => setCalendarFilter(f)}
@@ -1170,7 +1189,7 @@ function CalendarioTab({ cards, columns, onEditCard }: CalendarioTabProps) {
                     : "text-slate-400 hover:bg-slate-800 hover:text-slate-200"
                 )}
               >
-                {f === "all" ? "📋 Tudo" : f === "production" ? "🎬 Produção" : "📦 Entrega"}
+                {f === "all" ? "📋 Tudo" : f === "gravacao" ? "🎬 Gravação" : f === "edicao" ? "✂️ Edição" : "📦 Entrega"}
               </button>
             ))}
           </div>
@@ -1213,7 +1232,11 @@ function CalCardChip({ entry, columns, onClick }: { entry: CalendarEntry; column
   const status = getStatusFromColumn(card.column ?? columns.find((c) => c.id === card.column_id));
   const priority = getPriorityDisplay(card.priority);
   const overdue = entryType === "delivery" && card.due_date ? isOverdueHelper(card.due_date) : false;
-  const isProduction = entryType === "production";
+  const isGravacao = entryType === "gravacao";
+  const isEdicao = entryType === "edicao";
+  const isProductionType = isGravacao || isEdicao;
+  const entryEmoji = isGravacao ? "🎬" : isEdicao ? "✂️" : "📦";
+  const entryLabel = isGravacao ? "Gravação" : isEdicao ? "Edição" : status.label;
 
   return (
     <button
@@ -1221,19 +1244,20 @@ function CalCardChip({ entry, columns, onClick }: { entry: CalendarEntry; column
       className={cn(
         "group w-full text-left rounded-lg p-2.5 transition-all hover:brightness-125 cursor-pointer",
         overdue ? "bg-red-500/10 border border-red-500/20" :
-        isProduction ? "bg-blue-500/10 border border-blue-500/20 hover:border-blue-500/40" :
+        isGravacao ? "bg-blue-500/10 border border-blue-500/20 hover:border-blue-500/40" :
+        isEdicao ? "bg-purple-500/10 border border-purple-500/20 hover:border-purple-500/40" :
         "bg-slate-800/60 border border-slate-700/40 hover:border-slate-600/60"
       )}
     >
       <div className="flex items-start gap-2">
-        <span className="mt-0.5 shrink-0 text-xs">{isProduction ? "🎬" : "📦"}</span>
+        <span className="mt-0.5 shrink-0 text-xs">{entryEmoji}</span>
         <div className="min-w-0 flex-1">
           <p className="text-xs font-medium text-slate-200 truncate">
-            {isProduction ? "" : ""}{card.title}
+            {card.title}
           </p>
           <div className="mt-1 flex items-center gap-1.5 flex-wrap">
-            <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full", isProduction ? "bg-blue-500/20 text-blue-300" : status.bgClass)}>
-              {isProduction ? "Produção" : status.label}
+            <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full", isGravacao ? "bg-blue-500/20 text-blue-300" : isEdicao ? "bg-purple-500/20 text-purple-300" : status.bgClass)}>
+              {entryLabel}
             </span>
             {priority && (
               <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full", priority.bgClass)}>{priority.label}</span>
@@ -1254,8 +1278,9 @@ function CalDiaView({ date, entries, columns, onEditCard, now }: { date: Date; e
   const dayEntries = useMemo(() =>
     entries.filter((e) => isSameDayUtil(e.date, date))
       .sort((a, b) => {
-        // Produção antes de entrega, depois por prioridade
-        if (a.entryType !== b.entryType) return a.entryType === "production" ? -1 : 1;
+        // Gravação > Edição > Entrega, depois por prioridade
+        const order = { gravacao: 0, edicao: 1, delivery: 2 };
+        if (a.entryType !== b.entryType) return (order[a.entryType] ?? 2) - (order[b.entryType] ?? 2);
         const pa = { urgent: 0, high: 1, medium: 2, low: 3 }[a.card.priority ?? "low"] ?? 3;
         const pb = { urgent: 0, high: 1, medium: 2, low: 3 }[b.card.priority ?? "low"] ?? 3;
         return pa - pb;
@@ -1318,10 +1343,11 @@ function CalSemanaView({ date, entries, columns, onEditCard, now }: { date: Date
       const idx = weekDays.findIndex((wd) => isSameDayUtil(wd, entry.date));
       if (idx >= 0) map.get(idx)!.push(entry);
     });
-    // Ordenar: produção antes de entrega, depois por prioridade
+    // Ordenar: gravação > edição > entrega, depois por prioridade
     map.forEach((dayEntries) => {
       dayEntries.sort((a, b) => {
-        if (a.entryType !== b.entryType) return a.entryType === "production" ? -1 : 1;
+        const order = { gravacao: 0, edicao: 1, delivery: 2 };
+        if (a.entryType !== b.entryType) return (order[a.entryType] ?? 2) - (order[b.entryType] ?? 2);
         const pa = { urgent: 0, high: 1, medium: 2, low: 3 }[a.card.priority ?? "low"] ?? 3;
         const pb = { urgent: 0, high: 1, medium: 2, low: 3 }[b.card.priority ?? "low"] ?? 3;
         return pa - pb;
@@ -1469,7 +1495,10 @@ function CalMesView({ date, entries, columns, onEditCard, now }: { date: Date; e
                   {dayEntries.slice(0, 3).map((entry) => {
                     const { card, entryType } = entry;
                     const status = getStatusFromColumn(card.column ?? columns.find((c) => c.id === card.column_id));
-                    const isProduction = entryType === "production";
+                    const isGrav = entryType === "gravacao";
+                    const isEdit = entryType === "edicao";
+                    const chipEmoji = isGrav ? "🎬" : isEdit ? "✂️" : "📦";
+                    const chipColor = isGrav ? "#3B82F6" : isEdit ? "#A855F7" : status.color;
                     const entryOverdue = entryType === "delivery" && card.due_date ? isOverdueHelper(card.due_date) : false;
                     return (
                       <button
@@ -1480,12 +1509,12 @@ function CalMesView({ date, entries, columns, onEditCard, now }: { date: Date; e
                           entryOverdue ? "bg-red-500/15 text-red-300" : "text-slate-300"
                         )}
                         style={{
-                          backgroundColor: entryOverdue ? undefined : isProduction ? "rgba(59,130,246,0.12)" : `${status.color}20`,
-                          borderLeft: `2px solid ${isProduction ? "#3B82F6" : status.color}`,
+                          backgroundColor: entryOverdue ? undefined : `${chipColor}20`,
+                          borderLeft: `2px solid ${chipColor}`,
                         }}
-                        title={`${isProduction ? "🎬 " : "📦 "}${card.title}`}
+                        title={`${chipEmoji} ${card.title}`}
                       >
-                        {isProduction ? "🎬 " : "📦 "}{card.title}
+                        {chipEmoji} {card.title}
                       </button>
                     );
                   })}
@@ -1539,7 +1568,7 @@ function TimelineTab({ cards, columns }: { cards: KanbanCardType[]; columns: Kan
       .filter((c) => c.due_date)
       .map((card) => ({
         ...card,
-        startDate: card.start_date ? new Date(card.start_date) : new Date(card.created_at),
+        startDate: card.data_gravacao ? new Date(card.data_gravacao) : card.data_edicao ? new Date(card.data_edicao) : new Date(card.created_at),
         endDate: new Date(card.due_date!),
         progress: getProgressFromColumn(card.column, columns.length),
         statusColor: getStatusFromColumn(card.column).color,
