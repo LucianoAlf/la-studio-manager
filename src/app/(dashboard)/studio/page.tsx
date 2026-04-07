@@ -5124,7 +5124,7 @@ export default function StudioPage() {
     const todayStr = `${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
 
     const birthdaysToday: PhotoAsset[] = [];
-    const birthdaysNext7Days: PhotoAsset[] = [];
+    const birthdaysMonth: PhotoAsset[] = [];
 
     birthdays.forEach((item) => {
       if (!item.birth_date) return;
@@ -5134,7 +5134,7 @@ export default function StudioPage() {
       if (itemStr === todayStr) {
         birthdaysToday.push(item);
       } else {
-        birthdaysNext7Days.push(item);
+        birthdaysMonth.push(item);
       }
     });
 
@@ -5263,15 +5263,15 @@ export default function StudioPage() {
               </Card>
             )}
 
-            {/* Próximos 7 dias */}
+            {/* Aniversariantes do mês */}
             <Card variant="default" className="space-y-3">
-              <h3 className="text-sm font-semibold text-slate-100">Próximos 7 dias</h3>
-              {birthdaysNext7Days.length === 0 && birthdaysToday.length === 0 ? (
-                <p className="text-sm text-slate-500">Nenhum aniversariante para este período.</p>
-              ) : birthdaysNext7Days.length === 0 ? (
-                <p className="text-sm text-slate-500">Sem aniversariantes nos próximos dias.</p>
+              <h3 className="text-sm font-semibold text-slate-100">Este mês ({birthdaysMonth.length + birthdaysToday.length})</h3>
+              {birthdaysMonth.length === 0 && birthdaysToday.length === 0 ? (
+                <p className="text-sm text-slate-500">Nenhum aniversariante este mês.</p>
+              ) : birthdaysMonth.length === 0 ? (
+                <p className="text-sm text-slate-500">Sem mais aniversariantes este mês.</p>
               ) : (
-                birthdaysNext7Days.map((item) => renderBirthdayCard(item, false))
+                birthdaysMonth.map((item) => renderBirthdayCard(item, false))
               )}
             </Card>
           </div>

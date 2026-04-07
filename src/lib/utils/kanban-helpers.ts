@@ -103,6 +103,7 @@ export function getContentTypeEmoji(contentType: string | null): string {
     story: "📱",
     newsletter: "📰",
     short: "⚡",
+    evento: "🎉",
   };
   return map[contentType ?? ""] ?? "📄";
 }

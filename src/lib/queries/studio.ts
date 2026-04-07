@@ -302,8 +302,8 @@ export async function getBirthdaysOverview(brand: StudioBrand): Promise<{ upcomi
 
   // Normaliza para início do dia para comparação correta de aniversários de hoje
   const todayStart = new Date(todayY, now.getMonth(), now.getDate(), 0, 0, 0, 0);
-  const upcomingLimit = new Date(todayStart);
-  upcomingLimit.setDate(todayStart.getDate() + 7);
+  // Limite: último dia do mês atual
+  const upcomingLimit = new Date(todayY, now.getMonth() + 1, 0, 23, 59, 59, 999);
 
   const allAssets = ((assetsResp.data ?? []) as unknown as PhotoAsset[]).map((item) => {
     const normalizedName = normalizePersonName(item.person_name);
@@ -335,7 +335,7 @@ export async function getBirthdaysOverview(brand: StudioBrand): Promise<{ upcomi
       const [, bm, bd] = (b.birth_date ?? "").split("-");
       return `${am}-${ad}`.localeCompare(`${bm}-${bd}`);
     })
-    .slice(0, 20);
+    .slice(0, 100);
 
   console.log(`[BIRTHDAYS] Upcoming: ${upcoming.length}`, upcoming.map(u => `${u.person_name} (${u.birth_date})`));
 
