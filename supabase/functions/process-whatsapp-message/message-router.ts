@@ -15,7 +15,7 @@ import { analyzeImage } from './image-handler.ts'
 import { getPendingAction, clearPendingAction, savePendingAction, processFollowUpResponse, smartProcessFollowUp } from './followup-handler.ts'
 import type { PendingAction } from './followup-handler.ts'
 import { generateFollowUp, getMissingFields, buildPartialSummary } from './mike-personality.ts'
-import { getEventConfirmation, processParticipantResponse, notifyParticipants, notifyParticipantsOfChange, parseParticipantNames, findParticipantByName, getPendingParticipantPhone, processPhoneResponse, savePendingParticipantPhone, getPendingSaveContact, processSaveContactResponse, saveContact, queryContacts } from './participant-notifier.ts'
+import { getEventConfirmation, processParticipantResponse, notifyParticipants, notifyParticipantsOfChange, parseParticipantNames, findParticipantByName, getPendingParticipantPhone, processPhoneResponse, savePendingParticipantPhone, getPendingSaveContact, processSaveContactResponse, saveContact, queryContacts, linkPendingEventConfirmationsToEvent } from './participant-notifier.ts'
 import type { PendingParticipantPhone } from './participant-notifier.ts'
 import { sendTextMessage } from './send-message.ts'
 import type { ClassificationResult } from './gemini-classifier.ts'
@@ -27,6 +27,37 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
   const userId = user.profile_id
   const authUserId = user.auth_user_id
   const phone = parsed.from
+
+  async function notifyKnownParticipantsAfterEventCreation(entities: Record<string, unknown>, eventId: string): Promise<string[]> {
+    if (!eventId || !entities.participants) return []
+
+    const participantNames = parseParticipantNames(entities.participants as string | string[])
+    const knownParticipants: string[] = []
+
+    for (const participantName of participantNames) {
+      const found = await findParticipantByName(supabase, participantName)
+      if (found && found.id !== userId) {
+        knownParticipants.push(participantName)
+      }
+    }
+
+    if (knownParticipants.length === 0) return []
+
+    const notifyResults = await notifyParticipants(supabase, params.uazapiUrl, params.uazapiToken, {
+      eventId,
+      eventTitle: (entities.title as string) || 'Evento',
+      eventDate: (entities.date as string) || '',
+      eventTime: (entities.time as string) || null,
+      eventLocation: (entities.location as string) || null,
+      creatorUserId: userId,
+      creatorName: firstName,
+      creatorPhone: user.phone_number,
+      participantNames: knownParticipants,
+      groupJid: params.groupJid || null,
+    })
+
+    return notifyResults.filter((result) => result.notified).map((result) => result.participantName)
+  }
 
   // ========================================
   // WA-06: PROCESSAMENTO DE ÁUDIO
@@ -480,57 +511,44 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
           }
         }
 
-        // Fila vazia — todos os participantes resolvidos
-        if (isSkip && resolved.length === 0) {
-          // Pulou todos → criar evento direto sem esperar confirmação
-          const result = await executeConfirmedAction(activeContext.context_type, { supabase, profileId: userId, authUserId, userName: firstName, phone, entities: ents, uazapiUrl: params.uazapiUrl, uazapiToken: params.uazapiToken })
-          await supabase
-            .from('whatsapp_conversation_context')
-            .update({ is_active: false, context_data: { ...activeContext.context_data, step: result.success ? 'executed' : 'execution_failed', executed_at: new Date().toISOString(), record_id: result.record_id || null }, updated_at: new Date().toISOString() })
-            .eq('id', activeContext.id)
+        const result = await executeConfirmedAction(activeContext.context_type, { supabase, profileId: userId, authUserId, userName: firstName, phone, entities: ents, uazapiUrl: params.uazapiUrl, uazapiToken: params.uazapiToken })
 
-          // Notificar participantes cadastrados
-          if (result.success && ents.participants) {
-            const allNames = parseParticipantNames(ents.participants as string)
-            const cadastrados = []
-            for (const n of allNames) {
-              const found = await findParticipantByName(supabase, n)
-              if (found && found.id !== userId) cadastrados.push(n)
-            }
-            if (cadastrados.length > 0) {
-              const notifyResults = await notifyParticipants(supabase, params.uazapiUrl, params.uazapiToken, {
-                eventId: result.record_id || '', eventTitle: (ents.title as string) || 'Evento', eventDate: (ents.date as string) || '',
-                eventTime: (ents.time as string) || null, eventLocation: (ents.location as string) || null,
-                creatorUserId: userId, creatorName: firstName, creatorPhone: user.phone_number, participantNames: cadastrados, groupJid: params.groupJid || null,
-              })
-              const notified = notifyResults.filter(r => r.notified)
-              if (notified.length > 0) result.message += `\nNotifiquei ${notified.map(r => r.participantName).join(', ')} pelo WhatsApp.`
-            }
-          }
-
-          return { text: `${phoneResult.message}\n\n${result.message}`, intent: 'creating_calendar_executed', confidence: 1.0 }
-        }
-
-        // Pelo menos um participante externo foi notificado → esperar confirmação
-        const notifiedNames = resolved.join(', ')
         await supabase
           .from('whatsapp_conversation_context')
           .update({
+            is_active: false,
             context_data: {
               ...activeContext.context_data,
-              step: 'awaiting_external_confirmation',
-              notified_participants: resolved,
-              notified_participant: resolved[resolved.length - 1], // último para compatibilidade
+              step: result.success ? 'executed_with_pending_confirmations' : 'execution_failed',
+              executed_at: new Date().toISOString(),
+              record_id: result.record_id || null,
+              pending_external_confirmations: resolved,
             },
             updated_at: new Date().toISOString(),
           })
           .eq('id', activeContext.id)
 
-        return {
-          text: `${phoneResult.message}\n\nEnviei convites para: ${notifiedNames}\nQuando confirmarem, me avisa aqui que eu agendo.\nÉ só dizer: *"confirmaram"* ou *"pode agendar"*`,
-          intent: 'awaiting_external_confirmation',
-          confidence: 1.0,
+        if (!result.success) {
+          return { text: `${phoneResult.message}\n\n${result.message}`, intent: 'creating_calendar_failed', confidence: 1.0 }
         }
+
+        if (resolved.length > 0 && result.record_id) {
+          await linkPendingEventConfirmationsToEvent(supabase, userId, resolved, result.record_id)
+        }
+
+        const notifiedKnownParticipants = await notifyKnownParticipantsAfterEventCreation(ents, result.record_id || '')
+
+        let responseText = `${phoneResult.message}\n\n${result.message}`
+
+        if (notifiedKnownParticipants.length > 0) {
+          responseText += `\nAvisei ${notifiedKnownParticipants.join(', ')} pelo WhatsApp.`
+        }
+
+        if (resolved.length > 0) {
+          responseText += `\nFico aguardando só a confirmação de ${resolved.join(', ')} por fora. Se ele responder, eu te aviso.`
+        }
+
+        return { text: responseText, intent: 'creating_calendar_executed', confidence: 1.0 }
       }
     }
   }
@@ -541,7 +559,6 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
   // ========================================
   if (activeContext?.context_data?.step === 'awaiting_external_confirmation') {
     const lower = parsed.text.toLowerCase().trim().replace(/[.,!?;:]+$/g, '').trim()
-    const ents = activeContext.context_data?.entities || {}
     const pName = activeContext.context_data?.notified_participant || ''
 
     // Verificar se é resposta de salvar na agenda (sim/não para pending_save_contact)
@@ -566,41 +583,11 @@ export async function routeMessage(params: RouteMessageParams): Promise<MessageR
     const isCancel = cancelPatterns.some(p => lower === p || lower.includes(p))
 
     if (isCancel) {
-      await supabase
-        .from('whatsapp_conversation_context')
-        .update({ is_active: false, context_data: { ...activeContext.context_data, step: 'cancelled_no_confirmation' }, updated_at: new Date().toISOString() })
-        .eq('id', activeContext.id)
-      return { text: `Ok, cancelei o agendamento. Se mudar de ideia, é só pedir de novo.`, intent: 'external_confirmation_cancelled', confidence: 1.0 }
+      return { text: 'Beleza. O evento segue mantido; só não vou esperar a confirmação pendente aqui no chat.', intent: 'external_confirmation_dismissed', confidence: 1.0 }
     }
 
     if (isConfirm) {
-      // Participante confirmou → criar evento agora
-      const result = await executeConfirmedAction(activeContext.context_type, { supabase, profileId: userId, authUserId, userName: firstName, phone, entities: ents, uazapiUrl: params.uazapiUrl, uazapiToken: params.uazapiToken })
-      await supabase
-        .from('whatsapp_conversation_context')
-        .update({ is_active: false, context_data: { ...activeContext.context_data, step: result.success ? 'executed' : 'execution_failed', executed_at: new Date().toISOString(), record_id: result.record_id || null }, updated_at: new Date().toISOString() })
-        .eq('id', activeContext.id)
-
-      // Notificar participantes cadastrados (outros além do externo)
-      if (result.success && ents.participants) {
-        const participantNames = parseParticipantNames(ents.participants as string)
-        const cadastrados = []
-        for (const n of participantNames) {
-          const found = await findParticipantByName(supabase, n)
-          if (found) cadastrados.push(n)
-        }
-        if (cadastrados.length > 0) {
-          const notifyResults = await notifyParticipants(supabase, params.uazapiUrl, params.uazapiToken, {
-            eventId: result.record_id || '', eventTitle: (ents.title as string) || 'Evento', eventDate: (ents.date as string) || '',
-            eventTime: (ents.time as string) || null, eventLocation: (ents.location as string) || null,
-            creatorUserId: userId, creatorName: firstName, creatorPhone: user.phone_number, participantNames: cadastrados, groupJid: params.groupJid || null,
-          })
-          const notified = notifyResults.filter(r => r.notified)
-          if (notified.length > 0) result.message += `\nNotifiquei ${notified.map(r => r.participantName).join(', ')} pelo WhatsApp.`
-        }
-      }
-
-      return { text: result.message, intent: 'creating_calendar_executed', confidence: 1.0 }
+      return { text: 'Perfeito. O evento já está mantido na agenda e eu te aviso assim que a confirmação externa chegar.', intent: 'external_confirmation_registered', confidence: 1.0 }
     }
 
     // Resposta não reconhecida — lembrar que está aguardando

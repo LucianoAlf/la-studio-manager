@@ -373,8 +373,8 @@ serve(async (req: Request) => {
             confirmation, parsed.text
           )
 
-          // Se confirmou → criar evento automaticamente
-          if (result.confirmed) {
+          // Fluxo legado: só criar evento automaticamente se a confirmação ainda não estiver vinculada a um evento criado
+          if (result.confirmed && !confirmation.eventId) {
             // Buscar contexto awaiting_external_confirmation do criador
             const { data: creatorCtx } = await supabase
               .from('whatsapp_conversation_context')

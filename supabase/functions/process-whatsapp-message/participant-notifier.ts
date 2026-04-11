@@ -585,14 +585,20 @@ function formatDateShort(dateStr: string): string {
 /**
  * Extrai nomes de participantes da string de entidades.
  * O NLP/Gemini retorna participants como string: "John", "John e Maria", "John, Maria"
+ * Em alguns fluxos o campo pode vir como array: ["John", "Maria"]
  * Normaliza para um array de nomes.
  */
-export function parseParticipantNames(participantsStr: string | null | undefined): string[] {
-  if (!participantsStr) return []
+export function parseParticipantNames(participantsInput: string | string[] | null | undefined): string[] {
+  if (!participantsInput) return []
 
-  return participantsStr
-    .split(/[,&]|\be\b/)           // Separar por vírgula, "&", ou " e "
-    .map(name => name.trim())
+  const chunks = Array.isArray(participantsInput)
+    ? participantsInput
+        .filter((item): item is string => typeof item === 'string')
+    : [participantsInput]
+
+  return chunks
+    .flatMap((chunk) => chunk.split(/[,&]|\be\b/)) // Separar por vírgula, "&", ou " e "
+    .map(name => name.replace(/\s*\([^)]*\)\s*/g, ' ').trim())
     .filter(name => name.length >= 2)
     .map(name => name.charAt(0).toUpperCase() + name.slice(1))
 }
@@ -796,6 +802,52 @@ export async function processPhoneResponse(
   return {
     message: `Pronto! Enviei o convite pro ${pending.participantName} e salvei na agenda 📩📇`,
     handled: true,
+  }
+}
+
+export async function linkPendingEventConfirmationsToEvent(
+  // deno-lint-ignore no-explicit-any
+  supabase: any,
+  creatorUserId: string,
+  participantNames: string[],
+  eventId: string
+): Promise<void> {
+  if (!eventId || participantNames.length === 0) return
+
+  const normalizedNames = participantNames
+    .map((name) => name.replace(/\s*\([^)]*\)\s*/g, ' ').trim().toLowerCase())
+    .filter((name) => name.length > 0)
+
+  if (normalizedNames.length === 0) return
+
+  const { data, error } = await supabase
+    .from('whatsapp_conversation_context')
+    .select('id, context_data')
+    .eq('context_type', 'event_confirmation')
+    .eq('is_active', true)
+
+  if (error || !data) {
+    console.error('[NOTIFY] Erro ao buscar confirmações pendentes para vincular evento:', error)
+    return
+  }
+
+  for (const row of data) {
+    const context = row.context_data as PendingEventConfirmation
+    const participantName = (context.participantName || '').replace(/\s*\([^)]*\)\s*/g, ' ').trim().toLowerCase()
+
+    if (context.creatorUserId !== creatorUserId) continue
+    if (!normalizedNames.includes(participantName)) continue
+
+    await supabase
+      .from('whatsapp_conversation_context')
+      .update({
+        context_data: {
+          ...context,
+          eventId,
+        },
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', row.id)
   }
 }
 
