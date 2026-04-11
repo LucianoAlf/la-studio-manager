@@ -1389,6 +1389,9 @@ function SidePanel({ today, currentDate, setCurrentDate, items, allItems, select
           const participants = Array.isArray(selectedItem.metadata?.participants)
             ? selectedItem.metadata.participants.filter((participant): participant is string => typeof participant === "string" && participant.trim().length > 0)
             : [];
+          const participantsLabel = participants.length <= 1
+            ? participants.join("")
+            : `${participants.slice(0, -1).join(", ")} e ${participants[participants.length - 1]}`;
           return (
             <div>
               <div className="flex items-center justify-between mb-3">
@@ -1455,23 +1458,20 @@ function SidePanel({ today, currentDate, setCurrentDate, items, allItems, select
                       })()}
                     </span>
                   </div>
-                  <div className="flex items-center gap-3">
-                    <span className="w-[80px] flex-shrink-0 text-slate-500 flex items-center gap-1.5">👤 Responsável</span>
-                    <div className="flex items-center gap-2">
-                      <Avatar initial={selResp.initial} color={selResp.color} size="sm" className="!h-5 !w-5 !text-[9px]" />
-                      <span className="text-slate-200">{selResp.name}</span>
-                    </div>
+                  <div className="flex items-start gap-2 text-[13px] leading-relaxed">
+                    <span className="text-slate-500">👤</span>
+                    <p className="text-slate-200">
+                      <span className="text-slate-500">Responsável:</span>{" "}
+                      <span>{selResp.name}</span>
+                    </p>
                   </div>
                   {participants.length > 0 && (
-                    <div className="flex items-start gap-3">
-                      <span className="w-[80px] flex-shrink-0 text-slate-500 flex items-center gap-1.5">👥 Participantes</span>
-                      <div className="flex flex-wrap gap-1.5">
-                        {participants.map((participant) => (
-                          <Badge key={participant} variant="neutral" size="md">
-                            {participant}
-                          </Badge>
-                        ))}
-                      </div>
+                    <div className="flex items-start gap-2 text-[13px] leading-relaxed">
+                      <span className="text-slate-500">👥</span>
+                      <p className="text-slate-200">
+                        <span className="text-slate-500">Participantes:</span>{" "}
+                        <span>{participantsLabel}</span>
+                      </p>
                     </div>
                   )}
                   {selectedItem.location && (

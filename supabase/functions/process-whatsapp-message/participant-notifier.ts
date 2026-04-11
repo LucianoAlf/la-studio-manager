@@ -441,13 +441,15 @@ export async function processParticipantResponse(
   const normalized = response.trim().toLowerCase().replace(/[.,!?;:]+$/g, '').trim()
   // Pegar só a primeira palavra/frase curta para detectar respostas longas que começam com sim/não
   const firstWord = normalized.split(/[\s.,!?;:]+/)[0]
+  const containsAny = (patterns: string[]) => patterns.some((pattern) => normalized.includes(pattern))
 
   // Detectar se é confirmação ou recusa
-  const confirmWords = ['sim', 'yes', 's', 'ok', 'confirmo', 'beleza', 'bora', 'pode ser', 'claro', 'vou', 'vou sim', 'tamo junto', 'pode']
+  const confirmWords = ['sim', 'yes', 's', 'ok', 'confirmo', 'beleza', 'bora', 'pode ser', 'claro', 'vou', 'vou sim', 'tamo junto', 'pode', 'falou', 'fechou', 'demorou', 'blz', 'tranquilo', 'combinado', 'show', 'show de bola', 'ta bom', 'tá bom', 'ta certo', 'tá certo']
+  const confirmIncludes = ['confirmado', 'confirmada', 'presença confirmada', 'to dentro', 'tô dentro', 'partiu', 'fechado', 'beleza então', 'falou então']
   const declineWords = ['não', 'nao', 'no', 'n', 'não posso', 'nao posso', 'cancelar', 'não vou', 'nao vou', 'não dá', 'nao da', 'não vai dar', 'nao vai dar']
   const declineStarts = ['não', 'nao', 'no', 'n']
 
-  const isConfirm = confirmWords.includes(normalized) || confirmWords.includes(firstWord)
+  const isConfirm = confirmWords.includes(normalized) || confirmWords.includes(firstWord) || containsAny(confirmIncludes)
   // Aceitar recusa por match exato OU se a mensagem começa com palavra de recusa
   const isDecline = declineWords.includes(normalized) || declineStarts.includes(firstWord)
 
@@ -458,6 +460,15 @@ export async function processParticipantResponse(
     const maxRetryMs = 10 * 60 * 1000 // 10 minutos — se passou disso, desistir
     if (elapsed > maxRetryMs) {
       await clearEventConfirmation(supabase, confirmation.participantUserId)
+      const notifyTo = confirmation.groupJid || confirmation.creatorPhone
+      const dateInfo = formatDateShort(confirmation.eventDate)
+      const timeInfo = confirmation.eventTime ? ` às ${confirmation.eventTime}` : ''
+      await sendTextMessage({
+        serverUrl,
+        token,
+        to: notifyTo,
+        text: `${confirmation.participantName} ainda não confirmou a *${confirmation.eventTitle}* de ${dateInfo}${timeInfo}. A resposta ficou inconclusiva e encerrei essa confirmação por enquanto.`,
+      })
       console.log(`[NOTIFY] ⏰ Timeout de confirmação para ${confirmation.participantName} — desistindo`)
       return {
         message: `Tudo bem! Se mudar de ideia sobre a *${confirmation.eventTitle}*, é só avisar.`,

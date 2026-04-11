@@ -239,7 +239,7 @@ export function CalendarItemModal({
         platforms: selectedPlatforms,
         location: location || null,
         description: description || null,
-        metadata: { priority: selectedPriority },
+        metadata: { ...(item?.metadata || {}), priority: selectedPriority },
       };
 
       if (item) {
