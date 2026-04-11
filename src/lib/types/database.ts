@@ -10,6 +10,10 @@ export type CardType = "single_post" | "campaign";
 export type CardPriority = "low" | "medium" | "high" | "urgent";
 export type UserRole = "admin" | "usuario";
 
+export interface CalendarItemMetadata extends Record<string, unknown> {
+  participants?: string[];
+}
+
 // === USER PROFILE ===
 export interface UserProfile {
   id: string;
@@ -41,7 +45,7 @@ export interface CalendarItem {
   location: string | null;
   kanban_card_id: string | null;
   post_id: string | null;
-  metadata: Record<string, unknown>;
+  metadata: CalendarItemMetadata;
   created_at: string;
   updated_at: string;
   // Joined

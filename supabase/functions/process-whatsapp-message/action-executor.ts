@@ -32,6 +32,23 @@ interface ExecutionContext {
   uazapiToken?: string  // UAZAPI instance token para notificações
 }
 
+function normalizeParticipants(participants: ExtractedEntities['participants'], creatorName: string): string[] {
+  if (!participants) return []
+
+  const chunks = Array.isArray(participants)
+    ? participants.filter((item): item is string => typeof item === 'string')
+    : [participants]
+
+  const normalizedCreator = creatorName.replace(/\s*\([^)]*\)\s*/g, ' ').trim().toLowerCase()
+
+  return chunks
+    .flatMap((chunk) => chunk.split(/[,&]|\be\b/gi))
+    .map((name) => name.replace(/\s*\([^)]*\)\s*/g, ' ').trim())
+    .filter((name) => name.length >= 2)
+    .filter((name, index, list) => list.findIndex((item) => item.toLowerCase() === name.toLowerCase()) === index)
+    .filter((name) => name.toLowerCase() !== normalizedCreator)
+}
+
 // ============================================
 // MAPEAMENTO DE SLUGS (WA-02 → DB)
 // ============================================
@@ -302,6 +319,7 @@ async function executeCreateCard(ctx: ExecutionContext): Promise<ExecutionResult
 
 async function executeCreateCalendar(ctx: ExecutionContext): Promise<ExecutionResult> {
   const { supabase, authUserId, entities } = ctx
+  const participantNames = normalizeParticipants(entities.participants, ctx.userName)
 
   // 1. Resolver data e horário
   const startTime = resolveRelativeDate(entities.date || 'hoje', entities.time)
@@ -350,6 +368,7 @@ async function executeCreateCalendar(ctx: ExecutionContext): Promise<ExecutionRe
       brand: entities.brand || 'la_music',
       original_date_text: entities.date || null,
       original_time_text: entities.time || null,
+      participants: participantNames,
     },
   }
 

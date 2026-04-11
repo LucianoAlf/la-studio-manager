@@ -1386,6 +1386,9 @@ function SidePanel({ today, currentDate, setCurrentDate, items, allItems, select
         {selectedItem && (() => {
           const selCfg = TYPE_CONFIG[selectedItem.type];
           const selResp = getUserDisplay(selectedItem.responsible);
+          const participants = Array.isArray(selectedItem.metadata?.participants)
+            ? selectedItem.metadata.participants.filter((participant): participant is string => typeof participant === "string" && participant.trim().length > 0)
+            : [];
           return (
             <div>
               <div className="flex items-center justify-between mb-3">
@@ -1459,6 +1462,18 @@ function SidePanel({ today, currentDate, setCurrentDate, items, allItems, select
                       <span className="text-slate-200">{selResp.name}</span>
                     </div>
                   </div>
+                  {participants.length > 0 && (
+                    <div className="flex items-start gap-3">
+                      <span className="w-[80px] flex-shrink-0 text-slate-500 flex items-center gap-1.5">👥 Participantes</span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {participants.map((participant) => (
+                          <Badge key={participant} variant="neutral" size="md">
+                            {participant}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   {selectedItem.location && (
                     <div className="flex items-start gap-3">
                       <span className="w-[80px] flex-shrink-0 text-slate-500 flex items-center gap-1.5">📍 Local</span>
